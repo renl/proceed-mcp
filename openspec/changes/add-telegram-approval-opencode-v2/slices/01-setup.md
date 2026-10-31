@@ -106,3 +106,9 @@ Affected run sequence on Windows Node 24.22.2, with `PROCEED_TEST_COMMAND` set t
 | `git diff --check` before the evidence edits | exit 0 |
 
 Cleanup PASS: each run-owned `tests/.artifacts/origin-url-*` and `setup-*` directory was removed in `finally` with absence asserted by the test, and `tests/.artifacts` held 0 entries afterwards. No credential value or hash was printed; no server, network request or external API call was used. This is the implementer's own affected-check result at revision `a9e74a9`, not independent verification: the FAIL verdict, first-use proof and every live/release gate remain unchanged and unwaived.
+
+### Correction attempt 1 — independent disposition (2026-10-31)
+
+Supersedes the pending/failed current disposition above for SETUP-URL-001 only: **CLOSED / affected checks PASS**, independently verified candidate `45bd060fec434194f78b703ffe43a07f44d55e26`, production `a9e74a9898c573a3303280cae18a6b745fc27fee`. Node 24.22.2 Windows: URL regression 5/5 Node-reported tests (four leaves plus parent), setup 1/1; syntax/build/formatter/diff checks exit 0; cleanup PASS. [Independent evidence, reuse scope and checkpoint 2 blockers](01-setup-evidence.md#correction-attempt-1--independent-affected-verification-2026-10-31).
+
+The validator additionally rejects leading-zero port text. Diagnostics confirm `04096`/`00080` exit 2 without state change, but the existing contract does not explicitly settle this syntax policy. Next owner: Architect clarification through coordination before blanket syntax/slice acceptance; no new criteria or broad acceptance inferred. Checkpoint 2 remains not execution-ready for the documented harness, reviewed fault sequence, minimum implementation and secure live-environment prerequisites. No feature/e2e/release pass; worktree retained.

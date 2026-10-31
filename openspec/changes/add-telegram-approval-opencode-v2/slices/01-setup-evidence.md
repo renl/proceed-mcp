@@ -4,7 +4,7 @@ Parent: [tasks](../tasks.md). Scope: [setup checkpoint](01-setup.md), accepted d
 
 ## Verdict and identity
 
-**FAIL — correction needed; not slice-ready.** The existing checkpoint test passes, but additional assertions through the same public executable expose URL-validation violations of design section 2. Feature verification, first-use verification and release readiness remain unachieved. Nothing is waived.
+**Current affected verdict: PASS — SETUP-URL-001 closed after independent correction-attempt-1 verification below.** The original failed run is retained as history. Bounded offline checks pass; blanket URL-syntax acceptance awaits the contract owner's leading-zero-port clarification. Feature verification, first-use verification and release readiness remain unachieved. Nothing is waived.
 
 - Candidate: `533ea27b67e6c32c89b9e26bccc8432f73d63f27`, branch `add-telegram-approval-opencode-v2`.
 - Baseline: local `main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba`. No remote refresh or remote-state claim in this scoped run.
@@ -93,3 +93,28 @@ Windows ACL behavior is exercised. POSIX/macOS/Linux branches are **implemented 
 Assertion status: FAIL overall. Test-resource cleanup: PASS, owned run directories absent, artifact directory empty. Worktree lifecycle: **active / retained**, not cleanup-ready; feature pending. Root dirty bootstrap was preserved. The ignored project-local Node/npm verification cache and normal worktree development dependencies remain intentionally retained; neither is a running service or a temporary credential store.
 
 Only this evidence file and evidence/status fields in `tasks.md` / `slices/01-setup.md` are finalized after the tested candidate. Code, tests, dependency declarations/lockfile, configuration and baseline are unchanged. This docs-only delta does not repair or supersede the failed candidate verdict. No PR, archive, push, worktree removal or publication was performed.
+
+## Correction attempt 1 — independent affected verification (2026-10-31)
+
+**PASS for the four authorized regressions and affected setup checks; SETUP-URL-001 closed.** Candidate `45bd060fec434194f78b703ffe43a07f44d55e26`, production revision `a9e74a9898c573a3303280cae18a6b745fc27fee`, same branch/worktree and baseline `main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba`. Initial tracked/untracked state was clean. The production-to-candidate delta contains only three planning/evidence Markdown files. Relative to the original independently tested `533ea27`, only the URL validator, its new public-CLI regression test and planning/evidence changed; dependencies, config callers, storage/ACL implementation and baseline are unchanged.
+
+Environment: Windows, explicitly pinned project-local Node `24.22.2`. Native execution represents these finite offline public-CLI/file-protection checks, not other operating systems or live platforms. No installation, network request, service or credential discovery was performed. Each shell command had a 120-second bound; CLI children had 5-second deadlines.
+
+| Independently executed check | Result |
+|---|---|
+| `node --check tests/cli-origin-url.test.mjs` | PASS, exit 0 |
+| `node --test tests/cli-origin-url.test.mjs` with public executable argv pinned to Node 24 | PASS, exit 0; 5 tests (four leaves plus aggregate parent), 0 fail/cancelled/skipped; 6789.85 ms |
+| `node --test tests/cli-setup.test.mjs` with the same argv | PASS, exit 0; 1 test, 0 fail/cancelled/skipped; 3636.93 ms |
+| `node scripts/build.mjs` | PASS, exit 0; 11 production modules parse, declared bin ready |
+| Node 24 `node_modules/prettier/bin/prettier.cjs --check .` (the exact `format:check` script body, avoiding host npm-wrapper runtime selection) | PASS, exit 0 |
+| `git diff --check`, identity and clean-state checks before evidence edits | PASS, exit 0; artifact directory 0 entries |
+
+The six Node-reported tests include five leaf cases and one aggregate parent. Regression assertions prove all three aliases exit 2 without protected-content changes; explicit `:80` exits 0 and persists exactly; duplicate replacement exits 2 without changing configuration or credentials. The setup test also exercises init refusal, ordinary immutable bindings, eight forbidden topologies and three invalid identifiers. Protection executes on each successful Windows setup operation. Prior independent security evidence at `533ea27` is reused only for unchanged protection/credential generation, lock handling, corrupt/schema configuration, fail-closed ACL failure and independent 5/5 ACL observations; those one-time checks were not rerun or counted as new tests. The changed validator is independently reviewed against design section 2 and exercised through the public CLI, not internal handler calls.
+
+**Contract-owner question, not broad acceptance:** the new validator rejects leading-zero port text (`04096`, `00080`). A bounded public-CLI diagnostic confirmed exit 2 and unchanged protected state for both, with run-directory absence verified. Design section 2 says “an explicit port” and rejects automatic URL substitution, but does not explicitly decide whether leading zeros must be accepted verbatim or rejected. The regression brief does not authorize inventing that policy. Coordination should obtain the Architect's interpretation before blanket URL-syntax/slice acceptance; do not broaden this four-case PASS or silently introduce new criteria. This question does not invalidate the four demonstrated corrections and has no assigned new gap ID here.
+
+Assertion status: **PASS within the authorized affected scope**. Test-resource cleanup: **PASS**, all owned regression/setup/diagnostic directories removed with absence asserted; no service started. Worktree: **active / retained**, not removed. Evidence finalization touches only the three live planning/evidence Markdown files; no code/test/dependency/configuration/baseline edit is authorized.
+
+Next exact prerequisite: checkpoint 2 remains **BLOCKED / not execution-ready**. The prerequisite table above remains applicable except that SETUP-URL-001 is now corrected. Test engineering must supply the finite out-of-process harness and authoritative spike assertions; the Architect must review timeout-fault/observation ordering; minimum broker/MCP/pairing/delivery implementation is absent. Operator/operations must provide an approved isolated authenticated OpenCode V2 host on a reserved loopback port, securely injected named password environment variable and two disposable sessions, plus a dedicated nonproduction Telegram bot, securely injected `PROCEED_TELEGRAM_BOT_TOKEN`, exclusive polling/no competing webhook, private-chat operator and interaction window. Do not paste secrets into chat. Running-host identity/source hash, timeout/Code Mode/busy/dedup semantics and exact-session continuation remain unproved. Release identity/license/publisher decisions are later gates, not private-spike prerequisites.
+
+This is supporting setup proof only. It is not feature verification, live e2e, clean packaged first-use proof, release readiness or publication evidence. No PR/archive/push/publish/cleanup operation occurred.
