@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { acknowledgementText, collectWithClock, collectContinuationEvidence }
   from './support/continuation-evidence.mjs';
+import { composeTimeoutIO } from './support/spike-runner.mjs';
+import { extractAssistant } from './support/assistant-extraction.mjs';
 
 function fixture(resolution = 'responded') {
   const request = { request_id: `req_${'a'.repeat(32)}`, origin_id: 'fixture',
@@ -58,7 +60,7 @@ function fixture(resolution = 'responded') {
     now += ms;
     state.onTick(now);
   } };
-  return { ...state, state, io, clock, run: () =>
+  return { ...state, state, io, clock, advance(ms) { now += ms; }, run: () =>
     collectWithClock(io, request, ['ses_target', 'ses_other'], clock) };
 }
 
@@ -188,4 +190,94 @@ test('EVIDENCE-02: real entry fails missing public adapters; no mock/live fallba
   const f = fixture();
   await assert.rejects(collectContinuationEvidence({}, f.request, ['ses_target', 'ses_other']),
     /BLOCKED: missing get adapter/);
+});
+
+test('EVIDENCE-EDGE: early target read cannot hide duplicate arriving as collection crosses 30s', async () => {
+  const f = fixture();
+  const get = f.io.get;
+  let injected = false;
+  f.io.get = async (path) => {
+    const body = await get(path);
+    // At 28s the target assistant list was already read. Delay a later read
+    // through the boundary, then add an acknowledgement the early list missed.
+    if (!injected && f.clock.now() === 28000 && path.includes('/ses_other/inbox')) {
+      injected = true;
+      f.advance(2001);
+      f.histories.ses_target.assistant.push({ id: 'crossing_duplicate', type: 'assistant',
+        fixtureContent: acknowledgementText(f.request) });
+    }
+    return body;
+  };
+  await assert.rejects(f.run(), /exactly one decision acknowledgement/);
+  assert.equal(injected, true);
+});
+
+test('TIMEOUT-COLLECTOR: accepted sequence composes with grounded raw history and replay evidence', async () => {
+  const f = fixture();
+  const normalize = () => {
+    for (const session of Object.values(f.histories)) {
+      for (const raw of session.assistant) {
+        if (!raw.content) Object.assign(raw, { id: `msg_${raw.id}`, time: { created: 1 },
+          agent: 'fixture', model: { id: 'fixture', providerID: 'fixture' },
+          content: [{ type: 'text', text: raw.fixtureContent }] });
+      }
+    }
+  };
+  normalize();
+  f.state.afterDeliver = normalize;
+  const order = [];
+  const io = { ...f.io };
+  for (const name of ['armReceiptFault', 'invokeHost', 'observePending', 'observeWithheld',
+    'assertHostCallUnsettled', 'observeActualHostTimeout', 'assertSameHost',
+    'resolveThroughPairedTelegram']) io[name] = async () => {
+    assert.ok(f.paths.some((path) => path.includes('ses_other/inbox')), 'baseline first');
+    order.push(name);
+  };
+  io.waitForAcknowledgement = f.io.deliver;
+  const evidence = await collectWithClock(composeTimeoutIO(io), f.request,
+    ['ses_target', 'ses_other'], f.clock);
+  assert.ok(order.indexOf('observeActualHostTimeout') < order.indexOf('resolveThroughPairedTelegram'));
+  assert.ok(evidence.samples.at(-1).started >= 30000);
+  assert.equal(evidence.samples.at(-1).sessions.ses_target.assistant[1]
+    .extracted.completionEstablished, false);
+});
+
+for (const kind of ['empty', 'reasoning', 'partial-text', 'split-text', 'error', 'retry']) {
+  test(`ASSISTANT-COLLECTOR-NEG: ${kind} cannot prove the controlled acknowledgement`, async () => {
+    const f = fixture();
+    const convert = (raw) => Object.assign(raw, { id: `msg_${raw.id}`, time: { created: 1 },
+      agent: 'fixture', model: { id: 'fixture', providerID: 'fixture' },
+      content: [{ type: 'text', text: raw.fixtureContent }] });
+    for (const session of Object.values(f.histories)) session.assistant.forEach(convert);
+    f.io.assistantText = extractAssistant;
+    f.state.afterDeliver = () => {
+      const raw = convert(f.histories.ses_target.assistant[1]);
+      const text = acknowledgementText(f.request);
+      if (kind === 'empty') raw.content = [];
+      if (kind === 'reasoning') raw.content = [{ type: 'reasoning', text }];
+      if (kind === 'partial-text') raw.content = [{ type: 'text', text: text.slice(0, -5) }];
+      if (kind === 'split-text') raw.content = [
+        { type: 'text', text: text.slice(0, 20) }, { type: 'text', text: text.slice(20) }];
+      if (kind === 'error') raw.error = { type: 'fixture', message: 'fixture failure' };
+      if (kind === 'retry') raw.retry = { attempt: 1, at: 2,
+        error: { type: 'fixture', message: 'fixture retry' } };
+    };
+    await assert.rejects(f.run(), { code: 'ERR_ASSERTION' });
+  });
+}
+
+test('EVIDENCE-LIVE-BINDING: baseline precedes product-generated ID/time; immutable case still checked', async () => {
+  for (const mutate of [false, true]) {
+    const f = fixture();
+    const { request_id, resolved_at, ...caseIntent } = f.request;
+    const deliver = f.io.deliver;
+    f.io.deliver = async () => {
+      assert.ok(f.paths.some((path) => path.includes('ses_other/inbox')));
+      await deliver();
+      return { ...f.request, resolution: 'pending', action: mutate ? 'changed' : f.request.action };
+    };
+    const run = () => collectWithClock(f.io, caseIntent, ['ses_target', 'ses_other'], f.clock);
+    if (mutate) await assert.rejects(run(), /created action differs from case/);
+    else assert.ok((await run()).samples.at(-1).started >= 30000);
+  }
 });

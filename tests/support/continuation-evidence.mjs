@@ -70,9 +70,14 @@ async function snapshot(get, sessions, assistantText) {
     // Extraction must be grounded in the pinned running-host assistant schema.
     // No assumed assistant `text` field is part of the public protocol here.
     const assistant = assistantRaw.map((raw) => {
-      const text = assistantText(copy(raw));
-      assert.equal(typeof text, 'string', 'missing actual assistant content');
-      return { id: raw.id, type: raw.type, text, raw };
+      const extracted = assistantText(copy(raw));
+      const textParts = typeof extracted === 'string' ? [extracted] : extracted?.textParts;
+      assert.ok(Array.isArray(textParts) && textParts.every((text) => typeof text === 'string'),
+        'missing actual assistant content');
+      // Join ONLY for conservative marker detection, never as acknowledgement
+      // semantics. The controlled oracle requires exactly one intact text part.
+      return { id: raw.id, type: raw.type, text: textParts.join(''), textParts,
+        extracted, raw };
     });
     const path = `/api/session/${encodeURIComponent(session)}/inbox`;
     const inbox = await get(path);
@@ -116,8 +121,11 @@ function assertResult(baseline, current, request, prompt, sessions) {
     assert.equal(inputs[0].text, prompt.text, 'history must preserve exact persisted payload');
     assert.ok(!after.inbox.some((item) => marker(item, request)), 'input still queued');
     assert.equal(acknowledgements.length, 1, 'exactly one decision acknowledgement');
-    assert.equal(acknowledgements[0].text, acknowledgementText(request),
+    assert.deepEqual(acknowledgements[0].textParts, [acknowledgementText(request)],
       'actual acknowledgement must preserve outcome/action/context/response');
+    assert.ok(!acknowledgements[0].extracted?.observations?.error &&
+      !acknowledgements[0].extracted?.observations?.retry,
+    'acknowledgement with error/retry is inconclusive');
   }
 }
 
@@ -139,7 +147,7 @@ export async function collectWithClock(io, request, sessions, clock) {
   for (const name of ['get', 'brokerGet', 'assistantText', 'readDurable', 'deliver', 'replay']) {
     assert.equal(typeof io[name], 'function', `BLOCKED: missing ${name} adapter`);
   }
-  assert.match(request.request_id, /^req_[a-f0-9]{32}$/);
+  if (request.request_id !== undefined) assert.match(request.request_id, /^req_[a-f0-9]{32}$/);
   const reads = [];
   const get = async (path) => {
     const body = copy(await io.get(path));
@@ -155,7 +163,25 @@ export async function collectWithClock(io, request, sessions, clock) {
       request, 'public accepted decision differs from predeclared case');
   };
   const baseline = await snapshot(get, sessions, io.assistantText);
-  await io.deliver(); // Future runner: real Telegram, AFTER actual host timeout.
+  const created = await io.deliver(); // Real Telegram AFTER actual host timeout.
+  if (request.request_id === undefined) {
+    // Product allocates the random ID and accepted timestamp, not the test.
+    // Bind the previously observed pending receipt AFTER the earlier baseline.
+    assert.match(created?.request_id ?? '', /^req_[a-f0-9]{32}$/, 'missing actual created request');
+    for (const key of ['origin_id', 'session_id', 'action', 'context']) {
+      assert.equal(created[key], request[key], `created ${key} differs from case`);
+    }
+    assert.equal(created.resolution, 'pending', 'creation must be observed pending');
+    const path = `/v1/requests/${created.request_id}?session_id=${encodeURIComponent(request.session_id)}`;
+    const accepted = copy(await io.brokerGet(path));
+    reads.push({ boundary: 'broker', path, body: copy(accepted) });
+    for (const [key, value] of Object.entries(request)) assert.deepEqual(accepted[key], value,
+      `accepted ${key} differs from case`);
+    assert.equal(accepted.request_id, created.request_id, 'accepted request identity changed');
+    assert.equal(typeof accepted.resolved_at, 'string', 'accepted timestamp missing');
+    request = Object.fromEntries(['request_id', 'origin_id', 'session_id', 'action', 'context',
+      'resolution', 'response_text', 'resolved_at'].map((key) => [key, accepted[key]]));
+  }
   await assertAccepted();
   const durable = copy(await io.readDurable());
   assertDurable(durable, request);
@@ -168,6 +194,8 @@ export async function collectWithClock(io, request, sessions, clock) {
   let elapsed = 0;
   const samples = [];
   do {
+    const started = clock.now() - start;
+    assert.ok(Number.isFinite(started) && started >= elapsed, 'nonmonotonic snapshot start');
     await assertAccepted();
     const restarted = copy(await io.readDurable());
     assertDurable(restarted, request);
@@ -181,11 +209,14 @@ export async function collectWithClock(io, request, sessions, clock) {
     // A stalled observer cannot claim continuous bounded duplicate observation.
     assert.ok(measured - elapsed <= 5000, 'observation gap exceeds 5 seconds');
     elapsed = measured;
-    samples.push({ elapsed, sessions: copy(current) });
-    if (elapsed >= 30000) break;
-    await clock.sleep(Math.min(2000, 30000 - elapsed));
+    samples.push({ started, elapsed, sessions: copy(current) });
+    // Completing a slow early read after the edge is not a final observation.
+    // Every public read in the final snapshot must START after the full window.
+    if (started >= 30000) break;
+    await clock.sleep(Math.max(0, Math.min(2000, 30000 - elapsed)));
   } while (samples.length < 100);
   assert.ok(elapsed >= 30000, 'full measured 30-second replay window required');
+  assert.ok(samples.at(-1).started >= 30000, 'final snapshot must start after replay window');
   return { baseline, durable, reads, samples, elapsed, kind: 'test-only collected evidence' };
 }
 

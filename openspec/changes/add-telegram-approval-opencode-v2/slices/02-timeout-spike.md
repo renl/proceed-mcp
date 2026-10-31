@@ -4,6 +4,8 @@ Parent: [tasks](../tasks.md). Authority: [design](../design.md) sections 3–7, 
 
 ## Goal and disposition
 
+Latest offline correction: [consolidated 2B attempt 2](02b-executable-readiness.md). It supersedes historical offline-preparation blockers below only where explicitly mapped; no live acceptance is inferred.
+
 Can a real Telegram decision cause a useful turn in only its requesting running OpenCode V2 session after that host actually times out its original MCP call?
 
 **Decomposition REJECTED for implementation readiness; interface fidelity accepted for the documented boundary.** Phase A is accepted as groundwork only. Correction attempt 1 adds a bounded offline 2B protocol/deadline subset for renewed Architect review; it does not complete 2B. No broker, production MCP adapter, Telegram path, continuation worker or live runner exists yet. Fixture passes cannot answer the goal. Existing setup acceptance is Windows Node 24 only. No new worktree, PR, archive, publication or broad integration is part of this checkpoint.
