@@ -1,6 +1,6 @@
 # 01 — Empty-state setup and risk-first proof chain
 
-Parent/index: [tasks](../tasks.md). Authority: [design](../design.md) sections 1–3, 6–7; [research](../research.md), retrieved 2026-10-31. Status: review required, not implementation-ready.
+Parent/index: [tasks](../tasks.md). Authority: [design](../design.md) sections 1–3, 6–7; [research](../research.md), retrieved 2026-10-31. Status: checkpoint 1 implementation-ready under existing user authorization and Architect interface/decomposition acceptance, confirmed in the scoped readiness correction brief (2026-10-31). Checkpoints 2–5 are not execution-ready.
 
 ## Goal and scope
 
@@ -12,7 +12,7 @@ First runnable acceptance maps `npm-distribution` / “Complete first useful act
 
 ## Run sequence
 
-Target shell: PowerShell on Windows; test code is portable Node and must later run on Node 24 for supported OS proof. No dependencies or installation needed for test authoring checks.
+Target shell: PowerShell on Windows. Node 24 is a provisional technical design target to verify, not declared actual compatibility or a final support floor. Available Node 22.23.1 can run test-authoring/structural checks; checkpoint behavioral verification needs a representative Node 24 environment and actual OS protection checks. No dependencies or installation needed for test authoring checks. The missing Node 24 environment does not block authorized scaffold implementation.
 
 1. `node --check tests/cli-setup.test.mjs`
 2. Before implementation, `node --test tests/cli-setup.test.mjs` must fail explicitly because no executable command was supplied (RED setup evidence, not application behavior proof).
@@ -57,6 +57,6 @@ Wire `POST https://api.telegram.org/bot<token>/<method>` over HTTPS JSON; fixed 
 
 Design section 8/research section 4: public identity/license/rights and first-publication bootstrap remain owner/operations gates. Tag `v<package-version>`, protected main history/environment, Node 24 and npm >=11.5.1, GitHub-hosted publishing job, exact repository `https://github.com/renl/proceed-mcp`, workflow `release.yml`, explicit direct `npm publish` OIDC permission. PR CI has no publishing credentials or id-token write. Pack/install proxies cannot prove public registry delivery; exact published-version install remains an operational follow-up.
 
-## Decomposition fidelity review request
+## Decomposition fidelity review disposition
 
-Checklist answers: (1) YES journal/origin/outbox feeds delivery proof; (2) YES restart/offset/crash can contaminate state; (3) YES observation must precede timeout/resolution; (4) YES MCP→Telegram→outbox→host is order-sensitive; (5) YES setup and real proof span checkpoints. Architect review is required before readiness, including planned test transport fault. Tests do not define private module interfaces. Checkpoints 3–4 cannot begin broad implementation before checkpoint 2's real gate passes. If live environment remains unavailable, retain blocked gates and only separately authorized isolated work; do not call the broad plan ready.
+Checklist answers: (1) YES journal/origin/outbox feeds delivery proof; (2) YES restart/offset/crash can contaminate state; (3) YES observation must precede timeout/resolution; (4) YES MCP→Telegram→outbox→host is order-sensitive; (5) YES setup and real proof span checkpoints. Architect accepted checkpoint 1 interface/decomposition review, as confirmed in the scoped readiness correction brief (2026-10-31). This satisfies checkpoint 1's review gate only; planned transport-fault sequencing still requires Architect review before live execution. Tests do not define private module interfaces. Checkpoints 2–5 are not execution-ready; checkpoints 3–4 cannot begin broad implementation before checkpoint 2's real gate passes. If live environment remains unavailable, retain blocked gates and only separately authorized isolated work; do not call the broad plan ready.

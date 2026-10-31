@@ -1,6 +1,6 @@
 # Proposal
 
-Status: Draft for product approval. Parent: [project direction](../../../AGENTS.md). Read next: capability specs below.
+Status: Active change based on the approved project direction; not merged current behavior. Parent: [project direction](../../../../AGENTS.md). Read next: capability specs below.
 
 ## Why
 
@@ -43,7 +43,9 @@ None. There are no current capability specs.
 
 The linked scenarios define completion. Other harnesses, exited-process recovery, browser inboxes, and floating widgets are excluded. MCP alone is not an execution-permission enforcement boundary.
 
-Before technical work, confirm that this proposal and its product specs accurately capture the approved direction. External contracts require source-grounded OpenCode V2 and Telegram research; authenticated access and busy-session behavior require evidence, not assumed compatibility. If these constraints prevent the required continuation, return the limitation for a product decision rather than silently narrowing the outcome.
+The approved project direction authorizes work within that scope, including the empty-state setup checkpoint; the deltas' active-change status does not require renewed blanket approval. The scenarios elaborate that direction, not a claim that the user separately approved every authored detail. Material changes to scope or security and explicitly reserved owner decisions require targeted confirmation.
+
+External contracts require source-grounded OpenCode V2 and Telegram research; authenticated access and busy-session behavior require evidence, not assumed compatibility. If these constraints prevent the required continuation, return the limitation for a product decision rather than silently narrowing the outcome.
 
 Exact package identity and ownership, license, support floors, and publisher setup remain unresolved release decisions. Prefer trusted npm publishing; never commit credentials. No package availability, authenticated integration, or release success is claimed here.
 
@@ -53,5 +55,5 @@ This introduces a new MCP product, Telegram bot interaction, persistent approval
 
 ## Related Artifacts
 
-- [Project status](../../../docs/status_log.md)
+- [Project status](../../../../docs/status_log.md)
 - Product acceptance: the three capability deltas linked above.

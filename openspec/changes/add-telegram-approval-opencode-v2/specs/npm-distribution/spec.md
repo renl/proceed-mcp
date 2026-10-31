@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Make the Telegram approval product installable from public npm and release validated versions without publishing from pull requests. Parent: [proposal](../../proposal.md). Status: Draft for product approval.
+Make the Telegram approval product installable from public npm and release validated versions without publishing from pull requests. Parent: [proposal](../../proposal.md).
 
 ## ADDED Requirements
 
@@ -60,8 +60,3 @@ Release readiness MUST include installation and startup of the published version
 - **GIVEN** CI reports successful publication
 - **WHEN** the exact reported package version is installed from public npm in a clean supported environment
 - **THEN** it installs and starts using the documented instructions, or the release is reported as not verified.
-
-## Related Artifacts
-
-- [Pairing and decision acceptance](../telegram-approval/spec.md)
-- [Supported session delivery](../opencode-session-continuation/spec.md)

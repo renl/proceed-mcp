@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Let a paired human safely approve, reject, or instruct remote work through private Telegram messages. Parent: [proposal](../../proposal.md). Status: Draft for product approval.
+Let a paired human safely approve, reject, or instruct remote work through private Telegram messages. Parent: [proposal](../../proposal.md).
 
 ## ADDED Requirements
 
@@ -91,8 +91,3 @@ Silence, tool timeout, transport errors, and processing errors MUST NOT imply ap
 - **GIVEN** no explicit approval has been accepted
 - **WHEN** the human stays silent, the tool times out, or an error occurs
 - **THEN** the product records no approval and shows the applicable pending, closed, or failed state rather than success.
-
-## Related Artifacts
-
-- [Session delivery acceptance](../opencode-session-continuation/spec.md)
-- [Installation and release acceptance](../npm-distribution/spec.md)

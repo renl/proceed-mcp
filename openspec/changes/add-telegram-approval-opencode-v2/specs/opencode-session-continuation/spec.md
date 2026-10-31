@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Deliver remote decisions to the exact requesting running OpenCode V2 session, including after its original MCP call times out. Parent: [proposal](../../proposal.md). Status: Draft for product approval.
+Deliver remote decisions to the exact requesting running OpenCode V2 session, including after its original MCP call times out. Parent: [proposal](../../proposal.md).
 
 ## ADDED Requirements
 
@@ -65,8 +65,3 @@ The first release MUST support only explicitly documented and verified OpenCode 
 - **GIVEN** the OpenCode integration requires authorization that is missing or invalid
 - **WHEN** connection or continuation is attempted
 - **THEN** the operator receives an actionable authorization failure, no unauthorized fallback is used, and no successful delivery is claimed.
-
-## Related Artifacts
-
-- [Decision safety and durable state](../telegram-approval/spec.md)
-- [Clean first-use acceptance](../npm-distribution/spec.md)
