@@ -38,12 +38,12 @@ test('DURABILITY-NEG: public status cannot substitute for committed exact outbox
 test('TIMEOUT-SEQUENCE: pending and withheld while unsettled, actual host timeout, same host, then human', async () => {
   const order = [];
   const names = ['armReceiptFault', 'invokeHost', 'observePending', 'assertHostCallUnsettled',
-    'observeWithheld', 'observeActualHostTimeout', 'assertSameHost',
+    'observeWithheld', 'observeActualHostTimeout', 'assertPendingAfterTimeout', 'assertSameHost',
     'resolveThroughPairedTelegram', 'waitForAcknowledgement'];
   const io = Object.fromEntries(names.map((name) => [name, async () => { order.push(name); }]));
   await deliverAfterActualTimeout(io);
   assert.deepEqual(order, [...names.slice(0, 5), 'assertHostCallUnsettled', ...names.slice(5)]);
-  for (const stop of ['observePending', 'observeWithheld', 'assertHostCallUnsettled', 'observeActualHostTimeout', 'assertSameHost']) {
+  for (const stop of ['observePending', 'observeWithheld', 'assertHostCallUnsettled', 'observeActualHostTimeout', 'assertPendingAfterTimeout', 'assertSameHost']) {
     order.length = 0;
     await assert.rejects(deliverAfterActualTimeout({ ...io, [stop]: async () => { throw Error(stop); } }),
       new RegExp(stop));

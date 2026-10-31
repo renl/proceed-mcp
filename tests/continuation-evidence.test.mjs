@@ -228,7 +228,7 @@ test('TIMEOUT-COLLECTOR: accepted sequence composes with grounded raw history an
   const order = [];
   const io = { ...f.io };
   for (const name of ['armReceiptFault', 'invokeHost', 'observePending', 'observeWithheld',
-    'assertHostCallUnsettled', 'observeActualHostTimeout', 'assertSameHost',
+    'assertHostCallUnsettled', 'observeActualHostTimeout', 'assertPendingAfterTimeout', 'assertSameHost',
     'resolveThroughPairedTelegram']) io[name] = async () => {
     assert.ok(f.paths.some((path) => path.includes('ses_other/inbox')), 'baseline first');
     order.push(name);

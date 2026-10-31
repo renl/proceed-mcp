@@ -39,9 +39,9 @@ export function authenticatedReader(origin, authorization) {
 const projectRequest = (value, expected) => Object.fromEntries(
   Object.keys(expected).map((key) => [key, value?.[key]]));
 
-// readCommitted is an implementation-selected read-only journal decoder, not
-// a test endpoint. It must reject invalid/unflushed records. Fixture success
-// cannot attest that decoder or OS flush; actual restart proof is also required.
+// readCommitted is a later SDET decoder of SE's selected journal format, not a
+// test endpoint. Complete valid bytes cannot attest flush; ordered flush evidence
+// and actual restart proof are separately required.
 export async function assertCommitBeforeEffect(readCommitted, expected, prompt) {
   const committed = await readCommitted();
   assert.deepEqual(projectRequest(committed?.request, expected), expected,
@@ -63,7 +63,7 @@ export async function assertPublicRestart(io, expected, prompt) {
 // The actual host's timeout extractor remains source/environment-dependent.
 export async function deliverAfterActualTimeout(io, signal) {
   for (const name of ['armReceiptFault', 'invokeHost', 'observePending', 'observeWithheld',
-    'assertHostCallUnsettled', 'observeActualHostTimeout', 'assertSameHost',
+    'assertHostCallUnsettled', 'observeActualHostTimeout', 'assertPendingAfterTimeout', 'assertSameHost',
     'resolveThroughPairedTelegram', 'waitForAcknowledgement']) {
     assert.equal(typeof io[name], 'function', `RED: missing production ${name} adapter`);
   }
@@ -75,6 +75,7 @@ export async function deliverAfterActualTimeout(io, signal) {
   await io.assertHostCallUnsettled(invocation, signal);
   // Must read actual host tool-error evidence, never rpcPeer's synthetic timer.
   await io.observeActualHostTimeout(invocation, signal);
+  await io.assertPendingAfterTimeout(created, signal);
   await io.assertSameHost(signal);
   await io.resolveThroughPairedTelegram(signal);
   await io.waitForAcknowledgement(signal);
