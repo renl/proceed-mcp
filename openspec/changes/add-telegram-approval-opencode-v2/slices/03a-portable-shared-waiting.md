@@ -30,6 +30,8 @@ SDET-owned refinement changes: `tests/portable-setup.test.mjs`, `tests/support/p
 
 ### Checkpoint gates and sizing
 
+Selected 03A.1a seam and focused executable gate: [additive owner/config helpers](03a1a-additive-owner-helpers.md). Only two new unused production modules; no existing consumer switch. Helper RED is explicit and distinct from PORT-SETUP.
+
 03A.1 makes the later human-outcome proof possible; it does not deliver a waiting approval workflow. The reported first setup forecast is **7 production files / 550–670 gross changed lines**, not a measured diff or an approved exception. Use additions plus deletions against each pinned pre-checkpoint commit, and account for associated test/spec changes separately without double counting this preparation packet. No new packet may silently exceed ~20 files / ~600 gross lines.
 
 | Internal unit | Executable gate and dependency | Safe review boundary / likely production touch areas |
