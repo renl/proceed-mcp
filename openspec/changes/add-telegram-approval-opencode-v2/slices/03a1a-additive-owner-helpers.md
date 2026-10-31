@@ -12,7 +12,7 @@ Founder-visible success remains: the paired human's exact Approve, Reject or Res
 | Project baseline | `main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba` |
 | Authoring parent | `0653b16`; corrected dirty owner artifacts present and preserved |
 | Prerequisite | Accepted 03A decomposition/boundary and supplied implementation-selected additive seam; no consumer-switch prerequisite |
-| Status / next action | Test/spec binding prepared, helper tests RED; implement only the two new modules, then affected independent acceptance |
+| Status / next action | Helper-only acceptance PASS at `5ac0b2521edbac8ab6bd64bf421fd1f80b5724f2`; prepare separately bounded consumer setup gate |
 | Owner / lifecycle | Test engineering; active/retain; same change worktree, no cleanup due |
 | Delivery | Internal checkpoint on the existing branch, one eventual OpenSpec PR; no partial promotion/archive |
 
@@ -63,3 +63,15 @@ At parent `0653b16`, Windows Node **24.22.2**, all three syntax checks exit 0. C
 Repository formatter and staged owned whitespace checks exit 0. Final preparation packet versus `0653b16`: **6 owned files / 252 gross added lines / 0 deletions**; supplied production forecast adds about 160 lines in 2 files (combined forecast about 412 lines / 8 files, not measured production). No production diff; `.scratch/small03a1a` absent. The format exclusions mean syntax plus explicit assertion review, not formatter coverage, applies to these test/spec files.
 
 This is executable preparation for implementation, not green slice acceptance or integrated-candidate verification. Parallel dirty/untracked owner, operations, containment and research artifacts are preserved. Worktree cleanup status: retained active; next action bounded helper implementation and affected verification.
+
+## Independent affected verification — 2026-10-31
+
+Candidate **`5ac0b2521edbac8ab6bd64bf421fd1f80b5724f2`**, same branch/worktree and pinned project baseline above. Production/test/bin/script/package inputs have no dirty delta from that candidate. Parallel dirty owner documents and untracked operations/research/containment artifacts were inventoried and excluded, not staged or executed. This is acceptance of the two additive helpers only, not integrated-feature verification.
+
+Windows project Node **24.22.2**: both new production syntax checks exit **0**. Exact command `& $Node24 --test tests/portable-config-unit.test.mjs tests/owner-credentials-unit.test.mjs tests/portable-helper-invariants.test.mjs` exits **0**, **7 PASS / 0 failed / 0 cancelled / 0 skipped**, 116.7305ms. Repository Prettier check and `git diff --check` exit **0**. Tests/OpenSpec are formatter exclusions. Native execution represents pure values and isolated local file creation; no environment service/build/install is needed for these unused helpers.
+
+Source review supports the assertions: credential creation uses exclusive `open(...,'wx',0o600)`, maps EEXIST to `OWNER_ALREADY_CONFIGURED`/2, preserves duplicate bytes, writes then syncs/closes, and attempts partial-file cleanup on write failure before `STORAGE_FAILURE`/4. Reads reuse redacted `CREDENTIAL_MISSING`/3 and `CREDENTIAL_INVALID`/4 behavior; other I/O failures map to `STORAGE_FAILURE`/4. Write/sync/close fault branches were inspected, **not fault-injection tested**; unlink cleanup is best-effort, not proven rollback. No credential value was printed.
+
+Important limits: `0o600` is not Windows ACL verification. The writer does not establish/verify owner-only ACLs, and the reader takes an explicit file path: passing `ownerId` changes diagnostics, not file-to-owner binding. Correct protected paths, credential protection and verification remain the consumer's obligations. These are not failed helper criteria or waived PORT-SETUP gates. No public consumer changed; original schema-1/framing and unused-helper invariants PASS **for this candidate only**. When the authorized consumer actually switches, those invariants become historical/superseded and must leave the active suite; do not demand future schema-2 consumers pass a no-consumer/schema-1 test.
+
+Assertion status **PASS (helper scope)**; cleanup **PASS**: credential case removes its unique directory and asserts ENOENT; post-run `.scratch/small03a1a` contains no entries. No child/service/listener or real credential/platform was used. All PORT-SETUP, reservation, waiting, real Telegram, host, durability and release requirements retain their previous unpassed disposition; no repeat of unaffected legacy tests. Measured checkpoint versus `0653b16`: **8 files / 459 additions / 0 deletions** including tests/spec preparation and production (production alone **2 files / 207 additions**). This evidence addition is separate docs-only finalization; later consumer tests are a new packet, not a claim that every later delta is docs-only.
