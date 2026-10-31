@@ -28,9 +28,12 @@ test('B-SCHEMA: recursively compares operations and all referenced schemas, dete
   assert.throws(() => compareSchema(changed, fixture), /MISSING_SCHEMA_POINTER/);
   assert.throws(() => pinnedFixture(Buffer.from('{}')), /PUBLIC_SOURCE_PIN/);
 });
-test('B-PUBLIC-PIN: supplied public source is required; missing fixture is RED, not host proof', async () => {
-  const path = new URL('../../../.tools/handoffs/opencode-v2-openapi.json', import.meta.url);
-  const fixture = pinnedFixture(await readFile(path));
-  assert.ok(Object.keys(fixture.nodes).length >= roots.length);
-  assert.equal(compareSchema(JSON.parse(await readFile(path)), fixture).supportEligible, false);
+test('B-PUBLIC-PIN: exact public source reproduces tracked relevant-node fixture, not host proof', async () => {
+  // Resolve from this module, never cwd. The source is the active-worktree copy.
+  const bytes = await readFile(new URL('../.tools/handoffs/opencode-v2-openapi.json', import.meta.url));
+  assert.equal(bytes.length, 726513);
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/calibration-schema-pin.json', import.meta.url)));
+  assert.deepEqual(pinnedFixture(bytes), fixture);
+  assert.equal(Object.keys(fixture.nodes).length, 85);
+  assert.equal(compareSchema(JSON.parse(bytes), fixture).supportEligible, false);
 });
