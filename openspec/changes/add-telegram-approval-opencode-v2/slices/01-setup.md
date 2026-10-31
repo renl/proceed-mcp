@@ -62,3 +62,30 @@ Design section 8/research section 4: public identity/license/rights and first-pu
 Independent verification (2026-10-31): candidate `533ea27b67e6c32c89b9e26bccc8432f73d63f27` FAILED additional public-CLI URL-contract assertions despite passing `SETUP-01`. [Evidence and next-checkpoint prerequisites](01-setup-evidence.md). Checkpoint 1 is not slice-ready; the historical implementation-ready status above is not a verification pass. No contract or acceptance criteria changed.
 
 Checklist answers: (1) YES journal/origin/outbox feeds delivery proof; (2) YES restart/offset/crash can contaminate state; (3) YES observation must precede timeout/resolution; (4) YES MCP→Telegram→outbox→host is order-sensitive; (5) YES setup and real proof span checkpoints. Architect accepted checkpoint 1 interface/decomposition review, as confirmed in the scoped readiness correction brief (2026-10-31). This satisfies checkpoint 1's review gate only; planned transport-fault sequencing still requires Architect review before live execution. Tests do not define private module interfaces. Checkpoints 2–5 are not execution-ready; checkpoints 3–4 cannot begin broad implementation before checkpoint 2's real gate passes. If live environment remains unavailable, retain blocked gates and only separately authorized isolated work; do not call the broad plan ready.
+
+## SETUP-URL-001 — bounded regression correction
+
+Gap ID: **SETUP-URL-001**. Correction attempts: **0**. Next owner: **SE (implementation engineering)**, routed through coordination. Status: regression tests ready, expected RED confirmed; production correction and independent affected verification pending. Authority and failure: [design section 2](../design.md), [independent evidence](01-setup-evidence.md). No product behavior, criteria, decomposition or external interface changed; existing checkpoint 1 review disposition remains applicable.
+
+Goal: restore the already-approved literal-loopback and explicit-port setup behavior. Founder-visible success remains a real human decision reaching only its requesting running session after MCP timeout. This offline correction provides supporting setup proof only, not real Telegram/OpenCode continuation proof.
+
+Use the existing worktree/branch named above, with prerequisite `a7d5fff860c5a7c6065c0d48d1382f1a99210076` present on that branch and the regression commit present in the same worktree. Delivery remains a sequential commit in the single OpenSpec change, not a new worktree or PR. Retain the worktree; no push, PR, archive or publication is authorized by this brief.
+
+- Production scope: `src/config/origin-url.js`; adjust only other existing configuration validation callers if needed to preserve the approved behavior. Do not prescribe a private parser algorithm. No unrelated refactoring, dependency/toolchain changes, live requests or weakening OS protection.
+- Test scope: authoritative public-executable regression `tests/cli-origin-url.test.mjs`; existing `tests/cli-setup.test.mjs` remains unchanged. Production must not import tests. Implementation does not edit tests or acceptance criteria; report a mismatch through coordination.
+- Four regression cases: reject `http://127.1:4096`, `http://2130706433:4096`, `http://0x7f000001:4096` with exit 2 and unchanged protected state; accept `http://127.0.0.1:80` with exit 0 and persist that explicit-port binding. Then reject duplicate replacement with exit 2 and unchanged configuration/credentials. The default-port persistence/duplicate assertions are not reached until acceptance is fixed.
+- Do not expand this correction to the exploratory normalized path/empty-query/empty-fragment cases in the failure report. Any disputed syntax interpretation goes to the contract owner through coordination.
+
+### Affected run sequence and evidence
+
+PowerShell on Windows; reuse the existing project-local Node 24.22.2 executable (private handoff supplies its absolute path). Set `$Node24` to that executable, then `$env:PROCEED_TEST_COMMAND = ConvertTo-Json -Compress -InputObject @($Node24, 'bin/proceed-mcp.js')`. No install or service harness needed for these finite offline public-CLI tests. Native Windows is representative for this same-host regression; no all-OS or support-floor claim.
+
+1. `& $Node24 --check tests/cli-origin-url.test.mjs`.
+2. `& $Node24 --test tests/cli-origin-url.test.mjs` (RED before correction; all four cases must pass afterward).
+3. `& $Node24 --test tests/cli-setup.test.mjs` after correction, to cover the existing setup/forbidden-topology boundary.
+4. `& $Node24 scripts/build.mjs`, then `npm run format:check` with Node 24 selected for the formatter; preserve command exits. Formatter scope stays the committed production-owned scope. No formatting changes to other owners' artifacts.
+5. `git diff --check`; record candidate revision, affected paths, assertion counts and separate cleanup result for independent affected verification. Do not rerun unrelated full suites or claim the complete feature verified.
+
+Each command has a 120-second outer bound; each test CLI child has a 5-second deadline. Run-owned state is confined to `tests/.artifacts/origin-url-*`, removed in `finally`, and absence asserted. No credential values/hashes are printed. No servers or external API calls are used. Real host/live gates, checkpoint 2 harness readiness, other-OS protection, release and publication gates remain BLOCKED/unexecuted and unwaived as recorded in the independent evidence.
+
+Regression setup evidence (2026-10-31): production prerequisite `a7d5fff860c5a7c6065c0d48d1382f1a99210076`, Windows Node 24.22.2. Syntax check exit 0. Targeted test exit 1 in 8.91 seconds: all four leaf cases fail for the previously reported exit mismatch (three aliases return 0 instead of 2; explicit port 80 returns 2 instead of 0). Node reports 5 failed tests including the aggregate parent, 0 passed/cancelled/skipped. This is behavioral RED, not a missing-executable or environment failure. Cleanup PASS: run directory absence assertion completed and `tests/.artifacts` had 0 entries. No other application checks rerun in this regression-authoring task.

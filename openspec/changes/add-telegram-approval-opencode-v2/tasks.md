@@ -17,7 +17,7 @@ Direct proof is real Telegram interaction followed by that exact session's ackno
 | baseline | `main` and fetched `origin/main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba` |
 | owner | Test engineering (lifecycle); implementation engineering (implementation custody) |
 | status | active; checkpoint 1 independent verification FAILED at `533ea27`; checkpoints 2–5 not execution-ready |
-| next action | Route URL-contract regression coverage and implementation correction; then reverify affected setup checks. Prepare checkpoint 2 only after its secure prerequisites and reviewed harness exist. |
+| next action | SETUP-URL-001 regression tests ready/RED; route bounded production correction to SE per `slices/01-setup.md`, then independently reverify affected setup checks. Prepare checkpoint 2 only after its secure prerequisites and reviewed harness exist. |
 | cleanup evidence | Initial registry contained only repository root on `chore/project-workflow`; no pre-existing dangling worktree. No removal authorized now. After verified landing return to current `main`, verify registry/directory removal; retain unknown work. |
 
 Root bootstrap originals remain untouched. Worktree copies are the delivery artifacts; do not implement in the root or silently overwrite newer owner edits there. No publication, archive, license selection, or PR operation is authorized by this setup.
@@ -43,6 +43,7 @@ Root bootstrap originals remain untouched. Worktree copies are the delivery arti
 - [x] 1.1 Confirm checkpoint 1 is covered by existing user authorization and Architect interface/decomposition acceptance of `slices/01-setup.md`; scoped readiness correction brief confirms both (2026-10-31), not inferred from CLI artifact presence. No renewed blanket product signoff is required.
 - [x] 1.2 Implement the public executable and empty-state `init` / stopped-broker `origin add` contract from design sections 1–2; satisfy `tests/cli-setup.test.mjs` through the executable, without production imports from tests. Document setup prerequisites and environment-variable password references alongside implementation.
 - [x] 1.3 Add production build/lockfile and formatter targeting provisional Node 24, without inventing public package identity/license or a final support floor; validate clean setup/build and `npm run format:check`, then run the checkpoint command in the slice. Supply a representative Node 24 environment before claiming compatibility; local Node 22 is diagnostic-only.
+- [ ] 1.4 Correct SETUP-URL-001 under the existing design section 2 contract; satisfy `tests/cli-origin-url.test.mjs` and the bounded affected run sequence in `slices/01-setup.md`, then obtain independent affected verification. Correction attempts: 0; next owner: SE (implementation engineering). Regression setup on prerequisite `a7d5fff`: Node 24.22.2 syntax exit 0; public-CLI test exit 1, four leaf exit-mismatch failures, zero skipped, cleanup PASS. Full evidence and production scope are in the slice; live gates remain blocked.
 
 ### Checkpoint 1 implementation evidence (2026-10-31)
 
