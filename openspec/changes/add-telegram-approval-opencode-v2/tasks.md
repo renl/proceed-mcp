@@ -1,5 +1,21 @@
 # Tasks
 
+## Portable correction — current disposition (2026-10-31)
+
+The corrected proposal/specs/design supersede the OpenCode-API-specific implementation criteria below. Earlier evidence remains historical, not a portable waiting-call or Events pass. Stale host/API calibration is paused; no allowlist bypass or event-wire implementation is authorized.
+
+- [x] P.A The approved request-key ownership decision and corrected design resolve the dedicated-connection prerequisite. [Original preflight](slices/03-portable-waiting-preflight.md) is retained and marked superseded; shared stdio is supported by the contract, not yet verified in production.
+- [x] P.B Prepare the bounded public-MCP tests and Boundary Verification in [03A portable shared waiting](slices/03a-portable-shared-waiting.md). Tests: `tests/portable-waiting.test.mjs`; authoring HEAD `dff3da959843a0cda592c525f559b538ccf391be`, corrected dirty owner inputs preserved. Review-ready only; initial Node 24 run: 1 fixture PASS / 2 product RED at schema 1 instead of 2; later product assertions unexecuted.
+- [ ] P.C Obtain Architect interface-fidelity plus decomposition/test-artifact review of 03A before implementation. Prepared authority and waiting vertical are ordered internal checkpoints, not independent feature proofs or separate PRs.
+- [ ] P.D Implement bounded 03A.1 enabling authority, then 03A.2 actual waiting results through real CLI/broker/shared stdio; pass PORT-A/PORT-B without fixture-produced outcomes, legacy metadata/API fallback, or test API. Independent affected acceptance remains required.
+- [ ] P.E Supply follow-up 03B lifecycle/race/expiry/flush tests and real Telegram/first-host timeout/private-context proof before feature verification. Experimental Events wire/code and automatic-resumption acceptance remain BLOCKED, not waived.
+
+Current founder-visible success: a paired human's Approve, Reject, or exact Respond text returns to the original active MCP tool call without proprietary host metadata/API/password or Events; parallel shared-stdio requests must not be mixed. Capabilities plus transport principal authorize requests; valid same-principal transfer is allowed, labels do not authenticate agents. Automatic event-capable post-timeout resumption remains a separate blocked acceptance requirement, not waived.
+
+Proof requires the public original JSON-RPC result and actual first-harness assistant acknowledgement after real Telegram interaction. Fixture protocol assertions, durable records and result-write reports are supporting proxies. No such new proof was executed here.
+
+Worktree lifecycle: retain the same path/branch/change and pinned project baseline in the table below. Current status is **active / 03A review pending, product RED**; next action is Architect interface/decomposition review, then bounded implementation. No new worktree; no worktree cleanup due. Run-owned namespaces/listeners were removed by the test harness. The older table's checkpoint/calibration next action is historical and superseded by this disposition.
+
 Parent: [proposal](proposal.md). Contract: [design](design.md). First executable checkpoint: [01 setup](slices/01-setup.md).
 Production review sizing and local freshness snapshot: [02E review plan](slices/02e-review-plan.md) (nine bounded review packets; no feature verification).
 Affected corrections: [02F ownership](slices/02f-ownership-regression.md) attempt 1 has ten diagnostic affected assertions PASS; full acceptance pending. [02G version admission attempt 1](slices/02g-version-regression.md#attempt-1--independent-affected-verdict-2026-10-31) has one diagnostic public negative assertion PASS at `ad5663e`; Node 24, delivery/retry and external host proof remain pending. Neither is feature verification.
