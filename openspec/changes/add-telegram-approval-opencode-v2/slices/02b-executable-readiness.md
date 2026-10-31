@@ -4,7 +4,7 @@ Parent: [timeout spike](02-timeout-spike.md); index: [tasks](../tasks.md). Autho
 
 ## Disposition and scope
 
-`TIMEOUT-PROOF-001`: **OPEN; correction attempts 2**. Next owner: architecture review through coordination. Offline package ready for review, **not SE implementation-ready or live-ready**. Earlier handshake/deadline and bounded collector acceptance remain accepted; the final-window edge is corrected here. No SE contract handoff is issued.
+`TIMEOUT-PROOF-001`: **OPEN; correction attempts 2**. Historical offline package; accepted subsets remain accepted proxies. Current preparation and minimum implementation handoff: [2C product-boundary vertical](02c-product-boundary-vertical.md). That supplement follows the clarified design section 7; it does not reset attempts, claim live readiness or change the historical measurements below.
 
 Founder-visible condition: a real paired-human decision causes a useful, correct-intent turn in only the requesting running session after its actual MCP timeout. Everything measured here is **supporting/proxy evidence**, not that proof.
 
