@@ -14,6 +14,9 @@ dist/
 # Logs
 *.log
 
+# Test-run artifacts (owned by the test harness, never committed)
+tests/.artifacts/
+
 # OS and editor noise
 .DS_Store
 Thumbs.db
