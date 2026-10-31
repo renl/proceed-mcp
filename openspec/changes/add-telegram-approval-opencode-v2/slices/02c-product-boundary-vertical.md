@@ -2,6 +2,8 @@
 
 Parent: [tasks](../tasks.md). Supersedes 2B's *next preparation* disposition, not its accepted evidence. Authority: [design](../design.md) sections 1–7, especially the clarified direct-client gate and implementation order in section 7; [continuation delta](../specs/opencode-session-continuation/spec.md); [Telegram delta](../specs/telegram-approval/spec.md). Sources: [research](../research.md) sections 2–3 and [assistant schema](../assistant-schema-research.md).
 
+Pre-support host measurement and its separately labelled preliminary/completed evidence: [02H staged external calibration](02h-host-calibration.md). Completed reviewed host proof precedes the first exact-version support entry, which precedes this real product spike. No successful ordinary product admission is required to bootstrap external measurement; its empty support gate remains unchanged.
+
 ## Goal, custody and bounded readiness
 
 Can a real human Respond decision, including approval-like text, produce exactly one instructions-only acknowledgement in the requesting running session after its actual tool timeout, admission-response loss and broker-only restart?

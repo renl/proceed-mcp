@@ -3,6 +3,7 @@
 Parent: [proposal](proposal.md). Contract: [design](design.md). First executable checkpoint: [01 setup](slices/01-setup.md).
 Production review sizing and local freshness snapshot: [02E review plan](slices/02e-review-plan.md) (nine bounded review packets; no feature verification).
 Affected corrections: [02F ownership](slices/02f-ownership-regression.md) attempt 1 has ten diagnostic affected assertions PASS; full acceptance pending. [02G version admission attempt 1](slices/02g-version-regression.md#attempt-1--independent-affected-verdict-2026-10-31) has one diagnostic public negative assertion PASS at `ad5663e`; Node 24, delivery/retry and external host proof remain pending. Neither is feature verification.
+External host calibration: [02H staged review input](slices/02h-host-calibration.md). Packet A is test-owned preliminary runner preparation; B real-MCP timeout binding and C complete host matrix remain unimplemented/RED. No support promotion or live execution is authorized.
 
 ## Readiness and delivery
 
@@ -19,7 +20,7 @@ Direct proof is real Telegram interaction followed by that exact session's ackno
 | baseline | `main` and fetched `origin/main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba` |
 | owner | Test engineering (lifecycle); implementation engineering (implementation custody) |
 | status | active / retained, not cleanup-ready; checkpoint 1 bounded Windows Node 24 setup acceptance PASS; SETUP-URL-001 closed; TIMEOUT-PROOF-001 OPEN attempt 2; product-boundary entry/minimum vertical brief prepared, product prerequisites RED, live execution BLOCKED |
-| next action | Review affected boundary/decomposition in `slices/02c-product-boundary-vertical.md`, then minimum SE vertical path; SDET binds the chosen journal/client afterward in this slice. Accepted offline subsets retained. Real containment/isolated environment and live proof remain required. |
+| next action | Review `slices/02h-host-calibration.md` packet A interface/decomposition; bind B/C only after isolated environment and containment readiness. External host proof precedes reviewed support promotion and the unchanged 02C product gate; product durability/client bindings remain required. Accepted offline subsets retained. |
 | cleanup evidence | Initial registry contained only repository root on `chore/project-workflow`; no pre-existing dangling worktree. No removal authorized now. After verified landing return to current `main`, verify registry/directory removal; retain unknown work. |
 
 Root bootstrap originals remain untouched. Worktree copies are the delivery artifacts; do not implement in the root or silently overwrite newer owner edits there. No publication, archive, license selection, or PR operation is authorized by this setup.
@@ -67,6 +68,9 @@ Checkpoint prerequisite disposition: [independent checkpoint 1 evidence and chec
   - Current executable entry, exact minimal SE scope, source-grounded public host adapters, endpoint-preserving direct-client process, ordered binding work and missing environment gates: [2C vertical](slices/02c-product-boundary-vertical.md). Implement storage/client first; SDET then supplies format-specific decoder and pre-effect interception. No preexisting decoder/format is a prerequisite to minimum implementation; actual flush/restart proof remains a prerequisite to live acceptance.
 - [ ] 2.3 Execute the real authenticated OpenCode V2 + dedicated Telegram private-chat spike per the Boundary Verification block. Record host version/OpenAPI hash, two sessions, active/idle/busy, direct tools and Code Mode, each outcome before completion and after forced MCP timeout while host lives, lost POST response, stable-ID replay after broker restart and after inbox departure. Assert exact-session assistant acknowledgement and no duplicate decision-driven turn within the harness's declared observation window. Report unobserved cases BLOCKED, never passed from fixtures.
 - [ ] 2.4 Review spike evidence before broad integration; admit only actually verified host versions. If admission, timeout scheduling, intent, or deduplication fails, return the evidence for contract/product correction rather than substituting notifications or widening support.
+- [ ] 2.HA Review 02H packet A boundary/decomposition/test artifacts; run `node --test tests/host-calibration.test.mjs`. `node tests/host-calibration-entry.mjs` remains explicit prerequisite RED until protected isolated bindings exist. Preliminary version/schema/HTTP observations never confer support.
+- [ ] 2.HB Bind 02H packet B's finite actual-host/test-only MCP invocation and measured timeout, with source-schema comparison, protected wiring and containment. Fixture timers/HTTP alone cannot pass this gate.
+- [ ] 2.HC Independently verify all 02H packet C host-side matrix cells, actual driver restart/replay and separate cleanup before reviewed exact-version support promotion. Then run the unchanged product MCP/Telegram/flush/recovery and first-use gates; no circular product-success prerequisite to external host proof.
 
 ### Checkpoint 2 phase-A evidence (2026-10-31)
 
