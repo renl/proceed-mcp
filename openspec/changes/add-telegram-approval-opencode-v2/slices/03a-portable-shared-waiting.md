@@ -32,6 +32,8 @@ SDET-owned refinement changes: `tests/portable-setup.test.mjs`, `tests/support/p
 
 Selected 03A.1a seam and focused executable gate: [additive owner/config helpers](03a1a-additive-owner-helpers.md). Only two new unused production modules; no existing consumer switch. Helper RED is explicit and distinct from PORT-SETUP.
 
+Subsequent disposition: 03A.1a helper-only independent acceptance at `5ac0b25` is PASS (seven tests). Next [03A.1b-i CLI checkpoint draft](03a1b-i-cli-setup.md) binds a unique public consumer gate, not the additive no-consumer invariants. Its exact implementation sizing and narrow stopped-owner clarification/fidelity review remain pending. It is an incremental branch-only prerequisite; journal/runtime/MCP completion and all three full PORT-SETUP cases still gate overall 03A.1b. Do not require the entire consumer rewrite in this one packet or claim full setup from its subset.
+
 03A.1 makes the later human-outcome proof possible; it does not deliver a waiting approval workflow. The reported first setup forecast is **7 production files / 550–670 gross changed lines**, not a measured diff or an approved exception. Use additions plus deletions against each pinned pre-checkpoint commit, and account for associated test/spec changes separately without double counting this preparation packet. No new packet may silently exceed ~20 files / ~600 gross lines.
 
 | Internal unit | Executable gate and dependency | Safe review boundary / likely production touch areas |
