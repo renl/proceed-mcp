@@ -2,7 +2,15 @@
 // lifecycle and of the one pairing (design sections 1-6). It exposes operations
 // to the local HTTP API, the Telegram poller and the delivery worker; both
 // effectful adapters commit through the same serialized transaction chain.
-import { BrokerError, invalidRequest, notFound, storageFailure, unavailable } from '../errors.js';
+import {
+  BrokerError,
+  invalidRequest,
+  notFound,
+  storageFailure,
+  unavailable,
+  unsupportedHost,
+} from '../errors.js';
+import { isReviewedHostVersion } from '../opencode/support-data.js';
 import {
   createBrokerState,
   applyMutations,
@@ -196,10 +204,19 @@ export function createBroker({ paths, config, clients, clock = () => Date.now(),
     return { status: 200, request: requestView(existing) };
   };
 
+  // Ordinary admission (design section 6): the actual authenticated
+  // ServerInfo.version must have a reviewed support entry before a request is
+  // created. A well-shaped unlisted host is refused; schema alone is not
+  // support evidence, and an empty support set admits nothing.
   const identify = async (originId, sessionId) => {
     const adapter = client(originId);
     try {
       const info = await adapter.info();
+      if (!isReviewedHostVersion(info.version)) {
+        throw unsupportedHost(
+          `the origin reports host version ${JSON.stringify(String(info.version).slice(0, 64))}, which has no reviewed support entry in this release`,
+        );
+      }
       const session = await adapter.session(sessionId);
       return {
         version: info.version,
@@ -208,6 +225,8 @@ export function createBroker({ paths, config, clients, clock = () => Date.now(),
         sessionCreatedAt: typeof session?.time?.created === 'number' ? session.time.created : null,
       };
     } catch (error) {
+      // Admission refusals already carry their contract code and status.
+      if (error instanceof BrokerError) throw error;
       throw originErrorToBroker(error);
     }
   };

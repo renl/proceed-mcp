@@ -3,6 +3,7 @@
 // (design section 6). A resolution is never re-decided, a new prompt ID is
 // never allocated, and "admitted" is never reported as delivered.
 import { OriginError } from '../opencode/client.js';
+import { isReviewedHostVersion } from '../opencode/support-data.js';
 import { utcTimestamp } from '../util/values.js';
 
 export const ADMITTED_POLL_MS = 2_000;
@@ -159,6 +160,15 @@ export function createDeliveryWorker({ broker, clock = () => Date.now(), logger 
   const verifyIdentity = async (request) => {
     const client = broker.client(request.origin_id);
     const info = await client.info();
+    // Ordinary admission before any decision prompt is admitted or retried
+    // (design section 6): no reviewed entry means no supported session.
+    if (!isReviewedHostVersion(info.version)) {
+      return {
+        code: 'UNSUPPORTED_HOST',
+        message: 'the origin host version has no reviewed support entry in this release',
+        retryable: false,
+      };
+    }
     if (info.pid !== request.origin_pid || info.version !== request.origin_version) {
       return {
         code: 'ORIGIN_CHANGED',

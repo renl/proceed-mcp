@@ -57,6 +57,14 @@ export function notFound(message = 'request not found') {
   return new BrokerError('NOT_FOUND', 404, message);
 }
 
+// Design section 6: a host without a reviewed support entry is never a
+// supported product session, so admission fails closed and is not retryable.
+export function unsupportedHost(
+  message = 'the origin host version is not supported by this release',
+) {
+  return new BrokerError('UNSUPPORTED_HOST', 503, message, { retryable: false });
+}
+
 export function conflict(message, code = 'IDEMPOTENCY_CONFLICT') {
   return new BrokerError(code, 409, message);
 }
