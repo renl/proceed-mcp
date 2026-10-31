@@ -152,6 +152,8 @@ Checkpoint prerequisite disposition: [independent checkpoint 1 evidence and chec
 
 ## Workflow follow-up
 
+- Packet B offline review subset: [02H B boundary, commands and blockers](slices/02h-host-calibration.md#packet-b-offline-review-input--2026-10-31). Stdio/observer/error-collection interface/schema-comparator/containment tests authored; pinned public source missing (ENOENT), so full B is RED. Actual host schema/timeout/session evidence, live protected binding and Packet C driver restart/replay remain blocked. No support-data change or live execution authority.
+
 - Only after independent verification and owner delta review: authorize one CLI archive inside the single change PR; implementation engineering owns PR preparation, user owns merge.
 - Registry publication and exact-version clean public install are distinct operational/release gates requiring owner authorization and secure publisher readiness; neither is passed or waived here.
 - Test engineering retains lifecycle accountability until verified landing or explicitly authorized abandonment and safe removal. Never edit archived content to record cleanup.
