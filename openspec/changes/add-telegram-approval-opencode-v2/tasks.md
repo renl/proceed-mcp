@@ -16,8 +16,8 @@ Direct proof is real Telegram interaction followed by that exact session's ackno
 | branch / change | `add-telegram-approval-opencode-v2` |
 | baseline | `main` and fetched `origin/main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba` |
 | owner | Test engineering (lifecycle); implementation engineering (implementation custody) |
-| status | active; SETUP-URL-001 independent affected verification PASS at `45bd060`, closed; blanket checkpoint 1 syntax acceptance awaits leading-zero-port clarification; checkpoints 2–5 not execution-ready |
-| next action | Obtain contract-owner leading-zero-port interpretation through coordination; prepare checkpoint 2 harness/tests and secure prerequisites per `slices/01-setup-evidence.md`. No live execution or broad integration yet. |
+| status | active / retained, not cleanup-ready; checkpoint 1 bounded Windows Node 24 setup acceptance PASS; SETUP-URL-001 closed; canonical-port clarification reconciled with evidence at `0d8b4ec`; checkpoints 2–5 not execution-ready |
+| next action | Prepare checkpoint 2 finite harness/tests and reviewed timeout-fault sequence; arrange secure isolated host and dedicated bot/private-chat prerequisites per `slices/01-setup-evidence.md`. No live execution or broad integration yet. |
 | cleanup evidence | Initial registry contained only repository root on `chore/project-workflow`; no pre-existing dangling worktree. No removal authorized now. After verified landing return to current `main`, verify registry/directory removal; retain unknown work. |
 
 Root bootstrap originals remain untouched. Worktree copies are the delivery artifacts; do not implement in the root or silently overwrite newer owner edits there. No publication, archive, license selection, or PR operation is authorized by this setup.
@@ -57,7 +57,7 @@ Root bootstrap originals remain untouched. Worktree copies are the delivery arti
 
 ## 2. Risk-first boundary spike (before broad integration)
 
-Checkpoint prerequisite disposition: [independent checkpoint 1 evidence and checkpoint 2 readiness brief](slices/01-setup-evidence.md). Node 24 Windows affected setup checks now PASS and SETUP-URL-001 is closed; leading-zero-port policy needs contract-owner clarification before blanket syntax acceptance. No live harness, isolated host/session access or dedicated Telegram operator environment has been demonstrated. The bounded offline pass is not feature/release verification or checkpoint 2 execution readiness.
+Checkpoint prerequisite disposition: [independent checkpoint 1 evidence and checkpoint 2 readiness brief](slices/01-setup-evidence.md#bounded-checkpoint-1-acceptance-after-contract-clarification-2026-10-31). Node 24 Windows setup acceptance PASS; SETUP-URL-001 is closed and the canonical-port clarification matches existing implementation and recorded diagnostics. No live harness, isolated host/session access or dedicated Telegram operator environment has been demonstrated. The bounded offline pass is not feature/release verification or checkpoint 2 execution readiness.
 
 - [ ] 2.1 With checkpoint 1 present on this branch, test engineering supplies a finite repository-owned out-of-process spike harness: scoped state/ports, readiness and total deadlines, bounded redacted evidence, guaranteed whole-tree teardown and cleanup verification. Verify harness timeout/failure cleanup before real use. No foreground server improvisation.
 - [ ] 2.2 Implement only the minimum broker/MCP/pairing/request/prompt path needed for design section 7's vertical spike; co-land authoritative executable tests and operator setup instructions. Verify MCP 2025-11-25 initialize/tools/call and trusted `_meta`, not internal handlers or a human-decision test endpoint.

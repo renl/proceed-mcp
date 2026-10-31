@@ -26,24 +26,24 @@ Master index and current-work summary for the Telegram approval MCP.
 |---|---|
 | Objective | Deliver Telegram approval MCP for running OpenCode V2 sessions with public npm release CI |
 | Spec | `openspec/changes/add-telegram-approval-opencode-v2/` |
-| Worktree | Not yet created; setup in repository root |
+| Worktree | `.worktree/add-telegram-approval-opencode-v2` (active, retain) |
 | Baseline | `main` @ `f385409792aff3d46d96b5c4f03358f10c8dc5ba` |
-| Owner | @product-manager |
-| Next action | Write proposal and product delta; ground external contracts before architecture and tests |
-| Blocker | No implementation blocker confirmed; live OpenCode auth/busy semantics and npm publisher setup unverified |
+| Owner | @sdet-engineer |
+| Next action | Record bounded setup acceptance; prepare managed timeout spike before broader integration |
+| Blocker | Isolated authenticated OpenCode host and dedicated Telegram bot/private chat not ready; npm identity/publisher and license unresolved |
 | Correction-attempt link | none |
-| Verified revision | Bootstrap only at `f385409`; no feature verification |
+| Verified revision | Setup checks at `45bd060` (code `a9e74a9`), evidence `0d8b4ec`; Windows Node 24 only, no feature verification |
 | Evidence | `docs/status_log.md`; public repository `https://github.com/renl/proceed-mcp` |
 
 ## Active Artifacts
 
 | Artifact | Location | Owner | Status |
 |---|---|---|---|
-| Proposal | `openspec/changes/add-telegram-approval-opencode-v2/proposal.md` | @product-manager | Pending |
-| Product capability deltas | `openspec/changes/add-telegram-approval-opencode-v2/specs/` | @product-manager | Pending; declare capability names in proposal |
+| Proposal | `openspec/changes/add-telegram-approval-opencode-v2/proposal.md` | @product-manager | Authored in active worktree |
+| Product capability deltas | `openspec/changes/add-telegram-approval-opencode-v2/specs/` | @product-manager | Authored: telegram-approval, opencode-session-continuation, npm-distribution |
 | Current specs | `openspec/specs/` | Per-capability declared author | Empty |
-| Design | `openspec/changes/add-telegram-approval-opencode-v2/design.md` | @software-architect | Pending |
-| Tasks/tests | `openspec/changes/add-telegram-approval-opencode-v2/tasks.md` | @sdet-engineer | Pending |
+| Design | `openspec/changes/add-telegram-approval-opencode-v2/design.md` | @software-architect | Authored in active worktree; canonical port clarification pending commit |
+| Tasks/tests | `openspec/changes/add-telegram-approval-opencode-v2/tasks.md` | @sdet-engineer | First setup checkpoint implemented; live spike pending |
 | Status | `docs/status_log.md` | @chief-of-staff | Current |
 
 External platform findings must use OpenCode V2 docs (`https://opencode.ai/v2/docs/`), not V1. Existing discussion findings are research, not tested compatibility. SDET owns runnable tests and independent first-use verification; SE implements production code and creates the delivery PR. Operations owns registry/environment configuration.
