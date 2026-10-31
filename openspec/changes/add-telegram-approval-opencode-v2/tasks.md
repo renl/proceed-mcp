@@ -16,8 +16,8 @@ Direct proof is real Telegram interaction followed by that exact session's ackno
 | branch / change | `add-telegram-approval-opencode-v2` |
 | baseline | `main` and fetched `origin/main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba` |
 | owner | Test engineering (lifecycle); implementation engineering (implementation custody) |
-| status | active; checkpoint 1 implementation-ready; checkpoints 2–5 not execution-ready |
-| next action | Implement checkpoint 1 from the reviewed setup slice; supply a Node 24 test environment for its proposed runtime target |
+| status | active; checkpoint 1 independent verification FAILED at `533ea27`; checkpoints 2–5 not execution-ready |
+| next action | Route URL-contract regression coverage and implementation correction; then reverify affected setup checks. Prepare checkpoint 2 only after its secure prerequisites and reviewed harness exist. |
 | cleanup evidence | Initial registry contained only repository root on `chore/project-workflow`; no pre-existing dangling worktree. No removal authorized now. After verified landing return to current `main`, verify registry/directory removal; retain unknown work. |
 
 Root bootstrap originals remain untouched. Worktree copies are the delivery artifacts; do not implement in the root or silently overwrite newer owner edits there. No publication, archive, license selection, or PR operation is authorized by this setup.
@@ -55,6 +55,8 @@ Root bootstrap originals remain untouched. Worktree copies are the delivery arti
 - Unexecuted and unwaived: POSIX/macOS/Linux protection and first use, every Telegram and OpenCode boundary, live authentication, package identity/license/publication, release tooling. Checkpoints 2–5 remain not execution-ready.
 
 ## 2. Risk-first boundary spike (before broad integration)
+
+Checkpoint prerequisite disposition: [independent checkpoint 1 evidence and checkpoint 2 readiness brief](slices/01-setup-evidence.md). Node 24 Windows setup assertions are available, but URL-contract failures prevent slice-ready sign-off. No live harness, isolated host/session access or dedicated Telegram operator environment has been demonstrated. Task completion above records implementation activity, not verification acceptance.
 
 - [ ] 2.1 With checkpoint 1 present on this branch, test engineering supplies a finite repository-owned out-of-process spike harness: scoped state/ports, readiness and total deadlines, bounded redacted evidence, guaranteed whole-tree teardown and cleanup verification. Verify harness timeout/failure cleanup before real use. No foreground server improvisation.
 - [ ] 2.2 Implement only the minimum broker/MCP/pairing/request/prompt path needed for design section 7's vertical spike; co-land authoritative executable tests and operator setup instructions. Verify MCP 2025-11-25 initialize/tools/call and trusted `_meta`, not internal handlers or a human-decision test endpoint.
