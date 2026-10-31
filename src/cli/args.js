@@ -3,9 +3,10 @@
 // options. Unknown options are invalid arguments, never ignored.
 import { invalidArgument } from '../errors.js';
 
-export function parseArguments(argv, { valueOptions = [] } = {}) {
+export function parseArguments(argv, { valueOptions = [], flagOptions = [] } = {}) {
   const positionals = [];
   const options = new Map();
+  const flags = new Set();
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -17,6 +18,13 @@ export function parseArguments(argv, { valueOptions = [] } = {}) {
 
     if (argument.startsWith('--') && argument.length > 2) {
       const name = argument.slice(2);
+      if (flagOptions.includes(name)) {
+        if (flags.has(name)) {
+          throw invalidArgument(`--${name} may be given only once`);
+        }
+        flags.add(name);
+        continue;
+      }
       if (!valueOptions.includes(name)) {
         throw invalidArgument(`unknown option --${name}`);
       }
@@ -35,7 +43,7 @@ export function parseArguments(argv, { valueOptions = [] } = {}) {
     positionals.push(argument);
   }
 
-  return { positionals, options };
+  return { positionals, options, flags };
 }
 
 export function requireOptions(options, names) {

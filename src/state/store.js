@@ -9,6 +9,7 @@ import {
   withOrigin,
 } from '../config/config.js';
 import { blockedPrerequisite, invalidArgument, storageFailure } from '../errors.js';
+import { createFileHeader } from '../journal/framing.js';
 import { generateCredentialToken } from './credentials.js';
 import { writeFileAtomically } from './files.js';
 import { createProtectedDirectory, verifyOwnerOnly } from './protection.js';
@@ -22,6 +23,18 @@ async function readConfigIfPresent(paths) {
     throw storageFailure(`could not read ${paths.configFile}`, 'STORAGE_FAILURE', cause);
   }
   return parseConfigDocument(text);
+}
+
+// Read access for commands that need an existing configuration.
+export async function loadConfiguration(paths) {
+  const config = await readConfigIfPresent(paths);
+  if (config === null) {
+    throw blockedPrerequisite(
+      `no configuration at ${paths.configFile}; run "proceed-mcp init" first`,
+      'STATE_NOT_INITIALIZED',
+    );
+  }
+  return config;
 }
 
 async function directoryContents(directory) {
@@ -98,6 +111,8 @@ export async function initializeState(paths) {
     const config = createEmptyConfig();
     await writeFileAtomically(paths.controlCredentialFile, `${generateCredentialToken()}\n`);
     writtenFiles.push(paths.controlCredentialFile);
+    await writeFileAtomically(paths.journalFile, createFileHeader());
+    writtenFiles.push(paths.journalFile);
     await writeFileAtomically(paths.configFile, serializeConfig(config));
     writtenFiles.push(paths.configFile);
 
@@ -105,6 +120,7 @@ export async function initializeState(paths) {
       paths.stateDir,
       paths.credentialsDir,
       paths.controlCredentialFile,
+      paths.journalFile,
       paths.configFile,
     ]);
     return { stateDir: paths.stateDir, config, controlCredentialFile: paths.controlCredentialFile };

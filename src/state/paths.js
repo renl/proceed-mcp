@@ -24,5 +24,6 @@ export function statePaths(stateDir) {
     controlCredentialFile: join(dir, 'credentials', 'control.token'),
     originCredentialFile: (originId) => join(dir, 'credentials', `origin.${originId}.token`),
     brokerLockFile: join(dir, 'broker.lock'),
+    journalFile: join(dir, 'journal.log'),
   };
 }

@@ -17,6 +17,9 @@ dist/
 # Test-run artifacts (owned by the test harness, never committed)
 tests/.artifacts/
 
+# Implementation scratch: disposable diagnostic scripts, state and logs
+.scratch/
+
 # OS and editor noise
 .DS_Store
 Thumbs.db
