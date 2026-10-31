@@ -43,7 +43,7 @@ Additional security assertions verified persisted state, not merely command exit
 
 ## Blocking finding: literal URL validation
 
-Gap ID: **SETUP-URL-001** (assigned after this review). Correction attempts: **0**. Next owner: **SE (implementation engineering)** for production correction, then independent affected verification. Authorized persistent regressions are now in `tests/cli-origin-url.test.mjs`; [bounded correction brief and RED evidence](01-setup.md#setup-url-001--bounded-regression-correction). No production correction has been performed; this review's failed verdict is unchanged.
+Gap ID: **SETUP-URL-001** (assigned after this review). Correction attempts: **1**. Next owner: **independent affected verification** (test engineering). Authorized persistent regressions are in `tests/cli-origin-url.test.mjs`; [bounded correction brief and RED evidence](01-setup.md#setup-url-001--bounded-regression-correction). Correction attempt 1 (`a9e74a9898c573a3303280cae18a6b745fc27fee`, `src/config/origin-url.js`) decides the topology from the operator's literal text and reports PASS on the affected run sequence, including all four regression cases, as recorded in the [slice's implementation record](01-setup.md#correction-attempt-1--implementation-record-2026-10-31). It is the implementer's own check, not independent verification, so this review's failed verdict is unchanged.
 
 Authority: design section 2 requires a literal `127.0.0.1` host, an explicit port, and rejection of automatic URL substitution. `src/config/origin-url.js:15–39` validates the already-normalized WHATWG URL. That parser expands IPv4 aliases and removes the default port before validation.
 

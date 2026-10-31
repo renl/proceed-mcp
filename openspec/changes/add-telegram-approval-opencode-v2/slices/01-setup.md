@@ -65,7 +65,7 @@ Checklist answers: (1) YES journal/origin/outbox feeds delivery proof; (2) YES r
 
 ## SETUP-URL-001 — bounded regression correction
 
-Gap ID: **SETUP-URL-001**. Correction attempts: **0**. Next owner: **SE (implementation engineering)**, routed through coordination. Status: regression tests ready, expected RED confirmed; production correction and independent affected verification pending. Authority and failure: [design section 2](../design.md), [independent evidence](01-setup-evidence.md). No product behavior, criteria, decomposition or external interface changed; existing checkpoint 1 review disposition remains applicable.
+Gap ID: **SETUP-URL-001**. Correction attempts: **1**. Next owner: **independent affected verification** (test engineering), routed through coordination. Status: regression tests ready, expected RED confirmed; production correction committed at `a9e74a9898c573a3303280cae18a6b745fc27fee` with its affected run sequence PASS recorded below; independent affected verification pending, so checkpoint 1 is not slice-ready. Authority and failure: [design section 2](../design.md), [independent evidence](01-setup-evidence.md). No product behavior, criteria, decomposition or external interface changed; existing checkpoint 1 review disposition remains applicable.
 
 Goal: restore the already-approved literal-loopback and explicit-port setup behavior. Founder-visible success remains a real human decision reaching only its requesting running session after MCP timeout. This offline correction provides supporting setup proof only, not real Telegram/OpenCode continuation proof.
 
@@ -89,3 +89,20 @@ PowerShell on Windows; reuse the existing project-local Node 24.22.2 executable 
 Each command has a 120-second outer bound; each test CLI child has a 5-second deadline. Run-owned state is confined to `tests/.artifacts/origin-url-*`, removed in `finally`, and absence asserted. No credential values/hashes are printed. No servers or external API calls are used. Real host/live gates, checkpoint 2 harness readiness, other-OS protection, release and publication gates remain BLOCKED/unexecuted and unwaived as recorded in the independent evidence.
 
 Regression setup evidence (2026-10-31): production prerequisite `a7d5fff860c5a7c6065c0d48d1382f1a99210076`, Windows Node 24.22.2. Syntax check exit 0. Targeted test exit 1 in 8.91 seconds: all four leaf cases fail for the previously reported exit mismatch (three aliases return 0 instead of 2; explicit port 80 returns 2 instead of 0). Node reports 5 failed tests including the aggregate parent, 0 passed/cancelled/skipped. This is behavioral RED, not a missing-executable or environment failure. Cleanup PASS: run directory absence assertion completed and `tests/.artifacts` had 0 entries. No other application checks rerun in this regression-authoring task.
+
+### Correction attempt 1 — implementation record (2026-10-31)
+
+Production change: `src/config/origin-url.js` now decides the approved topology from the operator's literal text instead of the already-normalized WHATWG URL, so IPv4 aliases cannot be expanded into a canonical loopback binding and an explicit default port is accepted and stored with its literal digits. Callers in `src/config/config.js` were unchanged; no dependency, toolchain, test, configuration-schema or protection change. Scope stayed within the bounded production file.
+
+Affected run sequence on Windows Node 24.22.2, with `PROCEED_TEST_COMMAND` set to that executable plus `bin/proceed-mcp.js`:
+
+| Step | Result |
+|---|---|
+| `node --check tests/cli-origin-url.test.mjs` | exit 0 |
+| `node --test tests/cli-origin-url.test.mjs` | exit 0; 5 pass, 0 fail/cancelled/skipped (four regression cases plus parent); duration 6.95 s |
+| `node --test tests/cli-setup.test.mjs` | exit 0; 1 pass, 0 fail/cancelled/skipped; duration 3.53 s |
+| `node scripts/build.mjs` | exit 0; 11 production modules parse, bin target ready |
+| `npm run format:check` with Node 24 first on `PATH` | exit 0; formatter reports all matched files conform |
+| `git diff --check` before the evidence edits | exit 0 |
+
+Cleanup PASS: each run-owned `tests/.artifacts/origin-url-*` and `setup-*` directory was removed in `finally` with absence asserted by the test, and `tests/.artifacts` held 0 entries afterwards. No credential value or hash was printed; no server, network request or external API call was used. This is the implementer's own affected-check result at revision `a9e74a9`, not independent verification: the FAIL verdict, first-use proof and every live/release gate remain unchanged and unwaived.
