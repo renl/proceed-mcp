@@ -86,7 +86,7 @@ export function success(outcome) {
   return value;
 }
 
-export async function portable(work) {
+export async function portable(work, { pair = true } = {}) {
   const fixture = await telegramFixture();
   const peers = [], connections = [], secrets = [], logs = [];
   let result;
@@ -147,11 +147,13 @@ export async function portable(work) {
         } catch { return false; }
       };
       await until(status, 'authenticated broker readiness', context.signal);
-      const pairing = await cli('pair');
-      const code = /Pairing code: (\S+)/.exec(pairing)?.[1];
-      assert.ok(Boolean(code), 'operator CLI returns pairing challenge');
-      fixture.text(`/pair ${code}`);
-      await until(() => fixture.messages.some((m) => !m.reply_markup), 'pairing confirmation', context.signal);
+      if (pair) {
+        const pairing = await cli('pair');
+        const code = /Pairing code: (\S+)/.exec(pairing)?.[1];
+        assert.ok(Boolean(code), 'operator CLI returns pairing challenge');
+        fixture.text(`/pair ${code}`);
+        await until(() => fixture.messages.some((m) => !m.reply_markup), 'pairing confirmation', context.signal);
+      }
       const connect = async (owner) => {
         const resource = await start('mcp', '--owner', owner);
         resource.child.stderr.on('data', (b) => logs.push(String(b)));
@@ -159,6 +161,13 @@ export async function portable(work) {
         peers.push(peer);
         connections.push({ peer, resource });
         await peer.handshake();
+        const catalog = await peer.call('tools/list', {}, { ms: 8000 }).outcome;
+        assert.equal(catalog.kind, 'response');
+        for (const name of ['prepare_approval', 'request_approval', 'get_approval',
+          'cancel_approval', 'acknowledge_approval']) {
+          assert.ok(catalog.frame.result?.tools?.some((tool) => tool.name === name),
+            `portable MCP catalog exposes ${name}`);
+        }
         return { peer, resource, call: (name, args, id) => {
           const entry = peer.call('tools/call', { name, arguments: args }, { id, ms: 12000 });
           entry.outcome = entry.outcome.then((outcome) => {
@@ -194,8 +203,14 @@ export async function portable(work) {
         assert.ok(secrets.every((key) => !visible.includes(key) && !journal.includes(Buffer.from(key))),
           'no plaintext request authority in Telegram/logs/unmatched notifications/journal');
       };
+      const http = (path, credential, { method = 'GET', body, headers = {} } = {}) =>
+        fetch(`http://127.0.0.1:${config.broker.port}${path}`, {
+          method, headers: { authorization: `Bearer ${credential}`, ...headers,
+            ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          redirect: 'error', signal: AbortSignal.timeout(1000) });
       try { await work({ fixture, shared, connect, prepare, state, broker, start, scan, restart,
-        signal: context.signal, cli }); }
+        signal: context.signal, cli, http, control }); }
       finally { for (const peer of peers) peer.close(); await scan(); }
     }, { totalMs: 55000, readyMs: 8000 });
   } finally { await fixture.close(); }
