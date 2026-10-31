@@ -10,6 +10,7 @@ const child = spawn(process.argv[2], process.argv.slice(3), {
 let heldId;
 process.on('message', (message) => {
   if (message.kind === 'hold') { heldId = message.id; process.send({ kind: 'armed' }); }
+  else child.send(message);
 });
 child.on('message', (message) => process.send(message));
 child.on('error', () => process.exit(1));

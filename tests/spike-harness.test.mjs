@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { resolve, join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { managed, alive, bounded } from './support/managed-spike.mjs';
+import { managed, alive } from './support/managed-spike.mjs';
+import { rpcPeer } from './support/spike-rpc.mjs';
 
 const fixture = resolve('tests/fixtures/spike-process.mjs');
 const relay = resolve('tests/support/receipt-fault.mjs');
@@ -63,31 +64,58 @@ test('HARNESS-05: pending call actually times out after durable creation and rec
     const result = await managed(async (run) => {
       const transport = await run.start([process.execPath, relay, ...command('adapter')]);
       await transport.wait('adapter-ready');
-      transport.child.send({ kind: 'hold', id: 7 });
-      await transport.wait('armed');
-      let received = false;
-      transport.child.stdout.on('data', () => { received = true; });
-      // Synthetic host observation begins BEFORE sending the call. Its deadline
-      // surrounds the unresolved call, never a sleep after successful completion.
-      const pendingCall = bounded(() => new Promise((resolveCall) => {
-        transport.child.stdout.once('data', resolveCall);
-      }), 800, 'fixture host tool timeout');
-      const timeoutAssertion = assert.rejects(pendingCall, /fixture host tool timeout/);
-      transport.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 7,
-        method: 'tools/call', params: { name: 'request_approval', arguments: {
+      const peer = rpcPeer(transport.child);
+      try {
+        transport.child.send({ kind: 'hold', id: 7 });
+        await transport.wait('armed');
+        await peer.handshake();
+        // Synthetic caller deadline starts BEFORE sending the selected call.
+        const pendingCall = peer.call('tools/call', { name: 'request_approval', arguments: {
           client_request_id: 'fixture_1', action: 'fixture only', context: '' },
-          _meta: { 'ai.opencode/sessionID': 'fixture_session' } } })}\n`);
-      await transport.wait('durable-created');
-      const record = JSON.parse(await readFile(join(run.directory, 'fixture-request.json'), 'utf8'));
-      assert.equal(record.resolution, 'pending');
-      await transport.wait('receipt-withheld');
-      assert.ok(transport.events.findIndex((e) => e.kind === 'durable-created')
-        < transport.events.findIndex((e) => e.kind === 'receipt-withheld'));
-      await timeoutAssertion;
-      assert.equal(received, false);
-      assert.equal(alive(transport.pid), true, 'transport remains running at timeout');
-      assert.equal(JSON.parse(await readFile(join(run.directory, 'fixture-request.json'), 'utf8'))
-        .resolution, 'pending', 'timeout creates no approval/cancellation');
+          _meta: { 'ai.opencode/sessionID': 'fixture_session' } }, { id: 7, ms: 800 });
+        await transport.wait('durable-created');
+        const record = JSON.parse(await readFile(join(run.directory, 'fixture-request.json'), 'utf8'));
+        assert.equal(record.resolution, 'pending');
+        peer.beforeDeadline(pendingCall, 'durable-created');
+        await transport.wait('receipt-withheld');
+        peer.beforeDeadline(pendingCall, 'receipt-withheld');
+        assert.ok(transport.events.findIndex((e) => e.kind === 'durable-created')
+          < transport.events.findIndex((e) => e.kind === 'receipt-withheld'));
+        assert.equal((await pendingCall.outcome).kind, 'timeout');
+        assert.deepEqual(peer.unmatched, [
+          { jsonrpc: '2.0', method: 'notifications/message', params: { data: 'fixture-only' } },
+          { jsonrpc: '2.0', id: '7', result: { fixture: 'string id is not numeric id' } },
+          { jsonrpc: '2.0', id: 'server-question', method: 'ping' },
+        ]);
+        assert.equal(alive(transport.pid), true, 'transport remains running at timeout');
+        assert.equal(JSON.parse(await readFile(join(run.directory, 'fixture-request.json'), 'utf8'))
+          .resolution, 'pending', 'timeout creates no approval/cancellation');
+      } finally { peer.close(); }
+    });
+    assert.ifError(result.assertionError);
+    clean(result);
+  });
+
+test('HARNESS-07: late durable creation cannot reuse an already settled caller timeout',
+  { timeout: 12000 }, async () => {
+    const result = await managed(async (run) => {
+      const transport = await run.start([process.execPath, relay, ...command('adapter')]);
+      await transport.wait('adapter-ready');
+      const peer = rpcPeer(transport.child);
+      try {
+        await peer.handshake();
+        transport.child.send({ kind: 'creation-delay', ms: 200 });
+        await transport.wait('delay-configured');
+        transport.child.send({ kind: 'hold', id: 7 });
+        await transport.wait('armed');
+        const call = peer.call('tools/call', { name: 'request_approval', arguments: {} },
+          { id: 7, ms: 50 });
+        assert.equal((await call.outcome).kind, 'timeout');
+        await transport.wait('durable-created');
+        assert.throws(() => peer.beforeDeadline(call, 'durable-created'), /already settled/);
+        await transport.wait('receipt-withheld');
+        assert.throws(() => peer.beforeDeadline(call, 'receipt-withheld'), /already settled/);
+      } finally { peer.close(); }
     });
     assert.ifError(result.assertionError);
     clean(result);
