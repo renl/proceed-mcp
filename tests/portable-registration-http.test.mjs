@@ -114,7 +114,8 @@ test('PORT-REG-HTTP: roles, validation, secret, release, restart and state prese
     await empty(await activity(b, true, foreign));
     for (const [path, method] of [['/v1/adapter', 'GET'], ['/v1/adapter/heartbeat', 'POST'],
       [`${route(a, true)}/extra`, 'POST'], [route(a, false), 'POST']]) {
-      await error(await h.http(path, h.control, { method, body: {} }), 404, 'NOT_FOUND');
+      await error(await h.http(path, h.control, { method,
+        ...(['GET', 'HEAD'].includes(method) ? {} : { body: {} }) }), 404, 'NOT_FOUND');
     }
     await empty(await activity(a, false));
     const replacement = await fresh();
@@ -141,7 +142,15 @@ test('PORT-REG-HTTP: roles, validation, secret, release, restart and state prese
     h.shared.peer.assertComplete();
     await stopped(broker); // Graceful own-lock release; no stale-lock deletion.
     broker = await h.start('serve'); capture(broker);
-    await until(async () => (await h.http('/v1/status', h.control)).ok,
+    await until(async () => {
+      // Preload IPC only proves fixture installation, not listener readiness.
+      // Retry startup connection refusal/timeout within until's 8s deadline.
+      try { return (await h.http('/v1/status', h.control)).ok; }
+      catch (error) {
+        if (error.cause?.code === 'ECONNREFUSED' || error.name === 'TimeoutError') return false;
+        throw error;
+      }
+    },
       'restarted authenticated broker readiness', h.signal);
     for (const r of [a, replacement]) await error(await activity(r, true), 401, 'AUTH_REQUIRED', true);
     const afterRestart = await fresh();
