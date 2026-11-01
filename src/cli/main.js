@@ -306,9 +306,11 @@ async function runMcp(argv, { env }) {
 }
 
 // Design section 7 human status: the transport principal and a display-only caller
-// label replace the retired origin/session fields. Pending unsent presentation is
-// described as pending, never as human receipt, and an expired request is an
-// explicit non-approval closure. Nothing here claims Events, delivery or approval.
+// label replace the retired origin/session fields. A pending resolution only records
+// that no decision exists yet, so presentation wording follows the broker-reported
+// Telegram state instead of assuming an unsent message; a waiting presentation is
+// described as waiting, never as human receipt, and an expired request is an explicit
+// non-approval closure. Nothing here claims Events, delivery or approval.
 const NEXT_ACTION = {
   pending: 'wait for the pending Telegram presentation; it is not yet sent',
   expired: 'create a new approval request if approval is still needed',
@@ -317,6 +319,23 @@ const NEXT_ACTION = {
   responded: 'review the recorded response and its delivery state before relying on it',
   cancelled: 'create a new approval request if approval is still needed',
 };
+
+function pendingNote(request) {
+  return request.telegram_state === 'pending'
+    ? '  Presentation is still pending: not yet sent, and no decision was recorded.'
+    : '  No decision was recorded; review the recorded Telegram state above.';
+}
+
+// Next action for a pending request depends on the reported presentation state, so an
+// already-sent or failed presentation is never advised to wait for an unsent message.
+function nextActionFor(request) {
+  if (request.resolution !== 'pending') {
+    return NEXT_ACTION[request.resolution] ?? 'review the recorded state above';
+  }
+  return request.telegram_state === 'pending'
+    ? NEXT_ACTION.pending
+    : 'review the recorded Telegram and delivery state above';
+}
 
 function describeRequest(request) {
   const lines = [
@@ -333,14 +352,12 @@ function describeRequest(request) {
       : [`  delivery_error=${request.delivery_error.code}: ${request.delivery_error.message}`]),
   ];
   if (request.resolution === 'pending') {
-    lines.push('  Presentation is still pending: not yet sent, and no decision was recorded.');
+    lines.push(pendingNote(request));
   }
   if (request.resolution === 'expired') {
     lines.push('  Expired is a non-approval outcome: this request closed without a decision.');
   }
-  lines.push(
-    `  next action: ${NEXT_ACTION[request.resolution] ?? 'review the recorded state above'}`,
-  );
+  lines.push(`  next action: ${nextActionFor(request)}`);
   return lines.join('\n');
 }
 
