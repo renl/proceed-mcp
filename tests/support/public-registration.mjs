@@ -110,7 +110,8 @@ export async function publicRegistration(work, { paired = false, foreign = false
     const upstreams = new Set();
     const relay = createServer(async (req, res) => {
       const record = { method: req.method, path: req.url, at: performance.now(), closed: false,
-        header: req.headers['x-proceed-registration'], token: req.headers.authorization };
+        header: req.headers['x-proceed-registration'], token: req.headers.authorization,
+        capability: req.headers['x-proceed-request-capability'] };
       calls.push(record);
       req.socket.once('close', () => { record.socketClosed = true; record.socketClosedAt = performance.now(); });
       res.on('close', () => { record.closed = true; record.closedAt = performance.now(); });
