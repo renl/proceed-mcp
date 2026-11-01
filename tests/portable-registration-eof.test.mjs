@@ -31,14 +31,15 @@ for (const phase of ['create', 'heartbeat', 'release', 'handles', 'get', 'cancel
           ...(phase === 'acknowledge' ? { decision_id: `dec_${'1'.repeat(32)}` } : {}) });
       }
       const start = performance.now();
-      let ending;
-      if (phase === 'release') { ending = h.eof(a); ending.catch(() => {}); }
+      let ending, socketsDone;
       try {
-        await observe(() => blocked?.held, `real ${phase} HTTP reply reached hold barrier`, phase === 'heartbeat' ? 12500 : 3000);
-        if (phase === 'heartbeat') {
-          a.call('prepare_approval');
-          await observe(() => h.calls.some(c => c.path === '/v1/handles' && c.held),
-            'foreground ordinary exchange held alongside heartbeat before submitting queued calls');
+        if (phase !== 'release') {
+          await observe(() => blocked?.held, `real ${phase} HTTP reply reached hold barrier`, phase === 'heartbeat' ? 12500 : 3000);
+          if (phase === 'heartbeat') {
+            a.call('prepare_approval');
+            await observe(() => h.calls.some(c => c.path === '/v1/handles' && c.held),
+              'foreground ordinary exchange held alongside heartbeat before submitting queued calls');
+          }
         }
         const journal = await h.journal();
         if (phase === 'handles') h.secrets.push(blocked.reply.request_capability);
@@ -46,12 +47,18 @@ for (const phase of ['create', 'heartbeat', 'release', 'handles', 'get', 'cancel
         if (phase !== 'release') {
           // These calls were submitted before EOF but must never execute after it.
           for (let i = 0; i < 3; i++) a.call('prepare_approval', { session_label: 'queued' });
-          ending = h.eof(a);
         }
-        const eofAt = await ending;
-        await observe(() => h.calls.filter(c => c.held).every(c => c.socketClosed),
-          'held socket close events arrive within remaining shared deadline',
-          Math.max(1, 2750 - (performance.now() - eofAt)));
+        // Arm the combined barrier BEFORE EOF; no serial per-socket budget extensions.
+        const deadline = performance.now() + 2750;
+        socketsDone = observe(() => {
+          const release = h.calls.find(c => c.method === 'DELETE');
+          return (phase === 'create' || release?.held) &&
+            h.calls.filter(c => c.held).every(c => c.socketClosed);
+        }, 'real release response held AND all held sockets closed in ONE EOF deadline',
+        Math.max(1, deadline - performance.now()));
+        ending = h.eof(a);
+        const [eofAt] = await Promise.all([ending, socketsDone]);
+        assert.ok(performance.now() <= deadline, 'exit and combined socket barrier observed by shared deadline');
         assert.ok(blocked.socketClosed, 'actual client-facing HTTP socket closed, not an abort flag/Promise race');
         assert.ok(blocked.socketClosedAt - eofAt <= 2750, 'transport and process share the same close deadline');
         assert.ok(h.calls.filter(c => c.held).every(c => c.socketClosed && c.socketClosedAt - eofAt <= 2750),
@@ -65,6 +72,11 @@ for (const phase of ['create', 'heartbeat', 'release', 'handles', 'get', 'cancel
             'create committed remotely; remote lease may remain, not immediate release');
         } else {
           assert.equal(releases.length, 1, 'exactly one captured release, no compensation/retry');
+          assert.ok(releases[0].committed && releases[0].held && releases[0].heldSocketOpen,
+            'real DELETE response reached hold with live socket; immediate cancellation is not combined-stall proof');
+          assert.ok(releases[0].heldAt >= eofAt && releases[0].heldAt <= releases[0].socketClosedAt &&
+            releases[0].socketClosedAt <= deadline,
+          'held release socket closes inside SAME EOF deadline as foreground/heartbeat and exit');
           const first = h.calls.find(c => c.path === '/v1/adapter').reply;
           assert.ok(releases[0].path === `/v1/adapter/${first.registration_id}` &&
             releases[0].header === first.registration_secret, 'release only captured incarnation');
@@ -80,7 +92,7 @@ for (const phase of ['create', 'heartbeat', 'release', 'handles', 'get', 'cancel
         const count = h.calls.length;
         await delay(100); // Process absence is the timer fence; not a shortened heartbeat proof.
         assert.equal(h.calls.length, count, 'no late frames/timers/replays can revive exited executable');
-      } finally { if (ending) await ending.catch(() => {}); }
+      } finally { await Promise.allSettled([ending, socketsDone].filter(Boolean)); }
       assert.ok(performance.now() - start < 18000, 'finite whole fault observation');
     }));
 }

@@ -26,7 +26,7 @@ test('PORT-PUBLIC-LAZY: brokerless catalog/invalid/unimplemented; first valid pr
     const b = await h.connect();
     const prepared = await Promise.all([b.call('prepare_approval'), b.call('prepare_approval')]);
     prepared.forEach(success);
-    assert.equal(creates(h).length, 1, 'one lazy registration across concurrent public calls');
+    assert.equal(creates(h).length, 1, 'registration reuse across two concurrently submitted, serialized public calls');
     assert.equal(creates(h)[0].method, 'POST'); assert.deepEqual(creates(h)[0].body, {});
     assert.ok(creates(h)[0].token === `Bearer ${h.owner}`, 'configured owner Bearer authenticates create');
     assert.equal(handles(h).length, 2);

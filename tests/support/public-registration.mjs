@@ -107,7 +107,11 @@ export async function publicRegistration(work) {
             record.status = reply.statusCode; record.reply = body; record.committed = true;
             if (body?.registration_secret) secrets.push(body.registration_secret);
             // Hold AFTER real server completion: this can lose a committed mutation.
-            if (hold(record)) { record.held = true; return; }
+            if (hold(record)) {
+              record.held = true; record.heldAt = performance.now();
+              record.heldSocketOpen = !req.socket.destroyed;
+              return;
+            }
             const changed = mutate({ status: reply.statusCode, body }, record);
             res.writeHead(changed.status, { 'content-type': 'application/json' });
             res.end(changed.body === null ? '' : JSON.stringify(changed.body));
