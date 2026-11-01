@@ -301,6 +301,47 @@ test('WAIT-U-RECONNECT: transport-only 1/2/4/8/16/repeated30 ladder, no cutoff, 
   } finally { c.abort(); t.mock.timers.reset(); await f.ex.close(); }
   }
 });
+// WAIT-AUTHORITY-001: synthetic broker denial isolates local admission precedence.
+// W1b-AUTHORITY remains the real MCP/HTTP nondisclosure proof.
+const wrongKey = () => ({ ...args(), request_capability: `cap_${'2'.repeat(64)}` });
+const authorizedCreate = (method, path, body, headers) =>
+  headers['X-Proceed-Request-Capability'] === args().request_capability
+    ? reply(view(), 201) : fault('NOT_FOUND', 404);
+test('WAIT-AUTHORITY-001-ABSENT: wrong key without a live invocation is NOT_FOUND', async () => {
+  const f = fixture(() => assert.fail('denied key cannot wait'), authorizedCreate);
+  try {
+    assert.deepEqual(error(await f.ex.execute('request_approval', wrongKey()), 'NOT_FOUND'), fault('NOT_FOUND', 404).body.error);
+    assert.equal(f.waits.length, 0); assert.equal(f.refreshes.length, 0);
+  } finally { await f.ex.close(); }
+});
+async function heldAuthority(checkWrongKey) {
+  const releases = [];
+  const f = fixture(() => new Promise(resolve => releases.push(resolve)), authorizedCreate);
+  let settled = false, denied;
+  const first = f.ex.execute('request_approval', args()).then(result => { settled = true; return result; });
+  try {
+    await turns(); assert.equal(f.waits.length, 1);
+    if (checkWrongKey) denied = await bounded(() => f.ex.execute('request_approval', wrongKey()), 200, 'wrong key denial');
+    for (let poll = 0; poll < 2; poll++) {
+      assert.equal(error(await bounded(() => f.ex.execute('request_approval', args()), 200, 'authorized duplicate'),
+        'WAIT_ALREADY_ACTIVE').retryable, false);
+      assert.equal(f.waits.length, poll + 1, 'neither denial creates an extra waiter');
+      assert.equal(settled, false, 'the original invocation remains live');
+      assert.ok(f.waits.every(w => !w[4].signal.aborted), 'no denial aborts the original exchange');
+      if (poll === 0) { releases[0](reply(null, 204)); await turns(); assert.equal(f.waits.length, 2); }
+    }
+    releases[1](reply(terminal()));
+    success(await bounded(() => first, 200, 'original outcome'), terminal());
+    assert.equal(f.refreshes.length, 0);
+    // Deliberately last: RED must not skip duplicate/turnover/original-survival controls.
+    if (checkWrongKey) assert.deepEqual(error(denied, 'NOT_FOUND'), fault('NOT_FOUND', 404).body.error);
+  } finally {
+    for (const release of releases) release(reply(terminal()));
+    await f.ex.close(); await bounded(() => first, 200, 'fixture settlement');
+  }
+}
+test('WAIT-AUTHORITY-001-LIVE: wrong key cannot disclose a held authorized invocation', () => heldAuthority(true));
+test('WAIT-AUTHORITY-001-DUPLICATE: authorized overlap stays409 across poll turnover', () => heldAuthority(false));
 test('WAIT-U-ABORT: same-handle overlap/other-call isolation, abort exchange, close fences new work', async () => {
   const f = fixture((method, path, body, headers, { signal }) => new Promise((resolve, reject) => {
     signal.addEventListener('abort', () => reject(new local.LocalRequestError('BROKER_UNAVAILABLE', 'private')), { once: true });
