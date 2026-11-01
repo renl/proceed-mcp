@@ -29,6 +29,7 @@ test('PORT-PUBLIC-LAZY: brokerless catalog/invalid/unimplemented; first valid pr
     await observe(() => creates(h)[0]?.held, 'registration held before second invocation');
     const second = b.call('prepare_approval');
     assert.equal((await b.peer.call('ping', {}).outcome).kind, 'response', 'overlapping public registration awaiters');
+    h.hold(() => false); // Only the first overlapping create is withheld, not later admission attempts.
     creates(h)[0].release();
     const prepared = await Promise.all([first, second]);
     prepared.forEach(success);
