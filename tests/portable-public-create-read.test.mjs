@@ -51,12 +51,12 @@ function noAuthority(value, p, h) {
 }
 
 test('PUB-CAL: stopped pairing decoder, closed writer, actual serve + real MCP reservation only', options, () => fixture(async h => {
-  const j = await Journal.open(join(h.state, 'journal.log'));
-  const b = createPortableBroker({ journal: j, owners: [{ owner_id: 'shared', label: 'Lifecycle test' }], port: 43189 });
+  const j = await Journal.open(join(h.state, 'journal.log')); let b;
   try {
+    b = createPortableBroker({ journal: j, owners: [{ owner_id: 'shared', label: 'Lifecycle test' }], port: 43189 });
     await b.recover(); assert.deepEqual(b.pairing(), { user_id: '71', chat_id: '81', paired_at: '2026-01-01T00:00:00.000Z' });
     assert.deepEqual(b.snapshot().requests, []);
-  } finally { await b.close(); await j.close(); }
+  } finally { try { await b?.close(); } finally { await j.close(); } }
   await h.restart(); const a = await h.connect(); const p = await prepare(h, a);
   assert.equal(rows(await h.journal()).filter(m => m.op === 'handle.reserve').length, 1);
   assert.equal(rows(await h.journal()).filter(m => m.op === 'request.create').length, 0);
