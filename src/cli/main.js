@@ -305,16 +305,43 @@ async function runMcp(argv, { env }) {
   return EXIT_CODE.OK;
 }
 
+// Design section 7 human status: the transport principal and a display-only caller
+// label replace the retired origin/session fields. Pending unsent presentation is
+// described as pending, never as human receipt, and an expired request is an
+// explicit non-approval closure. Nothing here claims Events, delivery or approval.
+const NEXT_ACTION = {
+  pending: 'wait for the pending Telegram presentation; it is not yet sent',
+  expired: 'create a new approval request if approval is still needed',
+  approved: 'review the recorded resolution and its delivery state before relying on it',
+  rejected: 'review the recorded resolution and its delivery state before relying on it',
+  responded: 'review the recorded response and its delivery state before relying on it',
+  cancelled: 'create a new approval request if approval is still needed',
+};
+
 function describeRequest(request) {
-  return [
-    `${request.request_id}  ${request.resolution}  delivery=${request.delivery_state}  telegram=${request.telegram_state}`,
-    `  origin=${request.origin_id}  session=${request.session_id}`,
+  const lines = [
+    `${request.request_id}  ${request.resolution}`,
+    `  owner_id=${request.owner_id}`,
+    `  session_label=${JSON.stringify(request.session_label)}` +
+      '  (display only; not a verified session identity)',
     `  action=${JSON.stringify(request.action)}`,
     `  expires=${request.expires_at}`,
+    `  resolution=${request.resolution}  telegram_state=${request.telegram_state}` +
+      `  delivery_state=${request.delivery_state}`,
     ...(request.delivery_error === null || request.delivery_error === undefined
       ? []
       : [`  delivery_error=${request.delivery_error.code}: ${request.delivery_error.message}`]),
-  ].join('\n');
+  ];
+  if (request.resolution === 'pending') {
+    lines.push('  Presentation is still pending: not yet sent, and no decision was recorded.');
+  }
+  if (request.resolution === 'expired') {
+    lines.push('  Expired is a non-approval outcome: this request closed without a decision.');
+  }
+  lines.push(
+    `  next action: ${NEXT_ACTION[request.resolution] ?? 'review the recorded state above'}`,
+  );
+  return lines.join('\n');
 }
 
 async function runStatus(argv, { stdout, env }) {
