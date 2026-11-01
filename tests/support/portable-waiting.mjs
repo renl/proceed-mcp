@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -11,6 +11,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { managed, bounded } from './managed-spike.mjs';
 import { freePort, stopped } from './startup-guards.mjs';
 import { rpcPeer } from './spike-rpc.mjs';
+import { catalogPeer, initializeResult, allTools } from './catalog-consumer.mjs';
 
 export async function until(check, label, signal) {
   const deadline = performance.now() + 8000;
@@ -86,7 +87,7 @@ export function success(outcome) {
   return value;
 }
 
-export async function portable(work, { pair = true } = {}) {
+export async function portable(work, { pair = true, strictProtocol = false } = {}) {
   const fixture = await telegramFixture();
   const peers = [], connections = [], secrets = [], logs = [];
   let result;
@@ -139,6 +140,10 @@ export async function portable(work, { pair = true } = {}) {
       broker.child.stderr.on('data', (b) => logs.push(String(b)));
       broker.child.stdout.on('data', (b) => logs.push(String(b)));
       const control = (await readFile(join(state, 'credentials/control.token'), 'utf8')).trim();
+      const credentials = strictProtocol ? await Promise.all(
+        (await readdir(join(state, 'credentials'))).map(async name =>
+          (await readFile(join(state, 'credentials', name), 'utf8')).trim())) : [];
+      secrets.push(...credentials);
       const status = async () => {
         try {
           const response = await fetch(`http://127.0.0.1:${config.broker.port}/v1/status`,
@@ -157,11 +162,19 @@ export async function portable(work, { pair = true } = {}) {
       const connect = async (owner) => {
         const resource = await start('mcp', '--owner', owner);
         resource.child.stderr.on('data', (b) => logs.push(String(b)));
-        const peer = rpcPeer(resource.child);
+        const peer = strictProtocol ? catalogPeer(resource.child, { secrets: credentials }) : rpcPeer(resource.child);
         peers.push(peer);
         connections.push({ peer, resource });
-        await peer.handshake();
-        const catalog = await peer.call('tools/list', {}, { ms: 8000 }).outcome;
+        let catalog;
+        if (strictProtocol) {
+          initializeResult(await peer.call('initialize', { protocolVersion: '2025-11-25', capabilities: {},
+            clientInfo: { name: 'generic-reservation-test', version: '0' } }).outcome);
+          resource.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+          catalog = { kind: 'response', frame: { result: { tools: await allTools(peer) } } };
+        } else {
+          await peer.handshake();
+          catalog = await peer.call('tools/list', {}, { ms: 8000 }).outcome;
+        }
         assert.equal(catalog.kind, 'response');
         for (const name of ['prepare_approval', 'request_approval', 'get_approval',
           'cancel_approval', 'acknowledge_approval']) {
@@ -181,8 +194,9 @@ export async function portable(work, { pair = true } = {}) {
       const shared = await connect('shared');
       const restart = async () => {
         for (const { peer, resource } of connections) {
-          peer.close(); resource.child.stdin.end();
+          peer.close?.(); resource.child.stdin.end();
           await until(() => resource.closed, 'adapter EOF shutdown', context.signal);
+          if (strictProtocol) peer.assertComplete();
         }
         await stopped(broker); // Graceful own-state release; no stale-lock deletion.
         broker = await start('serve');
@@ -211,7 +225,17 @@ export async function portable(work, { pair = true } = {}) {
           redirect: 'error', signal: AbortSignal.timeout(1000) });
       try { await work({ fixture, shared, connect, prepare, state, broker, start, scan, restart,
         signal: context.signal, cli, http, control }); }
-      finally { for (const peer of peers) peer.close(); await scan(); }
+      finally {
+        for (const { peer, resource } of connections) {
+          peer.close?.();
+          if (strictProtocol && !resource.closed) {
+            resource.child.stdin.end();
+            await until(() => resource.closed, 'strict adapter EOF shutdown', context.signal);
+          }
+          if (strictProtocol) peer.assertComplete();
+        }
+        await scan();
+      }
     }, { totalMs: 55000, readyMs: 8000 });
   } finally { await fixture.close(); }
   assert.ifError(result.cleanupError); // Separate resource failure from behavioral RED.

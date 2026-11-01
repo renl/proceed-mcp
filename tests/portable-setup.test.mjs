@@ -7,9 +7,11 @@ import { spawnSync } from 'node:child_process';
 import { readFile, writeFile, readdir, stat } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { managed } from './support/managed-spike.mjs';
 import { freePort } from './support/startup-guards.mjs';
 import { portable, authority, until, telegramFixture } from './support/portable-waiting.mjs';
+import { successful } from './support/catalog-consumer.mjs';
 
 async function protectedPaths(paths, env) {
   if (process.platform !== 'win32') {
@@ -257,14 +259,53 @@ test('PORT-RESERVE: prepare then reserved read/cancel/ack NOT_FOUND, no Telegram
     const a = await h.prepare(), b = await h.prepare();
     assert.ok(a.request_id !== b.request_id && a.request_handle !== b.request_handle
       && a.request_capability !== b.request_capability, 'equal labels reserve independent authority');
-    for (const name of ['get_approval', 'cancel_approval', 'acknowledge_approval']) {
-      const response = await h.shared.call(name, { ...authority(a),
-        ...(name === 'acknowledge_approval' ? { decision_id: `dec_${'0'.repeat(32)}` } : {}) }).outcome;
-      assert.equal(response.kind, 'response');
-      assert.ok(response.frame.result?.isError === true
-        && response.frame.result.structuredContent?.error?.code === 'NOT_FOUND',
-        'reservation alone is not actionable; read/cancel/ack have no request effect');
+    for (const value of [a, b]) assert.deepEqual(Object.keys(value).sort(),
+      ['schema_version', 'request_handle', 'request_id', 'request_capability'].sort(), 'exact private preparation result');
+    const journalPath = join(h.state, 'journal.log');
+    const journal = await readFile(journalPath);
+    for (const value of [a, b]) {
+      const hash = createHash('sha256').update(value.request_capability).digest('hex');
+      assert.ok(journal.includes(Buffer.from(hash)) && journal.includes(Buffer.from(value.request_handle))
+        && journal.includes(Buffer.from(value.request_id)), 'MCP response follows real durable HTTP reservation');
+      assert.ok(!journal.includes(Buffer.from(value.request_capability)), 'only verifier persists');
     }
+    const failure = async (connection, name, args, code) => {
+      const result = successful(await connection.call(name, args).outcome);
+      assert.equal(result.isError, true, 'no fake success or human outcome');
+      const value = result.structuredContent;
+      assert.ok(value?.schema_version === 1 && value.error?.code === code
+        && typeof value.error.message === 'string' && typeof value.error.retryable === 'boolean',
+      `versioned ${code} tool error`);
+      assert.ok(result.content?.some(block => {
+        if (block.type !== 'text') return false;
+        try { return isDeepStrictEqual(JSON.parse(block.text), value); } catch { return false; }
+      }), 'matching structured/text error');
+      assert.ok(!JSON.stringify(result).includes(a.request_capability)
+        && !JSON.stringify(result).includes(b.request_capability), 'redacted error');
+    };
+    for (const args of [{ session_label: '' }, { owner_id: 'foreign' }]) {
+      await failure(h.shared, 'prepare_approval', args, 'INVALID_ARGUMENT');
+    }
+    const foreign = await h.connect('foreign');
+    const reservedErrors = async (connection) => {
+      for (const name of ['get_approval', 'cancel_approval', 'acknowledge_approval']) {
+        for (const args of [authority(a), { ...authority(a), request_capability: b.request_capability },
+          { ...authority(a), request_capability: `cap_${'0'.repeat(64)}` }]) {
+          await failure(connection, name, { ...args,
+            ...(name === 'acknowledge_approval' ? { decision_id: `dec_${'0'.repeat(32)}` } : {}) }, 'NOT_FOUND');
+        }
+      }
+    };
+    await reservedErrors(h.shared);
+    await reservedErrors(foreign); // Reserved-only negatives cannot alone prove authorization enforcement.
+    assert.deepEqual((await (await h.http('/v1/status', h.control)).json()).requests, [],
+      'preparation/errors create no business request');
+    assert.ok(journal.equals(await readFile(journalPath)), 'reserved reads/cancel/ack and invalid prepare have no durable effects');
+    const retained = await h.restart(); // EOF is reachability loss, never business cancellation.
+    await reservedErrors(retained);
+    assert.ok(journal.equals(await readFile(journalPath)), 'retained key survives graceful replay; no cancellation or acknowledgement writes');
     assert.equal(h.fixture.messages.length, 0, 'preparation never sends a Telegram question');
+    assert.ok(h.fixture.calls.every(call => ['getMe', 'getUpdates'].includes(call.method)),
+      'no pairing challenge, message, callback or presentation side effect');
     await h.scan();
-  }, { pair: false }));
+  }, { pair: false, strictProtocol: true }));
