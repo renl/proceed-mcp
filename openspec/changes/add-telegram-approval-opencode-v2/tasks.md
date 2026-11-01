@@ -1,5 +1,15 @@
 # Tasks
 
+## B3 W1a adapter waiting — executable preparation, NOT waiting acceptance
+- [x] P.B3-W1a-tests [Exact five-source binding, mapping, sequence, split gates and evidence](slices/03b3-adapter-wait.md). Baseline `de894c50`, accepted B1/B2 present; only owned tests/helpers/tasks/slice edited. Full compliant source forecast194–224gross; combined hard600, no source omission or aggregate-change size waiver.
+- [ ] P.B3-W1a-review ONE combined decomposition/test-artifact/public-boundary review through coordination: triggers1/3/4/5YES,2NO; readiness pending that review.
+- [ ] P.B3-W1a-impl Separately authorize ONLY local-client/registration/execution/server/CLI paths enumerated in slice; no broker/journal/schema/routes/returned report. No implementation authority from preparation alone.
+- [ ] P.B3-W1a-verify Native wait/refresh contracts and ALL affected availability rebindings independently pass; unit success is not actual pending-original-call proof.
+- [ ] P.B3-W1b-public Mandatory `tests/portable-adapter-wait-public.test.mjs` four original-call/cancel/reverse/isolation/EOF cases after W1a. Blocks waiting acceptance AND downstream returned-write unit; no waiver, arbitrary skip or separate PR.
+- [ ] P.B3-complete-breadth Real turnover/restart/60s-expiry/lease-generation/notification-EOF breadth and actual response-write ledger proof remain mandatory before COMPLETE waiting acceptance; exact obligations in slice.
+- Lifecycle same worktree/branch/change/test-engineering owner, active/retain/not cleanup-ready; next action one combined review. Native final33:21PASS/12expectedRED, no skipped/cancelled/todo; evidence/limits in slice. No human/host/Telegram/feature/release/archive/promotion acceptance.
+- Affected public12:5PASS/7expectedRED, cleanup PASS separately; last added Unicode-input gate1expectedRED, unchanged other32 evidence reused. Exact scoped gross preparation/source-upper accounting in slice; source unchanged and other-owner/unknown state preserved.
+
 ## B2 concurrent stdio — independently PASS, enabling cut only (2026-11-01)
 - [x] P.B2-verdict [Independent assertions, reuse, correction and accounting](slices/03b2-concurrent-stdio.md#independent-bounded-verdict--2026-11-01): production `8e5ff861fe06546c5489c010cfb97414f02883dd`, separate test correction `1bc053b4e57a6d16badbda43dc7dd1d120bcfdba`. Executed17/17 and reused123 unchanged checks PASS; no skipped/cancelled/todo. Source/dependencies/configuration unchanged; finalization docs-only.
 - CONCURRENT-HOLD-001 attempt1 resolved: clear relay hold after overlap barrier, before original release; duplicate OWNER_IN_USE, exact captured EOF release and replacement success assertions unchanged. No production workaround, deadline change or contract delta; no automatic architecture re-review.

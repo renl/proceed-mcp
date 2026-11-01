@@ -101,7 +101,7 @@ test('PUB-MCP: actual get success, lazy registration, cross-principal denial, EO
   const outcome = await replacement.call('get_approval', auth(p)); noAuthority(outcome, p, h);
   const observed = success(outcome);
   assert.deepEqual(observed, value); noAuthority(observed, p, h);
-  toolError(await replacement.call('request_approval', { ...payload(p), request_capability: p.request_capability }), 'ENHANCEMENT_UNAVAILABLE');
+  toolError(await replacement.call('request_approval', { ...payload(p), action: 'Changed question', request_capability: p.request_capability }), 'IDEMPOTENCY_CONFLICT');
   for (const [name, args] of [['acknowledge_approval', { ...auth(p), decision_id: `dec_${'1'.repeat(32)}` }]])
     toolError(await replacement.call(name, args), 'DECISION_MISMATCH');
   const registration = h.calls.filter(c => c.path === '/v1/adapter').at(-1).reply;
@@ -113,7 +113,7 @@ test('PUB-MCP: actual get success, lazy registration, cross-principal denial, EO
       { method: 'POST', headers: { ...header(p), 'X-Proceed-Registration': registration.registration_secret }, body: JSON.stringify(body) });
     assert.equal(r.status, 409, 'pending evidence cannot resolve or expire'); noAuthority(r.body, p, h);
   }
-  assert.equal(h.calls.filter(c => c.method === 'POST' && c.path === '/v1/requests').length, 0, 'MCP never creates via unavailable request tool');
+  assert.equal(h.calls.filter(c => c.method === 'POST' && c.path === '/v1/requests').length, 1, 'MCP reaches real conflict without waiting or mutation');
   assert.deepEqual(await h.journal(), bytes, 'observation/denials/EOF never record returned or confirmed');
   assert.ok(h.calls.some(c => c.method === 'GET' && c.path === `/v1/requests/${p.request_id}` && c.status === 200));
   await h.eof(replacement);
@@ -184,6 +184,8 @@ test('PUB-CATALOG: actual initialize/catalog disclose observation and acknowledg
   assert.match(a.init.instructions, /terminal[^\n]*acknowledg/i);
   assert.match(a.init.instructions, /(?:assistant|operator)[^\n]*(?:outcome|acknowledg)|acknowledg[^\n]*(?:assistant|operator)/i);
   assert.match(a.init.instructions, /deduplicat[^\n]*request_id[^\n]*decision_id/i);
-  assert.match(a.tools.find(t => t.name === 'request_approval').description, /ENHANCEMENT_UNAVAILABLE/);
+  for (const text of [a.init.instructions, a.tools.find(t => t.name === 'request_approval').description])
+    assert.doesNotMatch(text, /request_approval[^.\n]*(?:ENHANCEMENT_UNAVAILABLE|not (?:yet )?(?:implemented|available|enabled))/i);
+  assert.match(a.init.instructions, /Telegram[^\n]*(?:not (?:yet )?(?:implemented|available|enabled)|unavailable)|(?:no|without)[^\n]*Telegram[^\n]*(?:transport|presentation)/i);
   assert.equal(h.calls.length, 0, 'catalog remains brokerless'); await h.eof(a);
 }));

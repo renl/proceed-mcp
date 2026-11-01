@@ -7,7 +7,7 @@ const handles = h => h.calls.filter(c => c.path === '/v1/handles');
 const beats = h => h.calls.filter(c => c.path.endsWith('/heartbeat'));
 const deletes = h => h.calls.filter(c => c.method === 'DELETE');
 
-test('PORT-PUBLIC-LAZY: brokerless catalog/invalid/unimplemented; first valid prepare registers once',
+test('PORT-PUBLIC-LAZY: brokerless catalog/invalid; first valid prepare registers once',
   { timeout: 65000 }, () => publicRegistration(async h => {
     const a = await h.connect(); // No real broker exists, observing relay is reachable.
     assert.equal(h.calls.length, 0, 'initialize/catalog cause zero HTTP, not just tolerated failure');
@@ -17,9 +17,9 @@ test('PORT-PUBLIC-LAZY: brokerless catalog/invalid/unimplemented; first valid pr
     const unknown = await a.call('unknown_tool');
     assert.ok(unknown.kind === 'response' && unknown.frame.error?.code === -32601, 'unknown tool protocol denial');
     toolError(await a.call('request_approval', { request_handle: `hdl_${'1'.repeat(32)}`,
-      request_capability: `cap_${'2'.repeat(64)}`, client_request_id: 'unused', action: 'No question', context: '' }),
-      'ENHANCEMENT_UNAVAILABLE');
-    assert.equal(h.calls.length, 0, 'invalid and unimplemented execution never contacts broker');
+      request_capability: `cap_${'2'.repeat(64)}`, client_request_id: 'unused', action: '', context: '' }),
+      'INVALID_ARGUMENT');
+    assert.equal(h.calls.length, 0, 'invalid execution never contacts broker');
     await h.eof(a);
     assert.equal(h.calls.length, 0, 'brokerless EOF never creates/releases');
     await h.restart();

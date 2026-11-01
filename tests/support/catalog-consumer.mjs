@@ -53,13 +53,8 @@ export function workflowInstructions(init, tools) {
     [/(?:not|never|do not|don.t)[\s\S]*(?:echo|expose|print|disclose)[\s\S]*(?:capability|key)|(?:capability|key)[\s\S]*(?:not|never)[\s\S]*(?:echo|expose|print|disclos)/i, 'no capability echo'],
   ];
   for (const [pattern, label] of clauses) assert.match(text, pattern, label);
-  if (/prepare_approval[^.\n]*(?:is available|is implemented|is enabled)/i.test(text)) {
-    assert.match(text, /request_approval[^.\n]*ENHANCEMENT_UNAVAILABLE/i, 'partial execution discloses waiting unavailable');
-    assert.match(text, /reserv(?:ed|ation)[^.\n]*(?:NOT_FOUND|404)/i, 'partial execution discloses reserved denials only');
-  } else {
-    assert.match(text, /(?:execution|tools?\/call|tool calls?|operations?)[\s\S]*(?:not (?:yet )?(?:implemented|available|supported)|unavailable|incomplete|disabled)|(?:not (?:yet )?(?:implemented|available|supported)|incomplete)[\s\S]*(?:execution|tools?\/call|tool calls?|operations?)/i,
-      'honest catalog-only execution limitation');
-  }
+  // Availability belongs to the current public checkpoint test, not this shared
+  // invariant consumer. Waiting no longer implies Telegram transport exists.
   for (const sentence of text.split(/[.\n]/)) {
     if (/\b(?:not|never|no|cannot|can't|doesn't|don't)\b/i.test(sentence)) continue;
     assert.doesNotMatch(sentence,

@@ -43,6 +43,25 @@ function privateOutput(f, errors = []) {
 const creates = f => f.calls.filter(c => c.path === '/v1/adapter');
 const deletes = f => f.calls.filter(c => c.method === 'DELETE');
 
+test('PORT-BIND-REFRESH: concurrent/stale401 captures share heartbeat replacement, never delete fresh authority', { timeout: 3000 }, async () => {
+  const m = await load(), heldBeat = deferred(), replacement = deferred();
+  const f = fixture(m, (c, calls) => c.method === 'DELETE' ? { status: 204, body: null }
+    : c.path.endsWith('/heartbeat') ? (calls.filter(v => v.path.endsWith('/heartbeat')).length === 1 ? heldBeat.promise : { status: 204, body: null })
+    : calls.filter(v => v.path === '/v1/adapter').length === 1 ? reply(1) : replacement.promise);
+  try {
+    const old = await f.binding.ensure(); await until(() => f.calls.some(c => c.path.endsWith('/heartbeat')));
+    assert.equal(typeof f.binding.refresh, 'function');
+    const pending = Array.from({ length: 4 }, () => f.binding.refresh(old));
+    await until(() => creates(f).length === 2); replacement.resolve(reply(2));
+    assert.deepEqual(await Promise.all(pending), Array(4).fill(authority(2)));
+    heldBeat.resolve({ ...failure('AUTH_REQUIRED'), status: 401 }); await delay(5);
+    assert.deepEqual(await f.binding.refresh(old), authority(2));
+    assert.deepEqual(await f.binding.ensure(), authority(2)); assert.equal(creates(f).length, 2);
+    assert.equal(deletes(f).length, 0, 'refresh never deletes to evade admission');
+  } finally { heldBeat.resolve({ status: 204, body: null }); replacement.resolve(reply(2)); await f.binding.close(); privateOutput(f); }
+  assert.ok(deletes(f).every(c => c.path.endsWith(authority(2).registration_id)));
+});
+
 test('PORT-BIND-CONSUMER: split-secret logger/error negatives cannot evade scan', () => {
   const secret = authority(3).registration_secret;
   for (const logs of [[secret.slice(0, 17), secret.slice(17)], [{ nested: secret }]]) {

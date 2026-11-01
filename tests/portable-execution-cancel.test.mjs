@@ -12,7 +12,7 @@ const unavailable = r => {
 };
 test('EXEC-CANCEL-ENSURE: abandoned awaiter settles promptly, shared ensure/survivor continue', { timeout: 2000 }, async () => {
   let release; const ensure = new Promise(r => { release = r; }); const sent = [];
-  const ex = createToolExecutor({ registration: { ensure: () => ensure, close() {} },
+  const ex = createToolExecutor({ waitClient: { request() { assert.fail('ordinary tools never wait'); } }, registration: { ensure: () => ensure, close() {} },
     client: { request: async (...args) => { sent.push(args); return { status: 200, body: {} }; } } });
   const c = new AbortController();
   const abandoned = ex.execute('prepare_approval', { session_label: 'cancelled' }, { signal: c.signal });
@@ -24,7 +24,7 @@ test('EXEC-CANCEL-ENSURE: abandoned awaiter settles promptly, shared ensure/surv
   assert.equal(sent.length, 1); assert.deepEqual(sent[0][2], { session_label: 'survivor' });
 });
 test('EXEC-CANCEL-SIGNALS: per-call abort isolation, pre-abort, global close and listener cleanup', { timeout: 2000 }, async () => {
-  const sent = []; const ex = createToolExecutor({ registration: { async ensure() {}, close() {} },
+  const sent = []; const ex = createToolExecutor({ waitClient: { request() { assert.fail('ordinary tools never wait'); } }, registration: { async ensure() {}, close() {} },
     client: { request(method, path, body, headers, { signal }) {
       return new Promise((resolve, reject) => {
         const abort = () => { signal.removeEventListener('abort', abort);

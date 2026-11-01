@@ -190,6 +190,6 @@ test('PUBLIC-LEDGER-MCP: actual ack forwarder returns equal text/structured conf
   const foreign = await h.connect('foreign'); toolError(await foreign.call('acknowledge_approval', ack), 'NOT_FOUND'); await h.eof(foreign);
   assert.ok(h.calls.some(c => c.path.endsWith('/acknowledge') && c.status === 200));
   assert.equal(rows(bytes).some(m => m.op === 'request.returned'), false, 'ack RPC result is not original waiting result write');
-  toolError(await a.call('request_approval', { request_handle: p.request_handle, request_capability: p.request_capability, client_request_id: 'same', action: 'Question?', context: '' }), 'ENHANCEMENT_UNAVAILABLE');
+  assert.deepEqual(success(await a.call('request_approval', { request_handle: p.request_handle, request_capability: p.request_capability, client_request_id: 'same', action: 'Question?', context: '' })), confirmed, 'terminal replay preserves confirmed ledger');
   await h.eof(a); await h.restart(); const next = await h.connect(); assert.deepEqual(success(await next.call('acknowledge_approval', ack)), confirmed); assert.deepEqual(await h.journal(), bytes); await h.eof(next);
 }));

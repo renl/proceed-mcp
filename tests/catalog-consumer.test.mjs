@@ -60,8 +60,7 @@ test('consumer: reject malformed, cyclic and excessive pagination', async () => 
 test('consumer: semantic instructions accept different wording, reject omissions/legacy claims', () => {
   const concepts = ['First invoke prepare_approval before request_approval.',
     'request_approval blocks for a human decision.', 'The capability is confidential.',
-    'Save the key with the request ID and handle.', 'Do not expose the key.',
-    'Tool calls are not yet available.'];
+     'Save the key with the request ID and handle.', 'Do not expose the key.'];
   workflowInstructions({ instructions: concepts.join(' ') }, []);
   workflowInstructions({}, [{ description: concepts.join('\n') }]);
   workflowInstructions({ instructions: `${concepts.join('\n')}\nNever returns an immediate receipt. Does not inject a session prompt.` }, []);
@@ -73,18 +72,16 @@ test('consumer: semantic instructions accept different wording, reject omissions
   }
 });
 
-test('consumer: partial execution retains two-call/privacy requirements and explicit limitations', () => {
+test('consumer: waiting availability retains two-call/privacy invariants without obsolete unavailable guard', () => {
   const clauses = ['First invoke prepare_approval before request_approval.',
     'request_approval waits for a human decision.', 'The capability is private.',
     'Keep the key with the handle and request ID.', 'Never echo the key.',
-    'prepare_approval is available.', 'request_approval returns ENHANCEMENT_UNAVAILABLE.',
-    'Reserved read/cancel/ack operations return NOT_FOUND only.'];
+     'prepare_approval is available.', 'No Telegram transport is implemented yet.'];
   workflowInstructions({ instructions: clauses.join('\n') }, []);
-  for (const index of [0, 1, 2, 3, 4, 6, 7]) {
+  for (const index of [0, 1, 2, 3, 4]) {
     assert.throws(() => workflowInstructions({ instructions: clauses.filter((_, i) => i !== index).join('\n') }, []));
   }
-  assert.throws(() => workflowInstructions({ instructions: clauses.slice(0, 6).join('\n') }, []),
-    'prepare availability alone is not an honest partial limitation');
+  workflowInstructions({ instructions: clauses.slice(0, 6).join('\n') }, []);
 });
 
 test('consumer: valid response, then clean EOF/close is required', async () => {

@@ -242,8 +242,8 @@ test('CANCEL-MCP: real created pending request resolves through original cancel 
   for (const text of [a.init.instructions, a.tools.find(t => t.name === 'cancel_approval').description])
     assert.doesNotMatch(text, /\b(?:cancel_approval|cancellation) (?:is |remains )?(?:not enabled|unavailable|returns NOT_FOUND for every call)/i);
   const bytes = await h.journal(); toolError(await a.call('acknowledge_approval', { ...args(p), decision_id: decision(999) }), 'DECISION_MISMATCH');
-  toolError(await a.call('request_approval', { request_handle: p.request_handle, request_capability: p.request_capability,
-    client_request_id: 'same', action: 'Question?', context: '' }), 'ENHANCEMENT_UNAVAILABLE');
+  assert.deepEqual(success(await a.call('request_approval', { request_handle: p.request_handle, request_capability: p.request_capability,
+    client_request_id: 'same', action: 'Question?', context: '' })), v, 'terminal replay reaches original request result');
   for (const [suffix, status] of [['wait', 401], ['returned', 401], ['acknowledge', 400]]) assert.equal((await http(h, p, { suffix })).status, status);
   assert.deepEqual(await h.journal(), bytes); await h.eof(a);
 }));

@@ -239,7 +239,7 @@ test('B-RESTART: real public creation crosses unchanged60s deadline stopped; flu
       privateOutput(JSON.stringify(denial), [...secrets, ...requestSecrets]); toolError(denial, 'NOT_FOUND'); await eof(foreign);
       await eof(a); const replacement = await connect(), transferred = await replacement.call('get_approval', auth(p));
       privateOutput(JSON.stringify(transferred), [...secrets, ...requestSecrets]); assert.deepEqual(success(transferred), terminal);
-      toolError(await replacement.call('request_approval', { ...input(p), request_capability: p.request_capability }), 'ENHANCEMENT_UNAVAILABLE');
+      assert.deepEqual(success(await replacement.call('request_approval', { ...input(p), request_capability: p.request_capability })), terminal, 'expired terminal replay after real restart');
        toolError(await replacement.call('acknowledge_approval', { ...auth(p), decision_id: `dec_${'1'.repeat(32)}` }), 'DECISION_MISMATCH');
       await eof(replacement);
        // After EOF/release: wrong decisions cannot append; immediate wait observes unchanged terminal state.

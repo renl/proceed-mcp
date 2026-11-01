@@ -356,7 +356,7 @@ test('PORT-RESERVE: prepare then reserved read/cancel/ack NOT_FOUND, no Telegram
     for (const args of [{ session_label: '' }, { owner_id: 'foreign' }]) {
       await failure(h.shared, 'prepare_approval', args, 'INVALID_ARGUMENT');
     }
-    await failure(h.shared, 'request_approval', question(a), 'ENHANCEMENT_UNAVAILABLE');
+    await failure(h.shared, 'request_approval', question(a), 'NOT_PAIRED');
     const foreign = await h.connect('foreign');
     const reservedErrors = async (connection) => {
       for (const name of ['get_approval', 'cancel_approval', 'acknowledge_approval']) {
