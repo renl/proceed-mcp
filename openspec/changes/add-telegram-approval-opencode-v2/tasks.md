@@ -1,5 +1,12 @@
 # Tasks
 
+## Callback breadth — independent execution PASS; owning artifact review pending (2026-11-01)
+- [x] P.A1b-foundation-owner Foundational post-code PASS supplied in the authorized breadth brief for production `74b4c0e3d6d3967918b3f4516e68949cb217fa20` and independent evidence `1a3c7703496b2b23cf38bd96818486c6d29b5c29`; supersedes historical review-pending disposition below for that foundation only.
+- [x] P.A1b-callback-execution New `tests/portable-scheduling-callbacks.test.mjs`: independent per-hook20 cases, actual runtime cleanup/health10 cases, isolated observer positive control1; Windows pinned Node24.22.2 unfiltered31/31 PASS, exit0,252742.4961ms, zero failed/cancelled/skipped/todo. [Outline, mapping, exact commands/evidence, scope and accounting](slices/03a3-callback-breadth.md). No shared helpers changed; production byte-identical to foundation.
+- [ ] P.A1b-callback-owner Owning test-artifact/decomposition/interface review through coordination remains mandatory; triggers3/4/5 YES. Passing breadth is not complete runtime acceptance or authority for public-create/read/human-status downstream cuts.
+- Reuse foundation18 scheduling and149 affected at the exact revisions above, not rerun or attributed to this31. Foundation600 remains separately charged; the preliminary80–130 breadth reserve was superseded by the bounded actual packet in the linked slice, not a waiver or source repartition.
+- Lifecycle: same retained path/branch/change/target baseline and test-engineering owner; active/retain/not cleanup-ready. Run-owned handles/processes/ports/locks/directories cleanup PASS separately; ignored logs retained. Preserve all other-owner/unknown material. No public first-use, host/Telegram/waiting/feature/release claim, push/PR/merge/archive/publication.
+
 ## A1b first runtime cut — foundational verification PASS; owning review and breadth pending (2026-11-01)
 - [x] P.A1b-runtime-tests Prepare [exact selected boundary, mapping, lifecycle, ordered commands and review questions](slices/03a3-a1b-runtime-scheduling.md); `tests/portable-runtime-scheduling.test.mjs` plus minimal test-only preload. Authoring `a06e4a3`; accepted complete internal A1a and adapter lifecycle are prerequisites, not public creation proof. No production edits.
 - [ ] P.A1b-runtime-review Affected architecture interface/decomposition/test-artifact re-review for SCHED-FAILURE-001; triggers1–5 YES; corrected exact source seam and mandatory test-only breadth partition in [slice](slices/03a3-a1b-runtime-scheduling.md). Whitespace-only token excluded.
