@@ -223,6 +223,12 @@ test('BETA-FAULT: closed-journal append refusal and real closed-handle sync fail
       assert.deepEqual(h.broker.snapshot(), before); assert.equal(h.journal.sequence, sequence);
       if (stage === 'append') assert.deepEqual(await readFile(h.path), bytes);
       // sync failure can leave a complete frame: no assertion of rollback or crash durability.
+      const calls = h.calls, generated = h.generated;
+      for (const action of [() => h.broker.readRequest(auth(1)), () => h.broker.status(),
+        () => h.broker.sweepExpired(), () => h.broker.reserveHandle({ ownerId: 'a' }), () => h.broker.recover()])
+        await assert.rejects(Promise.resolve().then(action), storage, 'expiry append failure fences the whole journal');
+      assert.equal(h.calls, calls); assert.equal(h.generated, generated);
+      assert.deepEqual(h.broker.snapshot(), before); assert.equal(h.journal.sequence, sequence);
     }));
 });
 test('BETA-GROUP: 101 due requests, distinct per-group time, 100 flush installs before next group failure',
