@@ -181,8 +181,8 @@ test('WAIT-RESPONSE-001-CONTROLS: complete create201/200 pending/terminal and wa
       } finally { await f.ex.close(); }
     });
 });
-// Attempt2: design 5 Respond scalar bound; design 3/6 current ledger; design 2 privacy.
-// One changed semantic per invalid view; unrelated extensions are not under test.
+// Attempt2: design 5 Respond scalar bound; design 3/6 ledger and response projection/privacy.
+// Each invalid view isolates its named constraint; ordinary metadata is projected, not rejected.
 test('WAIT-RESPONSE-001-ATTEMPT2: seven observed invalid views fail closed', async t => {
   const responded = response_text => ({ ...terminal(), resolution: 'responded', response_text });
   const stale = { code: 'DELIVERY_BLOCKED', message: 'safe diagnostic', retryable: false };
@@ -200,7 +200,7 @@ test('WAIT-RESPONSE-001-ATTEMPT2: seven observed invalid views fail closed', asy
 });
 test('WAIT-RESPONSE-001-ATTEMPT2-CONTROLS: scalar/nullable ledger and caller text remain valid', async t => {
   // Existing CONTROLS covers pending not_applicable/null receipts at both201/200.
-  const callerText = `Caller quotes request_capability and ${args().request_capability}`;
+  const callerText = `Caller quotes request_capability ${args().request_capability} and registration_secret ${authority('1').registration_secret}`;
   const controls = [
     ['Respond4096 supplementary scalars', { resolution: 'responded', response_text: '😀'.repeat(4096) }],
     ['Respond whitespace preserved', { resolution: 'responded', response_text: ' \n\t ' }],
@@ -208,6 +208,7 @@ test('WAIT-RESPONSE-001-ATTEMPT2-CONTROLS: scalar/nullable ledger and caller tex
     ['blocked current diagnostic', { delivery_state: 'blocked', delivery_error:
       { code: 'DELIVERY_BLOCKED', message: 'safe diagnostic', retryable: false } }],
     ['caller-authored authority-like action/context', { action: callerText, context: callerText }],
+    ['human-authored authority-like Respond text', { resolution: 'responded', response_text: callerText }],
   ];
   for (const [label, extra] of controls) await t.test(label, async () => {
     const expected = { ...terminal(), ...extra };
@@ -216,6 +217,35 @@ test('WAIT-RESPONSE-001-ATTEMPT2-CONTROLS: scalar/nullable ledger and caller tex
       const input = { ...args(), action: expected.action, context: expected.context };
       success(await f.ex.execute('request_approval', input), expected);
       assert.equal(f.calls.length, 1); assert.equal(f.waits.length, 1); assert.equal(f.refreshes.length, 0);
+    } finally { await f.ex.close(); }
+  });
+});
+test('WAIT-RESPONSE-001-AUTHORITY: top-level authority presence fails even null or malformed', async t => {
+  for (const key of ['request_capability', 'registration_secret']) for (const value of [null, {}])
+    await t.test(`${key} ${value === null ? 'null' : 'malformed'}`,
+      () => unusable(reply({ ...terminal(), [key]: value }), 'wait'));
+  await t.test('registration_secret actual authority', async () => {
+    const f = fixture(() => reply({ ...terminal(), registration_secret: authority('1').registration_secret }));
+    try {
+      const r = await f.ex.execute('request_approval', args());
+      assert.equal(error(r, 'BROKER_UNAVAILABLE').retryable, true);
+      assert.ok(!JSON.stringify(r).includes(authority('1').registration_secret));
+      assert.equal(f.calls.length, 1); assert.equal(f.waits.length, 1); assert.equal(f.refreshes.length, 0);
+    } finally { await f.ex.close(); }
+  });
+});
+test('WAIT-RESPONSE-001-PROJECTION: valid metadata is omitted from BOTH result channels', async t => {
+  for (const stage of ['create', 'wait']) await t.test(`${stage} terminal projection`, async () => {
+    const expected = { ...terminal(), delivery_state: 'blocked', delivery_error:
+      { code: 'DELIVERY_BLOCKED', message: 'safe diagnostic', retryable: false } };
+    const body = { ...expected, producer_metadata: { request_capability: args().request_capability },
+      event_capability: { ...expected.event_capability, internal_revision: 'private', registration_secret: authority('1').registration_secret },
+      delivery_error: { ...expected.delivery_error, internal_trace: 'private', request_capability: args().request_capability } };
+    const f = fixture(() => reply(body), () => reply(stage === 'create' ? body : view(), stage === 'create' ? 200 : 201));
+    try {
+      success(await f.ex.execute('request_approval', args()), expected);
+      assert.equal(f.calls.length, 1); assert.equal(f.waits.length, stage === 'wait' ? 1 : 0);
+      assert.equal(f.refreshes.length, 0);
     } finally { await f.ex.close(); }
   });
 });
