@@ -240,15 +240,15 @@ test('B-RESTART: real public creation crosses unchanged60s deadline stopped; flu
       await eof(a); const replacement = await connect(), transferred = await replacement.call('get_approval', auth(p));
       privateOutput(JSON.stringify(transferred), [...secrets, ...requestSecrets]); assert.deepEqual(success(transferred), terminal);
       toolError(await replacement.call('request_approval', { ...input(p), request_capability: p.request_capability }), 'ENHANCEMENT_UNAVAILABLE');
-      for (const [name, args] of [['cancel_approval', auth(p)], ['acknowledge_approval', { ...auth(p), decision_id: terminal.decision_id }]])
+       for (const [name, args] of [['acknowledge_approval', { ...auth(p), decision_id: terminal.decision_id }]])
         assert.equal((await replacement.call(name, args)).frame.result.isError, true);
       await eof(replacement);
-      // Only after EOF/release: valid ephemeral authority must not enable A2/B.
+       // Only after EOF/release: valid ephemeral authority must not enable A2b/B.
       const registrationResponse = await wire('POST', '/v1/adapter', {});
       assert.equal(registrationResponse.status, 201); const registration = JSON.parse(registrationResponse.text);
       assert.equal(typeof registration.registration_secret, 'string'); secrets.push(registration.registration_secret);
       try {
-        for (const suffix of ['wait', 'returned', 'cancel', 'acknowledge']) {
+         for (const suffix of ['wait', 'returned', 'acknowledge']) {
           const body = suffix === 'wait' ? { registration_id: registration.registration_id }
             : suffix === 'returned' ? { registration_id: registration.registration_id, decision_id: terminal.decision_id }
             : suffix === 'acknowledge' ? { decision_id: terminal.decision_id } : {};

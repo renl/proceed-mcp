@@ -1,5 +1,13 @@
 # Tasks
 
+## A2a cancellation — executable preparation (2026-11-01)
+- [x] P.A2a-tests Prepare [exact bindings, mapping, boundary, commands and evidence](slices/03a6-a2a-cancellation.md) and `tests/portable-cancellation.test.mjs`; rebind only obsolete cancellation-denial loops in public create/read and restart/retrieval tests. Baseline `a19dcd623ba1f07c61128cb7a530b5f346b899c8`; accepted bounded A1b prerequisites present. No production/shared-helper edit.
+- [ ] P.A2a-review ONE combined Architect boundary/decomposition/test-artifact review; triggers1/4 YES,2/3/5 NO. Exact design4 canonical cancellation schema consumed, no unresolved schema mismatch; ready for review, not implementation.
+- [ ] P.A2a-impl Separately authorize complete cancellation writer/replayer/HTTP/catalog in ONLY `src/broker/portable.js`, `src/broker/portable-server.js`, `src/mcp/server.js`; supplied forecast168gross. Execution forwarding already exists; no A2b/wait/Telegram/Events or temporary success guard.
+- [ ] P.A2a-verify Independent affected candidate verification after implementation. Current new unfiltered62 entries1PASS/61expectedRED, exit1,25071.104ms; rebound existing public10/10PASS, exit0,76222.7666ms. Zero cancelled/skipped/todo; downstream barriers/limits and ignored TAP in slice. Test syntax3/source-format3/scoped whitespace/local links PASS; tests/OpenSpec formatter-excluded.
+- Lifecycle unchanged: same worktree/path/branch/change, test-engineering owner, active/retain/not cleanup-ready; target baseline in slice. Run-owned cleanup PASS separately, ignored logs retained, other-owner/unknown state preserved. Next action combined review through coordination; one OpenSpec PR, no push/PR/merge/archive/publication or feature/release claim.
+- Accounting versus `a19dcd6`, gross additions+deletions: **274 actual/5 owned paths =218 new tests +10 existing-test rebinding +38 slice +8 tasks**; no staged/unstaged/untracked double counting. Production168 forecast separately (108 core/40 HTTP/20 catalog): **442/600 across8 paths**,158 headroom for implementation/evidence. Source unchanged; remeasure before growth, no cap waiver.
+
 ## Human CLI status — bounded executable preparation (2026-11-01)
 - [x] P.CLI-status-tests Prepare [implementation brief, authority/mapping, boundary, commands and evidence](slices/03a5-cli-human-status.md) and `tests/cli-human-status.test.mjs`; authoring baseline `e3806ed918ea9d163482354169c819fe3e44b6ba`. No production/shared-helper edits.
 - [x] P.CLI-status-prerequisites Supplied owning PASS for public foundation `303ccf30`/`f32905ca`, packet A `296baac` and B `e3806ed` discharges the prerequisite reviews, superseding historical pending wording below. Not full feature/release acceptance.

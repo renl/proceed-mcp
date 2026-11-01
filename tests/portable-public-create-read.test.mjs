@@ -102,10 +102,10 @@ test('PUB-MCP: actual get success, lazy registration, cross-principal denial, EO
   const observed = success(outcome);
   assert.deepEqual(observed, value); noAuthority(observed, p, h);
   toolError(await replacement.call('request_approval', { ...payload(p), request_capability: p.request_capability }), 'ENHANCEMENT_UNAVAILABLE');
-  for (const [name, args] of [['cancel_approval', auth(p)], ['acknowledge_approval', { ...auth(p), decision_id: `dec_${'1'.repeat(32)}` }]])
+  for (const [name, args] of [['acknowledge_approval', { ...auth(p), decision_id: `dec_${'1'.repeat(32)}` }]])
     assert.equal((await replacement.call(name, args)).frame.result.isError, true, 'not enabled by observation');
   const registration = h.calls.filter(c => c.path === '/v1/adapter').at(-1).reply;
-  for (const suffix of ['wait', 'returned', 'cancel', 'acknowledge']) {
+  for (const suffix of ['wait', 'returned', 'acknowledge']) {
     const body = suffix === 'wait' ? { registration_id: registration.registration_id }
       : suffix === 'returned' ? { registration_id: registration.registration_id, decision_id: `dec_${'1'.repeat(32)}` }
       : suffix === 'acknowledge' ? { decision_id: `dec_${'1'.repeat(32)}` } : {};
