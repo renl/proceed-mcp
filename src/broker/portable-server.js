@@ -7,11 +7,11 @@
 // read act on the whole reviewed public request binding: caller fields are
 // validated before authority, the credential-derived owner, the path identity and
 // the header capability must name one committed reservation, and every failed
-// binding is the same nondisclosing denial. Pairing and retry stay honest
-// temporary unavailability (design section 3), and cancel/acknowledge verify
-// authority only to deny because their producers are not enabled here. Adapter
-// registration is an ephemeral reachability lease and never touches approval
-// state.
+// binding is the same nondisclosing denial. Cancellation resolves the same
+// authorized request, while acknowledgement still verifies authority only to
+// deny because its producer is not enabled here. Pairing and retry stay honest
+// temporary unavailability (design section 3). Adapter registration is an
+// ephemeral reachability lease and never touches approval state.
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import {
@@ -58,14 +58,6 @@ const STORAGE_ENVELOPE = Object.freeze({
     retryable: false,
   },
 });
-
-// Recognized management routes only. A different method, an extra segment or any
-// other suffix stays an unknown route, so route recognition itself never passes
-// for an authorized lookup.
-function reservedRoute(method, segments) {
-  if (segments.length !== 4 || method !== 'POST') return false;
-  return segments[3] === 'cancel' || segments[3] === 'acknowledge';
-}
 
 function constantTimeEquals(left, right) {
   const a = Buffer.from(left ?? '', 'utf8');
@@ -262,9 +254,25 @@ export function createPortableServer({
     send(response, 200, value);
   };
 
-  // Cancellation and acknowledgement gain no success path here: the lookup still
-  // binds the credential-derived owner, the exact path request ID and the header
-  // capability together, and an absent route can never produce this denial.
+  // Cancellation is registration-free: it acts on the same owner-plus-capability
+  // binding as read and needs no live adapter, so a detached principal may still
+  // close its own pending request. An unused reservation and an unauthorized
+  // request are the same denial.
+  const cancelApproval = async (request, response, principal, segments) => {
+    const body = await readJsonBody(request);
+    requireEmptyBody(body);
+    const value = await broker.cancelRequest({
+      ownerId: principal.ownerId,
+      capability: requestCapability(request),
+      requestId: segments[2],
+    });
+    if (value === null) throw notFound(RESERVED_DENIAL);
+    send(response, 200, value);
+  };
+
+  // Acknowledgement gains no success path here: the lookup still binds the
+  // credential-derived owner, the exact path request ID and the header capability
+  // together, and an absent route can never produce this denial.
   const reservedManagement = async (request, response, principal, segments) => {
     // Malformed input is reported before any lookup, so validation does not
     // depend on whether the named request exists.
@@ -340,11 +348,21 @@ export function createPortableServer({
       return;
     }
 
-    if (requestsPath && reservedRoute(request.method, segments)) {
-      if (requireRole(response, principal, 'owner')) {
-        await reservedManagement(request, response, principal, segments);
+    // The two recognized management shapes on one request path: any other method
+    // or suffix falls through to the unknown-route refusal.
+    if (requestsPath && segments.length === 4 && request.method === 'POST') {
+      if (segments[3] === 'cancel') {
+        if (requireRole(response, principal, 'owner')) {
+          await cancelApproval(request, response, principal, segments);
+        }
+        return;
       }
-      return;
+      if (segments[3] === 'acknowledge') {
+        if (requireRole(response, principal, 'owner')) {
+          await reservedManagement(request, response, principal, segments);
+        }
+        return;
+      }
     }
 
     if (request.method === 'POST' && pathname === '/v1/pairing') {

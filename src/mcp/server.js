@@ -2,11 +2,12 @@
 // principal chosen by the operator and speaks only standard MCP over
 // newline-delimited JSON-RPC: no harness API, password, host version admission or
 // proprietary session metadata. Tool execution forwards to the authenticated
-// loopback broker, so preparation reserves real durable authority and the
-// reserved management calls report the broker's denial; the waiting tool is a
-// later authorized unit and still answers ENHANCEMENT_UNAVAILABLE rather than
-// pretending to wait for or deliver a decision. Closing stdin starts cleanup
-// immediately: submitted work that has not begun never reaches the broker.
+// loopback broker, so preparation reserves real durable authority, cancellation
+// closes only the authorized pending request, and acknowledgement still reports
+// the broker's denial; the waiting tool is a later authorized unit and still
+// answers ENHANCEMENT_UNAVAILABLE rather than pretending to wait for or deliver a
+// decision. Closing stdin starts cleanup immediately: submitted work that has not
+// begun never reaches the broker.
 import { createInterface } from 'node:readline';
 import {
   CLIENT_REQUEST_ID_PATTERN,
@@ -32,7 +33,7 @@ const INSTRUCTIONS = [
   'Never echo, print or otherwise expose the request capability in an assistant message or a Telegram message.',
   'request_approval returns ENHANCEMENT_UNAVAILABLE in this build: no question is sent and no human outcome is delivered yet.',
   'Call get_approval with the retained request_id and request_capability to observe that exact request: an authorized read returns the committed representation of a pending request, applies expiry first and reports an expired request as expired, and NOT_FOUND covers an unused reservation, an unknown request or denied authority alike.',
-  'cancel_approval is not enabled in this build, so a reserved management call returns NOT_FOUND and a wrong capability is indistinguishable from an unused reservation.',
+  'Call cancel_approval with the retained request_id and request_capability to close only that pending request before its deadline: an authorized cancellation returns the committed cancelled representation, repeating it on an already resolved request returns the same outcome unchanged, expiry wins at the deadline, and NOT_FOUND covers an unused reservation, an unknown request or denied authority alike.',
   'acknowledge_approval is unavailable at this checkpoint and cannot record receipt yet, so a terminal outcome you have already seen stays unacknowledged until a later build enables it.',
   'A received terminal decision_id must be acknowledged with acknowledge_approval and reported to the operator with its request_id and outcome; deduplicate by request_id and decision_id before acting on it.',
   'A rejection forbids the requested action; a response is instructions only and never an approval; pending, expired, cancelled and failed requests grant nothing, so an action that still needs approval requires a new request.',
@@ -44,10 +45,11 @@ const INSTRUCTIONS = [
 const GET_AVAILABLE =
   'Available in this build for a created request: an authorized read returns the committed representation of a pending request, applies expiry first and reports an expired request as expired, and NOT_FOUND covers an unused reservation, an unknown request or denied authority.';
 
-// These two producers are not enabled here, so each description says so plainly
+// Cancellation is a real producer in this build: it closes only the authorized
+// pending request and keeps one stable outcome, so its description states that
 // rather than implying a management success this build cannot deliver.
-const CANCELLATION_UNAVAILABLE =
-  'Cancellation is not enabled in this build: cancel_approval returns NOT_FOUND for every call, and a wrong capability is indistinguishable from an unused reservation.';
+const CANCELLATION_AVAILABLE =
+  'Available in this build for a created request: an authorized cancellation closes only that pending request and returns the committed cancelled representation, while repeating it on an already resolved request returns the same outcome unchanged; an unused reservation or denied authority is NOT_FOUND.';
 
 // Acknowledgement availability belongs to its own later cut, not to waiting, so
 // the interim disclosure states the gap without tying it to that implementation.
@@ -104,7 +106,7 @@ const TOOLS = [
   },
   {
     name: 'cancel_approval',
-    description: `Cancel only the capability-authorized pending request; a terminal outcome that already exists is returned unchanged. ${CANCELLATION_UNAVAILABLE}`,
+    description: `Cancel only the capability-authorized pending request; a terminal outcome that already exists is returned unchanged. ${CANCELLATION_AVAILABLE}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,

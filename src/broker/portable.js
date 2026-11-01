@@ -14,15 +14,19 @@
 // alone, so no transport owner, token or recovery clock can grant, remove or
 // invalidate it, and the private getter below never exposes challenges.
 //
-// Request replay decodes creation and expiry from committed history: creation
-// binds to an already committed reservation and pairing, expiry closes one
-// pending request, and the whole history is staged before anything is installed.
-// Observations are fresh copies of the committed representation. Expiry is
-// written here, and awaited status captures its view in one serialized turn.
+// Request replay decodes creation, expiry and cancellation from committed
+// history: creation binds to an already committed reservation and pairing, a
+// closure resolves one pending request, and the whole history is staged before
+// anything is installed. Observations are fresh copies of the committed
+// representation. Expiry and cancellation are written here, and awaited status
+// captures its view in one serialized turn.
 //
 // Creation is the single writer for a pending request: an authorized handle
 // creates at most one request, an identical retry observes it through that same
-// expiry path, and changed fields are refused before any time is sampled.
+// expiry path, and changed fields are refused before any time is sampled. A
+// retained capability may also close its own pending request as cancelled; at or
+// after the deadline the existing expiry writer wins instead, and one resolution
+// is kept.
 //
 // The journal stays caller-owned. This module never opens, replaces or closes
 // it, and no reservation result becomes visible before its serialized append
@@ -61,6 +65,7 @@ const CONSUME_OP = 'pairing.challenge.consume';
 const SET_OP = 'pairing.set';
 const CREATE_OP = 'request.create';
 const EXPIRE_OP = 'request.expire';
+const CANCEL_OP = 'request.cancel';
 const PAIRING_TTL_SECONDS = 300n;
 const MAX_LABEL_SCALARS = 128;
 const MIN_DURATION_SECONDS = 60;
@@ -97,7 +102,9 @@ const CREATE_FIELDS = [
   'pairing_snapshot',
   'request_handle',
 ];
-const EXPIRE_FIELDS = ['decision_id', 'delivery_state', 'op', 'request_id', 'resolved_at'];
+// Expiry and cancellation persist the same five closure fields: one mutation
+// establishes the terminal resolution, its identity and its initial delivery.
+const CLOSURE_FIELDS = ['decision_id', 'delivery_state', 'op', 'request_id', 'resolved_at'];
 // Initial delivery for a terminal closure: the vocabulary admits the live-waiter
 // value, but no path establishes a waiter yet, so an expiry persists `unavailable`.
 const DELIVERY_STATES = new Set(['pending', 'unavailable']);
@@ -358,6 +365,43 @@ function creationTimes(clock, duration) {
   return { created_at: createdText, expires_at: expiresText, createdAt, expiresAt };
 }
 
+// A cancellation samples the clock once inside its serialized turn. An unusable
+// reading or an instant that cannot be represented is the existing storage
+// failure, refused before any append, so it never fences the journal.
+function cancellationTime(clock) {
+  let milliseconds;
+  try {
+    milliseconds = clock();
+  } catch (cause) {
+    throw storageFailure(
+      'the broker clock failed while cancelling a request',
+      'STORAGE_FAILURE',
+      cause,
+    );
+  }
+  if (typeof milliseconds !== 'number' || !Number.isFinite(milliseconds)) {
+    throw storageFailure('the broker clock did not return a usable instant', 'STORAGE_FAILURE');
+  }
+  let text;
+  try {
+    text = utcTimestamp(milliseconds);
+  } catch (cause) {
+    throw storageFailure(
+      'the cancellation time cannot be represented in UTC',
+      'STORAGE_FAILURE',
+      cause,
+    );
+  }
+  const instant = readInstant(text);
+  if (instant === null) {
+    throw storageFailure(
+      'the cancellation time is outside the representable UTC range',
+      'STORAGE_FAILURE',
+    );
+  }
+  return { milliseconds, text, instant };
+}
+
 // Telegram IDs are stored losslessly as decimal strings: no numeric conversion,
 // no digit-count ceiling, exact spelling kept, and an all-zero string names
 // nobody. Actual sender/private-chat checking belongs to the Telegram boundary.
@@ -474,25 +518,26 @@ function readCreate(mutation) {
   };
 }
 
-function readExpire(mutation) {
-  exactFields(mutation, EXPIRE_FIELDS);
+// A closure decodes from exactly its five persisted fields: only the window and
+// the installed resolution differ between expiry and cancellation.
+function readClosure(mutation, op) {
+  exactFields(mutation, CLOSURE_FIELDS);
   const requestId = mutation.request_id;
-  if (typeof requestId !== 'string') throw integrity(`${EXPIRE_OP} needs a text request id`);
-  if (!REQUEST_ID_PATTERN.test(requestId))
-    throw integrity(`${EXPIRE_OP} has a malformed request id`);
+  if (typeof requestId !== 'string') throw integrity(`${op} needs a text request id`);
+  if (!REQUEST_ID_PATTERN.test(requestId)) throw integrity(`${op} has a malformed request id`);
   const decisionId = mutation.decision_id;
-  if (typeof decisionId !== 'string') throw integrity(`${EXPIRE_OP} needs a text decision id`);
+  if (typeof decisionId !== 'string') throw integrity(`${op} needs a text decision id`);
   if (!DECISION_ID_PATTERN.test(decisionId)) {
-    throw integrity(`${EXPIRE_OP} has a malformed decision id`);
+    throw integrity(`${op} has a malformed decision id`);
   }
   const resolvedAt = readInstant(mutation.resolved_at);
-  if (resolvedAt === null) throw integrity(`${EXPIRE_OP} has a malformed resolution time`);
+  if (resolvedAt === null) throw integrity(`${op} has a malformed resolution time`);
   const delivery = mutation.delivery_state;
   if (typeof delivery !== 'string' || !DELIVERY_STATES.has(delivery)) {
-    throw integrity(`${EXPIRE_OP} has an unsupported initial delivery state`);
+    throw integrity(`${op} has an unsupported initial delivery state`);
   }
   return {
-    kind: 'expire',
+    kind: op === CANCEL_OP ? 'cancel' : 'expire',
     record: {
       request_id: requestId,
       decision_id: decisionId,
@@ -521,7 +566,9 @@ function readMutation(mutation) {
     case CREATE_OP:
       return readCreate(mutation);
     case EXPIRE_OP:
-      return readExpire(mutation);
+      return readClosure(mutation, EXPIRE_OP);
+    case CANCEL_OP:
+      return readClosure(mutation, CANCEL_OP);
     default:
       throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
   }
@@ -637,22 +684,31 @@ function stageCreate(record, staged, pairing, reservedNow) {
   staged.requests.set(request.request_id, request);
 }
 
-// Expiry closes one pending request at or after its recorded deadline and spends
-// its decision identity once across the whole journal.
-function stageExpire(record, staged) {
+// A closure resolves one pending request and spends its decision identity once
+// across the whole journal: expiry must be at or after the recorded deadline, and
+// a cancellation must fall inside the request lifetime.
+function stageClosure(record, staged, resolution) {
+  const op = resolution === 'cancelled' ? CANCEL_OP : EXPIRE_OP;
   const request = staged.requests.get(record.request_id);
-  if (request === undefined) throw integrity(`${EXPIRE_OP} names no committed request`);
+  if (request === undefined) throw integrity(`${op} names no committed request`);
   if (request.resolution !== 'pending') {
-    throw integrity(`${EXPIRE_OP} targets an already resolved request`);
+    throw integrity(`${op} targets an already resolved request`);
   }
-  if (compareInstants(record.resolvedAt, request.expiresAt) < 0) {
+  if (resolution === 'cancelled') {
+    if (
+      compareInstants(record.resolvedAt, request.createdAt) < 0 ||
+      compareInstants(record.resolvedAt, request.expiresAt) >= 0
+    ) {
+      throw integrity(`${CANCEL_OP} lies outside the request lifetime`);
+    }
+  } else if (compareInstants(record.resolvedAt, request.expiresAt) < 0) {
     throw integrity(`${EXPIRE_OP} precedes the request deadline`);
   }
   if (staged.decisions.has(record.decision_id)) {
     throw integrity(`decision id ${record.decision_id} is used twice`);
   }
   staged.decisions.add(record.decision_id);
-  request.resolution = 'expired';
+  request.resolution = resolution;
   request.resolved_at = record.resolved_at;
   request.decision_id = record.decision_id;
   request.delivery_state = record.delivery_state;
@@ -772,7 +828,8 @@ class PortableBroker {
       for (const record of records) {
         if (record.kind === 'reservation') stageReservation(record.record, staged, reservedNow);
         else if (record.kind === 'create') stageCreate(record.record, staged, pairing, reservedNow);
-        else if (record.kind === 'expire') stageExpire(record.record, staged);
+        else if (record.kind === 'expire') stageClosure(record.record, staged, 'expired');
+        else if (record.kind === 'cancel') stageClosure(record.record, staged, 'cancelled');
         else pairingRecords.push(record);
       }
       pairing = applyPairing(pairingRecords, challenges, pairing);
@@ -870,6 +927,18 @@ class PortableBroker {
     const refusal = this.#admissionRefusal();
     if (refusal !== null) return Promise.reject(refusal);
     return this.#enqueue(() => this.#expireTarget(target.request_id));
+  }
+
+  // Authorized cancellation (design section 4, A2a). The same target binding as a
+  // read is resolved before the queue, so missing, malformed, foreign or
+  // mismatched authority is a non-disclosing null that samples no time, and an
+  // unknown request or unused reservation is null before any clock reading.
+  cancelRequest(input) {
+    const target = this.#readBinding(input);
+    if (target === null) return Promise.resolve(null);
+    const refusal = this.#admissionRefusal();
+    if (refusal !== null) return Promise.reject(refusal);
+    return this.#enqueue(() => this.#cancel(target.request_id));
   }
 
   // Bounded sweep (design section 7): each nonempty pending group samples its own
@@ -1105,6 +1174,38 @@ class PortableBroker {
     return requestView(request);
   }
 
+  // Closes at most this one target as cancelled and reports the committed
+  // representation (design section 4, A2a). A terminal or absent target is
+  // returned without sampling; a pending target is sampled once, and at or after
+  // its deadline the existing expiry writer commits instead, so exactly one
+  // resolution wins either way.
+  async #cancel(requestId) {
+    const request = this.#requests.get(requestId);
+    if (request === undefined) return null;
+    if (request.resolution !== 'pending') return requestView(request);
+    const sampled = cancellationTime(this.#clock);
+    if (isDue(request, sampled.milliseconds)) {
+      await this.#commitExpiry(sampled.milliseconds, [request]);
+      return requestView(request);
+    }
+    // A recorded time before creation cannot describe this request's lifetime, so
+    // it is the existing storage failure rather than a caller error.
+    if (compareInstants(sampled.instant, request.createdAt) < 0) {
+      throw storageFailure(`${CANCEL_OP} would precede its request creation`, 'STORAGE_FAILURE');
+    }
+    const mutation = {
+      op: CANCEL_OP,
+      request_id: request.request_id,
+      decision_id: this.#nextDecisionId(new Set()),
+      resolved_at: sampled.text,
+      delivery_state: 'unavailable',
+    };
+    await this.#append([mutation]);
+    this.#installClosure(mutation, 'cancelled');
+    this.#logger('portable.request.cancelled', { request_id: request.request_id });
+    return requestView(request);
+  }
+
   // Expiry work for one serialized turn: pending requests are grouped, and only a
   // group with a reached deadline samples time, generates identities or appends.
   // An empty or terminal-only journal samples nothing at all.
@@ -1138,7 +1239,7 @@ class PortableBroker {
       delivery_state: 'unavailable',
     }));
     await this.#append(mutations);
-    for (const mutation of mutations) this.#installExpiry(mutation);
+    for (const mutation of mutations) this.#installClosure(mutation, 'expired');
     this.#logger('portable.request.expired', { count: mutations.length });
   }
 
@@ -1161,9 +1262,9 @@ class PortableBroker {
     return value;
   }
 
-  #installExpiry(mutation) {
+  #installClosure(mutation, resolution) {
     const request = this.#requests.get(mutation.request_id);
-    request.resolution = 'expired';
+    request.resolution = resolution;
     request.resolved_at = mutation.resolved_at;
     request.decision_id = mutation.decision_id;
     request.delivery_state = mutation.delivery_state;
