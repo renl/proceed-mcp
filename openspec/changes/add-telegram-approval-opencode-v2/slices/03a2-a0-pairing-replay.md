@@ -66,3 +66,53 @@ At `9f195f4` plus preserved owner changes, project Windows Node **24.22.2** synt
 Owned run-directory cleanup PASS separately (each removed and absence asserted; scratch namespace empty). No broker/process/socket or credential resources created. Existing owner modifications/untracked artifacts preserved. Retain active worktree, not cleanup-ready; no archive/PR/push/promotion authority. Final size/static evidence is indexed in tasks; failure log was disposable owned scratch, not a durable acceptance artifact.
 
 Handoff update at `576430f1e89e162b7ecbe7013af167b44d296261`: only this slice and tasks changed; no production/test changes or reruns. Prior preparation results above are reused only in their original scope. A0 paired journal fixtures remain prerequisites, not public pairing or first-use proof.
+
+## Independent affected verdict — 2026-11-01
+
+**FAIL — correction needed; A0 not accepted.** Verified immutable implementation `c126b2b8e75d9c27f75429bf0040586e696d9d0d`, branch `add-telegram-approval-opencode-v2`, project baseline `main@f385409792aff3d46d96b5c4f03358f10c8dc5ba`. No production, authoritative test, dependency or configuration edits during verification. Existing dirty owner documents and unknown untracked artifacts were inventoried and preserved. Current working design 4/7 was the contract; supplemental implementation-engineering diagnostics were not reused as independent proof.
+
+### Executed checks
+
+Windows project Node **24.22.2**, finite native execution directly represents this in-process decoder/ordinary journal filesystem seam on Windows, not all-OS durability. No server, network, Telegram, model, real configuration or credentials used. Ordered commands are those above; A0 outer bound 120s, authority 60s, static/build/format bounded together at 120s.
+
+| Check | Result / assertion scope |
+|---|---|
+| Test syntax; full unfiltered A0 | PASS, exit 0; **148 runner entries**, zero failed/cancelled/skipped, 2907ms. These are **144 leaf cases plus 4 parent containers**, not 148 independent behavioral assertions; one leaf is fixture calibration. |
+| Authority regression | PASS, exit 0; **8/8**, zero failed/cancelled/skipped, 326ms: authority/principal/owner drift, framing and serialized flush-before-visibility. |
+| Production syntax / build | PASS, exit 0; 36 production modules parse, existing bin target ready. No bootstrap/release claim. |
+| Project formatter | PASS, exit 0; tests/OpenSpec excluded, not automatic formatting proof for them. |
+| Candidate diff / whitespace | PASS; `git diff --check c126b2b^ c126b2b -- src/broker/portable.js` and working owned-path checks. Source/tests/scripts/manifests matched the candidate; unrelated dirty documents excluded from evidence commit. |
+| Independent diagnostics | Requested discrimination PASS below, but additional array-hash probe proves a schema failure. Diagnostic exit 0 confirms explicit observed-result assertions, **not A0 acceptance**. |
+| Cleanup | PASS separately: suite fixtures remove each run directory and assert absence; A0 scratch namespace empty. Supplemental run directories removed in `finally` with absence assertions; script/namespace removed by shell `finally`, empty/absence verified. Active worktree retained; unknown artifacts untouched. |
+
+### Independently recreated discriminators
+
+Disposable `.scratch/a0-independent/check.mjs` imported normal `Journal` and `createPortableBroker`, used ordinary append/close/reopen and isolated `run-*` journals, without source rewriting or private helper exports. Histories used exact fields, synthetic IDs `0071`/`0091`, default hash `a` repeated 64. Each rejection asserted `exitCode:4`, `code:JOURNAL_STATE_INVALID`, the exact private message below prefixed by `journal replay failed: `, null pairing, empty snapshot, refused first-recovery writes, unchanged bytes and sequence. Positive controls asserted exact pairing and unchanged bytes/sequence. Script/state removed; reproducible inputs/source anchors follow.
+
+| Input / control | Observed result / competing cause excluded |
+|---|---|
+| Declaration `2026-11-01T00:00:00Z` → `00:05:00Z`; consume/set both `00:01:00Z` | Recovery succeeds; aligned valid baseline. |
+| Same declaration; consume **and** paired time `2026-11-01T00:01:00-00:00` | `pairing.challenge.consume has a malformed consumption time`. Aligned companion excludes unequal timestamps. `readConsume` 208–217 calls strict `readInstant` before transition/equality. |
+| Declaration `2026-02-30T00:00:00Z` → `2026-02-30T00:05:00Z`; consume/set both `2026-02-30T00:01:00Z` | `pairing.challenge has a malformed creation time`. Independent `Date.parse` control normalizes to **March 2**; expiry minus creation **300000ms**, consume minus creation **60000ms**. TTL/equality cannot explain rejection: strict calendar round-trip at 144–160 precedes duration at 199–203. |
+| Same aligned calendar history with **February 28** throughout | Recovery succeeds, exactly five-minute duration. |
+| Valid declaration; consume hash `g` repeated 64; aligned valid time | `pairing.challenge.consume has a malformed code hash`, at 210–211 **before** lookup 269–270. Not merely generic unknown-hash rejection. |
+| Declaration hash `a` repeated 64; consume hash `b` repeated 64 | `a consumption names no declared challenge`. Corresponding declaration **and** consume hash `b` repeated 64 succeeds. |
+| Declaration **and** consume hash `g` repeated 64 | `pairing.challenge has a malformed code hash`. This aligned case alone cannot prove consume validation because declaration rejects first; preceding source-backed consume diagnostic plus valid/unknown controls supplies that discrimination without test changes. |
+| Full-suite isolation: installed pairing/reservation, then new valid reservation followed by unknown reset, malformed challenge or repeated consume/set | All three independently rerun cases PASS: no prefix installed, old pairing/snapshot/authorization retained, bytes/sequence unchanged. Fresh maps/local pairing install only after all history at 344–375. |
+
+Source review confirms fractional comparison without millisecond rounding (144–173), lossless ASCII positive-string identities (178–187), order-independent declaration/consume/set and permanent burn (260–287), fresh exact getter copies (381–382), unchanged status/snapshot and reservation authority. Only the approved production path changed; no writer, route, poller, CLI change, legacy replayer or fixture import added. These findings do not override the failure below.
+
+### Blocking schema gap — identifier pending coordination
+
+- **Gap ID:** pending coordination assignment; **correction attempts: 0**. Next owners: test engineering for separately authorized regression correction and affected architecture review; implementation engineering for production correction, routed through coordination only.
+- **Authority:** design 4 requires hashes to be 64 lowercase hexadecimal SHA-256 characters, not arrays. Full-file green misses this type boundary.
+- **Exact reproduction:** append one transaction containing `{op:'pairing.challenge',hash:['a'.repeat(64)],created_at:'2026-11-01T00:00:00Z',expires_at:'2026-11-01T00:05:00Z'}` through ordinary `Journal.append`, close writer, reopen journal, construct portable broker with normal owners/port, call `recover()`.
+- **Expected:** `JOURNAL_STATE_INVALID`; no successful recovery/write admission. **Actual:** recovery succeeds, pairing null, bytes/sequence unchanged. The standalone challenge is valid otherwise, so lookup/equality/TTL cannot mask this schema defect. Diagnostic explicitly asserted successful recovery to reproduce the bug, not to pass a negative gate.
+- **Source cause:** `readChallenge` 192–193 and `readConsume` 210–211 use `HASH_PATTERN.test(mutation.hash)` without a string type guard; JavaScript coerces a one-element array to its contained string. Challenge returns the original array as map key at 205. Consume has the same coercive validation, though ordinary decoded array identity can cause later unknown-challenge rejection; generic refusal there does not prove type validation.
+- No production/test correction made. Next: separately authorize test-owned type-discriminating cases for both new decoders, affected review, production correction, full A0/authority and affected static reruns. Do not expand into unrelated existing reservation semantics without a separate brief.
+
+### Scope accounting and next prerequisites
+
+Actual production is **193 additions + 15 deletions = 208 gross / one path**, **48 above the 160 upper forecast** (88 above lower estimate). The required early sizing notice was missed; later authorization does not retroactively satisfy it. Coordination permits review of the retained same-scope **324 reviewed preparation + 208 production = 532 gross**, within 600, not a limit exception or future-growth authorization. No history rewrite/forced split performed.
+
+Evidence finalization changes only this slice/tasks; executable candidate stays pinned above. A0 is not public pairing, private-chat, first-use, waiting, feature or release acceptance. **A1a blocked on corrected A0 independent acceptance.** After that, bind durable-core tests to implementation-owned request/replay encodings against design 4/7 before positive fixtures consume them: actual journal append/recovery, controlled clock, commit-failure faults, creation/idempotency, immutable paired snapshot, representation, serialized expiry and ledger; require bounded exact-path/size handoff and applicable review. A1b public HTTP/CLI proof remains later: normal protected setup while stopped/no ownership record, fixture writer closed before startup, production replay calibration, separate clean unpaired denial state. No production testing API or substitute public-pairing claim.
