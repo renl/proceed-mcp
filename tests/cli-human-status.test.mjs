@@ -1,9 +1,11 @@
 // TEST ONLY: active design sections 2, 3 A1b diagnostics, 7 human-status cut.
-// Only pairing is seeded. Requests/expiry/status use production HTTP/core/Journal.
+// Production cases seed only pairing. CLI-H-CONSUMER cases substitute status replies;
+// they prove CLI consumption only, never a Telegram or delivery transition.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { Journal } from '../src/journal/journal.js';
@@ -16,7 +18,7 @@ import { freePort } from './support/startup-guards.mjs';
 
 const executable = resolve('bin/proceed-mcp.js');
 const options = { timeout: 20000 };
-async function fixture(work) {
+async function fixture(work, consumerRows) {
   const result = await managed(async ctx => {
     const paths = statePaths(join(ctx.directory, 'state'));
     await initializeState(paths);
@@ -72,6 +74,18 @@ async function fixture(work) {
       assert.equal(r.status, 201); return r.body;
     };
     try {
+      if (consumerRows) {
+        // Explicit synthetic loopback fixture, authenticated like the control consumer.
+        const listener = createHttpServer((req, res) => {
+          const allowed = req.method === 'GET' && req.url === '/v1/status' && req.headers.authorization === `Bearer ${control}`;
+          res.writeHead(allowed ? 200 : 401, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(allowed ? { broker: { pid: 123, port }, requests: consumerRows } : { error: 'unauthorized' }));
+        });
+        server = { close: () => new Promise((done, reject) => listener.close(e => e ? reject(e) : done())) };
+        await new Promise((done, reject) => { listener.once('error', reject); listener.listen(port, '127.0.0.1', done); });
+        await work({ cli, privateOutput });
+        return;
+      }
       broker = createPortableBroker({ journal: j, owners: config.owners, port,
         clock: () => { if (failClock) throw new Error('private clock failure'); return now; } });
       await broker.recover();
@@ -130,8 +144,8 @@ test('CLI-H-PENDING: unfiltered/multiple and filtered human portable identity; n
   assert.ok(all.includes(a.request_id) && all.includes(b.request_id)); assert.ok(!filtered.includes(a.request_id));
   for (const [text, r] of [[all, a], [all, b], [filtered, b]]) {
     human(text, r);
-    assert.match(text, /not (?:yet )?(?:sent|delivered)|unsent|presentation[^\n]*unavailable/i);
-    assert.match(text, /next(?:[ _-]action)?\s*:[^\n]*(?:wait|pending|presentation|Telegram)/i);
+    assert.match(text, /not (?:yet )?(?:sent|delivered)|unsent|presentation[^\n]*unavailable|no decision|review[^\n]*state/i);
+    assert.match(text, /next(?:[ _-]action)?\s*:[^\n]*(?:review|check|wait|pending|presentation|Telegram)/i);
     assert.doesNotMatch(text, /delivery_error=undefined|delivery_error=null/);
   }
 }));
@@ -157,3 +171,27 @@ test('CLI-H-STORAGE: actual status expiry fault is exit4, empty stdout, fixed re
     assert.doesNotMatch(r.stderr, /private clock failure|Fault question|Fault display/);
   }
 }));
+
+for (const telegram of ['pending', 'sent', 'failed']) {
+  test(`CLI-H-CONSUMER-${telegram}: HUMAN-STATUS-001 pending resolution does not invent presentation state (fixture only)`, options, () => {
+    const r = { schema_version: 1, request_handle: 'fixture_handle', request_id: 'fixture_request',
+      client_request_id: 'fixture_key', owner_id: 'portable', session_label: 'Consumer display', action: 'Consumer question', context: '',
+      created_at: '2026-11-01T12:00:00.000Z', expires_at: '2026-11-01T12:01:00.000Z', resolution: 'pending',
+      resolved_at: null, response_text: null, decision_id: null, telegram_state: telegram, delivery_state: 'not_applicable',
+      delivery_error: telegram === 'failed' ? { code: 'BROKER_UNAVAILABLE', message: 'Delivery unavailable', retryable: true } : null,
+      event_capability: { status: 'unverified', revision: null, reason: 'No verified Events contract or host support' } };
+    return fixture(async h => {
+      assert.deepEqual(JSON.parse(ok(await h.cli('--json'))), { schema_version: 1, requests: [r] });
+      const text = ok(await h.cli('--request', r.request_id)); human(text, r);
+      const next = text.split('\n').find(line => /next(?:[ _-]action)?\s*:/i.test(line));
+      assert.match(next, /review|check|wait|pending|presentation|Telegram/i);
+      if (r.delivery_error) assert.ok(text.includes('delivery_error=BROKER_UNAVAILABLE: Delivery unavailable'), 'existing redacted error is displayed');
+      else assert.doesNotMatch(text, /delivery_error=/);
+      // Neutral review guidance is valid; no automatic retry/new delivery policy required.
+      if (telegram !== 'pending') {
+        assert.doesNotMatch(text, /not (?:yet )?(?:sent|delivered)|unsent|presentation is still pending|wait for the pending Telegram presentation/i,
+          'resolution alone must not assert unsent/pending presentation in note or next action');
+      }
+    }, [r]);
+  });
+}
