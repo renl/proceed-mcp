@@ -1,6 +1,11 @@
 # Tasks
 
-## B2 concurrent stdio — test-only preparation, combined review pending (2026-11-01)
+## B2 concurrent stdio — independently PASS, enabling cut only (2026-11-01)
+- [x] P.B2-verdict [Independent assertions, reuse, correction and accounting](slices/03b2-concurrent-stdio.md#independent-bounded-verdict--2026-11-01): production `8e5ff861fe06546c5489c010cfb97414f02883dd`, separate test correction `1bc053b4e57a6d16badbda43dc7dd1d120bcfdba`. Executed17/17 and reused123 unchanged checks PASS; no skipped/cancelled/todo. Source/dependencies/configuration unchanged; finalization docs-only.
+- CONCURRENT-HOLD-001 attempt1 resolved: clear relay hold after overlap barrier, before original release; duplicate OWNER_IN_USE, exact captured EOF release and replacement success assertions unchanged. No production workaround, deadline change or contract delta; no automatic architecture re-review.
+- Assertion and run cleanup PASS separately;69 persisted public namespaces cleaned and absent. Same retained worktree/branch/change/test-engineering owner and target baseline; active/not cleanup-ready. Next action separately scoped adapter waiting bindings through coordination; no automatic implementation, MCP returned-write, host/Telegram, feature/release/archive/promotion acceptance. Historical PORT-A/B failures below are neither B2 gates nor waived.
+
+### Historical preparation (superseded by bounded verdict above)
 - [x] P.B2-tests [Owned brief, exact two-source scope, boundary/test mapping, run order and evidence](slices/03b2-concurrent-stdio.md): baseline `6d9ffa0c`, accepted broker B1 `65f49c45` present. New real executable/HTTP concurrency/cancellation and native executor contracts; shared releasable-hold/typed RPC helpers; EOF and public overlap rebindings. No production edits.
 - [ ] P.B2-review ONE combined public-protocol/interface-fidelity, helper/test-artifact and decomposition pass; triggers1/3/4/5 YES,2 NO. No duplicate-active-ID rule invented; unique protocol request IDs are the test-client prerequisite. Preparation readable here, NOT implementation-ready until review.
 - [ ] P.B2-implementation Separately authorize ONLY `src/mcp/server.js` and `src/mcp/execution.js`, forecast125+45gross, hard600 actual whole packet. Preserve unavailable waiting tool/catalog, public authority and shared2s EOF budget; no returned report, broker/client/registration change.
