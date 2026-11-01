@@ -9,6 +9,11 @@
 // lost. A key holder of the same principal may use the reservation: authority
 // follows the key, not the preparing invocation.
 //
+// Recovery also replays the pairing vocabulary of design section 4, because
+// creation consumes paired state. Pairing is validated from committed history
+// alone, so no transport owner, token or recovery clock can grant, remove or
+// invalidate it, and the private getter below never exposes challenges.
+//
 // The journal stays caller-owned. This module never opens, replaces or closes
 // it, and no reservation result becomes visible before its serialized append
 // has completed the journal's own file flush.
@@ -30,6 +35,10 @@ import {
 export const PORTABLE_REPRESENTATION_SCHEMA_VERSION = 1;
 
 const RESERVE_OP = 'handle.reserve';
+const CHALLENGE_OP = 'pairing.challenge';
+const CONSUME_OP = 'pairing.challenge.consume';
+const SET_OP = 'pairing.set';
+const PAIRING_TTL_SECONDS = 300n;
 const MAX_LABEL_SCALARS = 128;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const RESERVATION_FIELDS = [
@@ -41,6 +50,13 @@ const RESERVATION_FIELDS = [
   'request_id',
   'session_label',
 ];
+const CHALLENGE_FIELDS = ['created_at', 'expires_at', 'hash', 'op'];
+const CONSUME_FIELDS = ['consumed_at', 'hash', 'op'];
+const SET_FIELDS = ['op', 'pairing'];
+const PAIRING_FIELDS = ['chat_id', 'paired_at', 'user_id'];
+// Pairing timestamps are UTC RFC 3339 instants. The offset is `Z` or `+00:00`
+// only: `-00:00` states that the offset is unknown, so it is not UTC here.
+const UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|\+00:00)$/;
 // A lone surrogate is not a Unicode scalar value and cannot round-trip through
 // UTF-8, so it is rejected rather than silently replaced.
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
@@ -78,21 +94,20 @@ function sameVerifier(left, right) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// Every committed mutation carries exactly the fields its op defines, so an
+// added, missing or misspelled field is refused instead of quietly ignored.
+function exactFields(value, fields) {
+  const keys = Object.keys(value).sort();
+  if (keys.length !== fields.length || keys.some((key, index) => key !== fields[index])) {
+    throw integrity(`mutation must persist exactly ${fields.join(', ')}`);
+  }
+}
+
 // Replay trusts only what the writer committed: the mutation carries exactly
 // the persisted fields, and any deviation, unknown operation or reused
 // identifier stops recovery before a byte is rewritten.
 function readReservation(mutation) {
-  if (!isPlainObject(mutation) || typeof mutation.op !== 'string') {
-    throw integrity('mutation is not a tagged object');
-  }
-  if (mutation.op !== RESERVE_OP) {
-    throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
-  }
-  const keys = Object.keys(mutation).sort();
-  const exact = keys.length === RESERVATION_FIELDS.length;
-  if (!exact || keys.some((key, index) => key !== RESERVATION_FIELDS[index])) {
-    throw integrity(`${RESERVE_OP} must persist exactly ${RESERVATION_FIELDS.join(', ')}`);
-  }
+  exactFields(mutation, RESERVATION_FIELDS);
   if (typeof mutation.owner_id !== 'string' || mutation.owner_id.length === 0) {
     throw integrity(`${RESERVE_OP} requires an owner`);
   }
@@ -123,6 +138,155 @@ function readReservation(mutation) {
   };
 }
 
+// A stored instant keeps its exact second and its fraction as written, so an
+// arbitrary fractional spelling compares as the value it represents and no
+// rounding can turn a refusal into an acceptance.
+function readInstant(text) {
+  if (typeof text !== 'string') return null;
+  const match = UTC_TIMESTAMP.exec(text);
+  if (match === null) return null;
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, 0);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day ||
+    date.getUTCHours() !== hour ||
+    date.getUTCMinutes() !== minute ||
+    date.getUTCSeconds() !== second
+  ) {
+    return null;
+  }
+  const fraction = match[7] ?? '';
+  return { seconds: BigInt(date.getTime() / 1000), fraction: fraction.replace(/0+$/, '') };
+}
+
+function compareInstants(left, right) {
+  if (left.seconds !== right.seconds) return left.seconds < right.seconds ? -1 : 1;
+  const width = Math.max(left.fraction.length, right.fraction.length);
+  const leftDigits = left.fraction.padEnd(width, '0');
+  const rightDigits = right.fraction.padEnd(width, '0');
+  if (leftDigits === rightDigits) return 0;
+  return leftDigits < rightDigits ? -1 : 1;
+}
+
+// Telegram IDs are stored losslessly as decimal strings: no numeric conversion,
+// no digit-count ceiling, exact spelling kept, and an all-zero string names
+// nobody. Actual sender/private-chat checking belongs to the Telegram boundary.
+function identityProblem(value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    return 'a pairing identity must be a non-empty decimal string';
+  }
+  let nonzero = false;
+  for (const character of value) {
+    if (character < '0' || character > '9') return 'a pairing identity must use ASCII digits only';
+    nonzero ||= character !== '0';
+  }
+  return nonzero ? null : 'a pairing identity must contain a nonzero digit';
+}
+
+function readChallenge(mutation) {
+  exactFields(mutation, CHALLENGE_FIELDS);
+  if (!HASH_PATTERN.test(mutation.hash)) {
+    throw integrity('pairing.challenge has a malformed code hash');
+  }
+  const createdAt = readInstant(mutation.created_at);
+  const expiresAt = readInstant(mutation.expires_at);
+  if (createdAt === null) throw integrity('pairing.challenge has a malformed creation time');
+  if (expiresAt === null) throw integrity('pairing.challenge has a malformed expiry');
+  if (
+    expiresAt.seconds - createdAt.seconds !== PAIRING_TTL_SECONDS ||
+    expiresAt.fraction !== createdAt.fraction
+  ) {
+    throw integrity('pairing.challenge must expire exactly five minutes after creation');
+  }
+  return { kind: 'challenge', hash: mutation.hash, createdAt, expiresAt, consumedAt: null };
+}
+
+function readConsume(mutation) {
+  exactFields(mutation, CONSUME_FIELDS);
+  if (!HASH_PATTERN.test(mutation.hash)) {
+    throw integrity('pairing.challenge.consume has a malformed code hash');
+  }
+  const consumedAt = readInstant(mutation.consumed_at);
+  if (consumedAt === null) {
+    throw integrity('pairing.challenge.consume has a malformed consumption time');
+  }
+  return { kind: 'consume', hash: mutation.hash, consumedAt };
+}
+
+function readSet(mutation) {
+  exactFields(mutation, SET_FIELDS);
+  const pairing = mutation.pairing;
+  if (!isPlainObject(pairing)) throw integrity('pairing.set requires a pairing record');
+  exactFields(pairing, PAIRING_FIELDS);
+  const problem = identityProblem(pairing.user_id) ?? identityProblem(pairing.chat_id);
+  if (problem !== null) throw integrity(problem);
+  const pairedAt = readInstant(pairing.paired_at);
+  if (pairedAt === null) throw integrity('pairing.set has a malformed pairing time');
+  return {
+    kind: 'set',
+    pairedAt,
+    record: { user_id: pairing.user_id, chat_id: pairing.chat_id, paired_at: pairing.paired_at },
+  };
+}
+
+// Pairing joins the reservation vocabulary of committed history. An unfamiliar
+// operation stays fatal rather than skipped.
+function readMutation(mutation) {
+  if (!isPlainObject(mutation) || typeof mutation.op !== 'string') {
+    throw integrity('mutation is not a tagged object');
+  }
+  switch (mutation.op) {
+    case RESERVE_OP:
+      return { kind: 'reservation', record: readReservation(mutation) };
+    case CHALLENGE_OP:
+      return readChallenge(mutation);
+    case CONSUME_OP:
+      return readConsume(mutation);
+    case SET_OP:
+      return readSet(mutation);
+    default:
+      throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
+  }
+}
+
+// One transaction is applied all-or-none, and its array order cannot matter:
+// its declarations, consumptions and binding are resolved together against the
+// history before it. A consumption burns a challenge permanently; a pairing set
+// needs exactly one consumption in the same transaction.
+function applyPairing(records, challenges, pairing) {
+  const declarations = records.filter((record) => record.kind === 'challenge');
+  const consumptions = records.filter((record) => record.kind === 'consume');
+  const sets = records.filter((record) => record.kind === 'set');
+  for (const declaration of declarations) {
+    if (challenges.has(declaration.hash)) throw integrity('a pairing challenge is declared twice');
+    challenges.set(declaration.hash, declaration);
+  }
+  for (const consumption of consumptions) {
+    const challenge = challenges.get(consumption.hash);
+    if (challenge === undefined) throw integrity('a consumption names no declared challenge');
+    if (challenge.consumedAt !== null) throw integrity('a pairing challenge is consumed twice');
+    if (compareInstants(consumption.consumedAt, challenge.createdAt) < 0) {
+      throw integrity('a consumption precedes its challenge');
+    }
+    if (compareInstants(consumption.consumedAt, challenge.expiresAt) >= 0) {
+      throw integrity('a consumption must precede challenge expiry');
+    }
+    challenge.consumedAt = consumption.consumedAt;
+  }
+  if (sets.length === 0) return pairing;
+  if (sets.length > 1) throw integrity('a transaction sets more than one pairing');
+  if (pairing !== null) throw integrity('a pairing already exists');
+  if (consumptions.length !== 1) throw integrity('a pairing set needs exactly one consumption');
+  if (compareInstants(sets[0].pairedAt, consumptions[0].consumedAt) !== 0) {
+    throw integrity('paired_at must equal the same transaction consumption');
+  }
+  return sets[0].record;
+}
+
 class PortableBroker {
   #journal;
 
@@ -141,6 +305,8 @@ class PortableBroker {
   #byRequestId = new Map();
 
   #byVerifier = new Map();
+
+  #pairing = null;
 
   #queue = Promise.resolve();
 
@@ -172,17 +338,21 @@ class PortableBroker {
     this.#startedAt = utcTimestamp(clock());
   }
 
-  // Rebuilds reservations from committed transactions. A replay failure leaves
-  // the previous state untouched, and the journal is never written here.
+  // Rebuilds reservations and pairing from committed transactions. The whole
+  // history is staged first: a replay failure installs nothing and leaves the
+  // previous state untouched, and the journal is never written here.
   async recover() {
     if (this.#closed) throw storageFailure('the portable broker is closed', 'STORAGE_FAILURE');
     const { transactions } = await this.#journal.recover();
     const byHandle = new Map();
     const byRequestId = new Map();
     const byVerifier = new Map();
+    const challenges = new Map();
+    let pairing = null;
     for (const transaction of transactions) {
-      for (const mutation of transaction?.mutations ?? []) {
-        const record = readReservation(mutation);
+      const records = (transaction?.mutations ?? []).map(readMutation);
+      for (const { kind, record } of records) {
+        if (kind !== 'reservation') continue;
         if (byHandle.has(record.request_handle)) {
           throw integrity(`request handle ${record.request_handle} is reserved twice`);
         }
@@ -196,12 +366,20 @@ class PortableBroker {
         byRequestId.set(record.request_id, record);
         byVerifier.set(record.capability_hash, record);
       }
+      pairing = applyPairing(records, challenges, pairing);
     }
     this.#byHandle = byHandle;
     this.#byRequestId = byRequestId;
     this.#byVerifier = byVerifier;
+    this.#pairing = pairing;
     this.#recovered = true;
     return { records: transactions.length };
+  }
+
+  // Private copied view (design section 4): the stored values only, never a
+  // challenge, hash or consumption, and mutating the result cannot alter state.
+  pairing() {
+    return this.#pairing === null ? null : { ...this.#pairing };
   }
 
   // Reserves fresh authority for one preparation call. Validated up front, then
