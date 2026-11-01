@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { portable } from './support/portable-waiting.mjs';
+import { portable, until } from './support/portable-waiting.mjs';
+import { stopped } from './support/startup-guards.mjs';
 
 test('PORT-REG-HTTP: roles, validation, secret, release, restart and state preservation',
   { timeout: 65000 }, () => portable(async h => {
@@ -21,8 +22,27 @@ test('PORT-REG-HTTP: roles, validation, secret, release, restart and state prese
     const paths = ['config.json', 'journal.log', ...names.map(n => `credentials/${n}`)];
     const snapshot = await Promise.all(paths.map(p => readFile(join(h.state, p))));
     assert.equal(snapshot[1].readUInt32BE(8), 2);
-    const secrets = [h.control, ...owners, reservation.request_capability], logs = [];
-    for (const stream of [h.broker.child.stdout, h.broker.child.stderr]) stream.on('data', b => logs.push(String(b)));
+    const secrets = [h.control, ...owners, reservation.request_capability], logs = [], brokers = [];
+    const capture = (resource, priorBytes = 0) => {
+      const streams = []; brokers.push({ resource, streams, priorBytes });
+      for (const stream of [resource.child.stdout, resource.child.stderr]) {
+        const log = { chunks: [], bytes: 0 }; logs.push(log); streams.push(log);
+        stream.on('data', b => { log.bytes += b.length;
+          if (log.bytes <= 65536) log.chunks.push(Buffer.from(b)); });
+      }
+    };
+    let broker = h.broker;
+    capture(broker, broker.outputBytes); // Initial bootstrap precedes all registration authority; h.scan covers it.
+    const privacy = async () => {
+      assert.ok(brokers.every(({ resource, streams, priorBytes }) => resource.outputBytes === priorBytes + streams.reduce((n, log) => n + log.bytes, 0)),
+        'no missed output after initial bootstrap; restarted startup capture fails closed');
+      assert.ok(logs.every(log => log.bytes <= 65536), 'bounded per-stream capture, no silent truncation');
+      const visible = [JSON.stringify(h.fixture.calls), ...logs.map(log => Buffer.concat(log.chunks).toString())];
+      const journal = await readFile(join(h.state, 'journal.log'));
+      assert.ok(secrets.every(s => visible.every(text => !text.includes(s))
+        && !journal.includes(Buffer.from(s))), 'all issued authority absent through shutdown, across chunks');
+    };
+    try {
     const error = async (response, status, code, registration = false) => {
       assert.equal(response.status, status);
       assert.equal(response.headers.has('access-control-allow-origin'), false);
@@ -42,10 +62,10 @@ test('PORT-REG-HTTP: roles, validation, secret, release, restart and state prese
       const response = await create(bearer);
       assert.equal(response.status, 201);
       const r = await response.json();
+      if (typeof r.registration_secret === 'string') secrets.push(r.registration_secret);
       assert.deepEqual(Object.keys(r).sort(), ['registration_id', 'registration_secret']);
       assert.equal(typeof r.registration_id, 'string');
       assert.match(r.registration_secret, /^[a-f0-9]{64}$/);
-      secrets.push(r.registration_secret);
       return r;
     };
     const route = (r, heartbeat) => `/v1/adapter/${r.registration_id}${heartbeat ? '/heartbeat' : ''}`;
@@ -65,12 +85,19 @@ test('PORT-REG-HTTP: roles, validation, secret, release, restart and state prese
     await error(await create(), 409, 'OWNER_IN_USE');
     await error(await create(owner, { owner_id: 'foreign' }), 400, 'INVALID_ARGUMENT');
     const port = JSON.parse(snapshot[0]).broker.port;
+    const rawPost = (path, token, body) => fetch(`http://127.0.0.1:${port}${path}`, {
+      method: 'POST', headers: { authorization: token ? `Bearer ${token}` : '', 'content-type': 'application/json' },
+      body, redirect: 'error', signal: AbortSignal.timeout(1000),
+    });
     for (const path of ['/v1/adapter', route(a, true)]) {
+      // Distinct from well-formed role cases above and owner body cases below:
+      // Bearer and owner-role denial MUST precede malformed/oversized parsing.
+      for (const raw of ['{', `${' '.repeat(65536)}{}`]) {
+        for (const token of ['', 'invalid']) await error(await rawPost(path, token, raw), 401, 'AUTH_REQUIRED');
+        await error(await rawPost(path, h.control, raw), 403, 'FORBIDDEN');
+      }
       for (const raw of ['{', '[]', `${' '.repeat(65536)}{}`]) {
-        await error(await fetch(`http://127.0.0.1:${port}${path}`, {
-          method: 'POST', headers: { authorization: `Bearer ${owner}`, 'content-type': 'application/json' },
-          body: raw, redirect: 'error', signal: AbortSignal.timeout(1000),
-        }), 400, 'INVALID_ARGUMENT'); // Body parsing precedes missing registration secret.
+        await error(await rawPost(path, owner, raw), 400, 'INVALID_ARGUMENT'); // Parsing precedes missing registration secret.
       }
     }
     for (const heartbeat of [true, false]) {
@@ -103,11 +130,19 @@ test('PORT-REG-HTTP: roles, validation, secret, release, restart and state prese
       assert.deepEqual(Object.keys(status.broker).sort(), ['pid', 'port', 'started_at']);
       assert.equal(status.schema_version, 1);
       assert.deepEqual(status.requests, []);
-      assert.ok(secrets.every(s => !JSON.stringify([status, logs, h.fixture.calls]).includes(s)
-        && !snapshot[1].includes(Buffer.from(s))), 'no authority in journal/status/logs/Telegram');
+      assert.ok(secrets.every(s => !JSON.stringify(status).includes(s)), 'no authority in status');
+      await privacy();
     };
     await unchanged();
-    await h.restart(); // Graceful own-lock release; never delete a stale ownership record.
+    // Use the same managed resources, retaining the restarted broker for capture
+    // and shutdown. No adapter binding or application test route is introduced.
+    h.shared.peer.close?.(); h.shared.resource.child.stdin.end();
+    await until(() => h.shared.resource.closed, 'adapter EOF shutdown', h.signal);
+    h.shared.peer.assertComplete();
+    await stopped(broker); // Graceful own-lock release; no stale-lock deletion.
+    broker = await h.start('serve'); capture(broker);
+    await until(async () => (await h.http('/v1/status', h.control)).ok,
+      'restarted authenticated broker readiness', h.signal);
     for (const r of [a, replacement]) await error(await activity(r, true), 401, 'AUTH_REQUIRED', true);
     const afterRestart = await fresh();
     await empty(await activity(afterRestart, true));
@@ -115,4 +150,9 @@ test('PORT-REG-HTTP: roles, validation, secret, release, restart and state prese
     await unchanged();
     assert.equal(h.fixture.messages.length, 0);
     await h.scan();
+    } finally {
+      // Keep capture attached until close; scan also on an assertion failure.
+      try { if (!broker.closed) await stopped(broker); }
+      finally { await privacy(); }
+    }
   }, { pair: false, strictProtocol: true }));

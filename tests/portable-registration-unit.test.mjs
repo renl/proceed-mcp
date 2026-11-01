@@ -11,10 +11,12 @@ test('PORT-REG-UNIT: selected constants, independent authority and duplicate own
   assert.equal(m.REGISTRATION_LEASE_MS, 45000);
   assert.equal(m.REGISTRATION_ID_PATTERN.source, '^reg_[a-f0-9]{32}$');
   assert.equal(m.REGISTRATION_SECRET_PATTERN.source, '^[a-f0-9]{64}$');
-  const logs = [], registry = m.createRegistrationRegistry({ logger: (...v) => logs.push(v) });
+  const logs = [], secrets = [], registry = m.createRegistrationRegistry({ logger: (...v) => logs.push(v) });
   try {
     const a = await registry.register({ ownerId: 'shared' });
+    secrets.push(a.registration_secret);
     const b = await registry.register({ ownerId: 'foreign' });
+    secrets.push(b.registration_secret);
     for (const r of [a, b]) {
       assert.deepEqual(Object.keys(r).sort(), ['registration_id', 'registration_secret']);
       assert.match(r.registration_id, /^reg_[a-f0-9]{32}$/);
@@ -27,7 +29,8 @@ test('PORT-REG-UNIT: selected constants, independent authority and duplicate own
     assert.equal(registry.authenticate(bound(a)), true);
     for (const input of [bound(a, 'foreign'), { ...bound(a), secret: 'bad' },
       { ...bound(a), registrationId: 'bad' }]) assert.equal(registry.authenticate(input), false);
-  } finally { registry.close(); }
+  } finally { registry.close();
+    assert.ok(secrets.every(s => !JSON.stringify(logs).includes(s)), 'no registration secret in logger including close'); }
 });
 
 test('PORT-REG-CLOCK: before/exact/after expiry and duplicate admission without sweep', async () => {
