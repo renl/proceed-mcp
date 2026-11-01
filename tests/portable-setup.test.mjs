@@ -117,7 +117,8 @@ test('PORT-SETUP-SCHEMA: journal format 2; version 1 refusal preserves bytes',
       child.child.stderr.on('data', (bytes) => { if (diagnostic.length < 65536) diagnostic += bytes; });
       await until(() => child.closed, 'unsupported journal refusal', context.signal);
       assert.equal(child.child.exitCode, 4, 'unsupported old journal must fail integrity gate');
-      assert.match(diagnostic, /unsupported|schema|version/i, 'actionable unsupported-schema diagnostic');
+      assert.match(diagnostic, /journal[^\r\n]*(?:version|unsupported)|JOURNAL_VERSION_UNSUPPORTED/i,
+        'journal-specific refusal, never a configuration-schema false positive');
       assert.ok(old.equals(await readFile(journalPath)) && configBytes.equals(await readFile(configPath)),
         'no migration, truncation or reset');
     } finally { await fixture.close(); }
