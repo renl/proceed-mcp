@@ -48,6 +48,9 @@ export class Journal {
 
   // Reads and validates every committed record, returning the mutations in
   // commit order. The file is created with its header when it does not exist.
+  // The recovered sequence is acknowledged only after the handle has actually
+  // been flushed: an unconfirmed flush is an uncertain storage state, so it is
+  // refused instead of reported as a usable tail.
   async recover() {
     let buffer;
     try {
@@ -78,6 +81,20 @@ export class Journal {
         );
       }
       throw error;
+    }
+
+    // Durability boundary of recovery: the valid history is only reported once
+    // the underlying handle has flushed it. A failure here leaves the previous
+    // sequence untouched, so no recovered sequence is acknowledged from an
+    // unconfirmed file, and no caller may treat the tail as ready.
+    try {
+      await this.#handle.sync();
+    } catch (cause) {
+      throw storageFailure(
+        `could not confirm the journal at ${this.filePath} is durable`,
+        'STORAGE_FAILURE',
+        cause,
+      );
     }
 
     this.#sequence = result.transactions.length;

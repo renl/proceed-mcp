@@ -23,6 +23,13 @@
 // The journal stays caller-owned. This module never opens, replaces or closes
 // it, and no reservation result becomes visible before its serialized append
 // has completed the journal's own file flush.
+//
+// A rejected append or a failed whole-history recovery leaves the file in an
+// uncertain state, so the instance fences itself: every later turn, queued or
+// fresh, is refused before it samples the clock, allocates an identity, appends
+// or reports success. Nothing is retried, compensated, rolled back or cleared in
+// place; recovery of the file is an ordinary close and reopen with a fresh
+// instance.
 import { timingSafeEqual } from 'node:crypto';
 import { invalidArgument, storageFailure } from '../errors.js';
 import { MAX_TELEGRAM_TEXT, measurePortablePresentation } from '../telegram/portable-render.js';
@@ -590,6 +597,8 @@ class PortableBroker {
 
   #recovered = false;
 
+  #fence = null;
+
   #closing = false;
 
   #closed = false;
@@ -620,9 +629,37 @@ class PortableBroker {
   // Rebuilds reservations, pairing and requests from committed transactions.
   // The whole history is staged first: a replay failure installs nothing and
   // leaves the previous state untouched, and the journal is never written here.
-  async recover() {
-    if (this.#closed) throw storageFailure('the portable broker is closed', 'STORAGE_FAILURE');
-    const { transactions } = await this.#journal.recover();
+  // Recovery shares the mutation queue, so it can neither race an admitted
+  // append nor acknowledge history that a held writer has not committed, and a
+  // failed recovery fences the instance like any other uncertain storage state.
+  recover() {
+    const refusal = this.#admissionRefusal();
+    if (refusal !== null) return Promise.reject(refusal);
+    return this.#enqueue(async () => {
+      try {
+        return await this.#replay();
+      } catch (error) {
+        throw this.#fenceJournal(error);
+      }
+    });
+  }
+
+  // The whole history is staged first: a replay failure installs nothing and
+  // leaves the previous state untouched, and the journal is never written here.
+  // Tolerant framing reports a shorter valid length for an interrupted final
+  // frame; only an ordinary reopen may remove that tail, so an unrepaired one is
+  // refused instead of read as a ready history.
+  async #replay() {
+    const { transactions, validLength, fileBytes } = await this.#journal.recover();
+    if (!Array.isArray(transactions) || !Number.isInteger(validLength)) {
+      throw storageFailure('journal recovery reported no usable history', 'STORAGE_FAILURE');
+    }
+    if (fileBytes !== validLength) {
+      throw storageFailure(
+        'the journal must be reopened to remove an unrepaired incomplete final record',
+        'STORAGE_FAILURE',
+      );
+    }
     const staged = {
       byHandle: new Map(),
       byRequestId: new Map(),
@@ -667,9 +704,8 @@ class PortableBroker {
   // serialized so one journal append per call is ordered with every other
   // mutation this broker performs.
   reserveHandle({ ownerId, sessionLabel } = {}) {
-    if (this.#closing) {
-      return Promise.reject(storageFailure('the portable broker is closed', 'STORAGE_FAILURE'));
-    }
+    const refusal = this.#admissionRefusal();
+    if (refusal !== null) return Promise.reject(refusal);
     if (!this.#recovered) {
       return Promise.reject(
         storageFailure('the portable broker has not recovered the journal', 'STORAGE_FAILURE'),
@@ -717,6 +753,8 @@ class PortableBroker {
   readRequest(input) {
     const target = this.#readBinding(input);
     if (target === null) return Promise.resolve(null);
+    const refusal = this.#admissionRefusal();
+    if (refusal !== null) return Promise.reject(refusal);
     return this.#enqueue(() => this.#expireTarget(target.request_id));
   }
 
@@ -726,6 +764,8 @@ class PortableBroker {
   // an earlier flushed group survives a later refusal, which rejects instead of
   // reporting a partial success count.
   sweepExpired() {
+    const refusal = this.#admissionRefusal();
+    if (refusal !== null) return Promise.reject(refusal);
     return this.#enqueue(async () => ({ expired: await this.#sweepDue() }));
   }
 
@@ -733,6 +773,8 @@ class PortableBroker {
   // captured inside one serialized turn, so the reported requests are exactly the
   // committed state this call observed, never a stale pending or empty success.
   status() {
+    const refusal = this.#admissionRefusal();
+    if (refusal !== null) return Promise.reject(refusal);
     return this.#enqueue(async () => {
       await this.#sweepDue();
       return {
@@ -783,7 +825,7 @@ class PortableBroker {
     };
     // The result exists only after the append has completed its file flush, so
     // a lost result cannot leave a key that was issued but never committed.
-    await this.#journal.append([record]);
+    await this.#append([record]);
     this.#remember(record);
     this.#logger('portable.handle.reserved', { owner_id: ownerId, request_id: requestId });
     return {
@@ -855,7 +897,7 @@ class PortableBroker {
       resolved_at: resolvedAt,
       delivery_state: 'unavailable',
     }));
-    await this.#journal.append(mutations);
+    await this.#append(mutations);
     for (const mutation of mutations) this.#installExpiry(mutation);
     this.#logger('portable.request.expired', { count: mutations.length });
   }
@@ -888,10 +930,56 @@ class PortableBroker {
     this.#decisions.add(mutation.decision_id);
   }
 
+  // Serialization point and fence gate in one place: a turn runs only while the
+  // journal is trustworthy, so a refusal installed by an earlier turn is
+  // observed before this one samples time, allocates an identity, appends or
+  // returns a success view.
   #enqueue(task) {
-    const run = this.#queue.then(task);
+    const run = this.#queue.then(() => this.#admitted(task));
     this.#queue = run.then(ignore, ignore);
     return run;
+  }
+
+  async #admitted(task) {
+    if (this.#fence !== null) throw this.#fence;
+    return task();
+  }
+
+  // Pre-queue admission: a fenced journal and a closing/closed instance accept no
+  // new turns. Turns admitted before close still run, so close drains the work it
+  // already accepted instead of abandoning it.
+  #admissionRefusal() {
+    if (this.#fence !== null) return this.#fence;
+    if (this.#closing || this.#closed) {
+      return storageFailure('the portable broker is closed', 'STORAGE_FAILURE');
+    }
+    return null;
+  }
+
+  // The only write path. A rejected append leaves the file in an uncertain state,
+  // so the instance is fenced before serialization is released; the original
+  // refusal is what the caller sees, and nothing is installed for it.
+  async #append(mutations) {
+    try {
+      return await this.#journal.append(mutations);
+    } catch (error) {
+      throw this.#fenceJournal(error);
+    }
+  }
+
+  // Terminal for this instance until an ordinary close and reopen: no retry, no
+  // compensating write, no in-place clearing and no automatic restart. The
+  // causing refusal is preserved for its own caller; later turns receive the
+  // generic fence refusal.
+  #fenceJournal(cause) {
+    if (this.#fence === null) {
+      this.#fence = storageFailure(
+        'the journal is fenced after an uncertain storage failure; close and reopen it',
+        'STORAGE_FAILURE',
+        cause,
+      );
+    }
+    return cause;
   }
 }
 
