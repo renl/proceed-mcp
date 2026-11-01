@@ -1,14 +1,14 @@
 // Public CLI dispatch (design section 2). One command group per checkpoint;
 // `doctor` remains a documented target that this build does not implement, so
 // it fails as an invalid command rather than pretending to check anything.
-import { TELEGRAM_TOKEN_ENV } from '../config/config.js';
+import { TELEGRAM_TOKEN_ENV } from '../config/portable-config.js';
 import { CliError, EXIT_CODE, blockedPrerequisite, invalidArgument } from '../errors.js';
 import { createLocalClient, LocalRequestError } from '../http/local-client.js';
 import { createMcpAdapter, runMcpServer } from '../mcp/server.js';
 import { startBrokerRuntime } from '../broker/runtime.js';
 import { readLocalCredential } from '../state/credentials.js';
 import { resolveStateDir, statePaths } from '../state/paths.js';
-import { addOrigin, initializeState, loadConfiguration } from '../state/store.js';
+import { addOrigin, addOwner, initializeState, loadConfiguration } from '../state/store.js';
 import { parseArguments, requireOptions } from './args.js';
 
 const USAGE = [
@@ -16,15 +16,18 @@ const USAGE = [
   '',
   'Usage:',
   '  proceed-mcp init [--state-dir <directory>]',
-  '  proceed-mcp origin add <origin_id> --url <url> --password-env <name> [--state-dir <directory>]',
+  '  proceed-mcp owner add <owner_id> --label <label> [--state-dir <directory>]',
   '  proceed-mcp serve [--state-dir <directory>]',
   '  proceed-mcp pair [--state-dir <directory>]',
   '  proceed-mcp mcp --origin <origin_id> [--state-dir <directory>]',
   '  proceed-mcp status [--request <request_id>] [--json] [--state-dir <directory>]',
   '  proceed-mcp retry <request_id> [--state-dir <directory>]',
+  '  proceed-mcp origin add <origin_id> --url <url> --password-env <name> [--state-dir <directory>]',
   '',
   'State directory: --state-dir, then PROCEED_STATE_DIR, then <home>/.proceed-mcp.',
-  'Origin URL: http://127.0.0.1:<explicit-port> with no path, query, fragment or credentials.',
+  'Owner ids: [a-z0-9_-]{1,64}; labels: 1-128 characters, display only.',
+  'Origin URL (previous configuration schema only): http://127.0.0.1:<explicit-port>',
+  'with no path, query, fragment or credentials.',
   '',
   'The Telegram token is read from the environment, never from state or arguments.',
   '`doctor` is a documented target that this build does not implement.',
@@ -86,14 +89,48 @@ async function runInit(argv, { stdout, env }) {
       'Empty journal created; pairing, requests and decisions are not configured yet.',
       '',
       'Remaining setup - this command verified none of it:',
-      '  1. proceed-mcp origin add <origin_id> --url http://127.0.0.1:<port> --password-env <PASSWORD_ENV>',
+      '  1. proceed-mcp owner add <owner_id> --label <label>   (with the broker stopped)',
       `  2. Set ${TELEGRAM_TOKEN_ENV} in the broker environment; the Telegram token is never stored in state.`,
-      '  3. Start "proceed-mcp serve", pair once with "proceed-mcp pair", then wire "proceed-mcp mcp --origin <origin_id>"',
-      '     into that OpenCode host as a local MCP server.',
+      '  3. Broker startup, pairing and MCP wiring are later checkpoints: "serve", "pair",',
+      '     "status" and "mcp" in this build still read the previous configuration schema',
+      '     and refuse this schema 2 state until their own switch lands.',
       '',
     ].join('\n'),
   );
   return EXIT_CODE.OK;
+}
+
+async function runOwnerAdd(argv, { stdout, env }) {
+  const { positionals, options } = parseArguments(argv, {
+    valueOptions: ['state-dir', 'label'],
+  });
+  if (positionals.length !== 1) {
+    throw invalidArgument('owner add requires exactly one owner_id');
+  }
+  requireOptions(options, ['label']);
+
+  const result = await addOwner(commandStatePaths(options, env), {
+    ownerId: positionals[0],
+    label: options.get('label'),
+  });
+
+  stdout.write(
+    [
+      `Added owner ${result.owner.owner_id} (label ${JSON.stringify(result.owner.label)})`,
+      `Owner credential written to ${result.ownerCredentialFile} (value not shown)`,
+      'No service was started; broker and MCP wiring are later steps.',
+      '',
+    ].join('\n'),
+  );
+  return EXIT_CODE.OK;
+}
+
+async function runOwnerCommand(argv, context) {
+  const [subcommand, ...rest] = argv;
+  if (subcommand !== 'add') {
+    throw invalidArgument('owner supports only "add"');
+  }
+  return runOwnerAdd(rest, context);
 }
 
 async function runOriginAdd(argv, { stdout, env }) {
@@ -314,6 +351,7 @@ async function dispatch(argv, context) {
     return EXIT_CODE.OK;
   }
   if (command === 'init') return runInit(rest, context);
+  if (command === 'owner') return runOwnerCommand(rest, context);
   if (command === 'origin') return runOriginCommand(rest, context);
   if (command === 'serve') return runServe(rest, context);
   if (command === 'pair') return runPair(rest, context);

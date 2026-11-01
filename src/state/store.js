@@ -1,33 +1,60 @@
-// Empty-state setup operations: `init` and `origin add` (design section 2).
+// Empty-state setup operations: `init` and `owner add` (design section 2).
 // Neither command starts a service, contacts Telegram, or contacts OpenCode.
 import { readFile, readdir, rm, stat } from 'node:fs/promises';
+import { createOriginBinding, parseConfigDocument, withOrigin } from '../config/config.js';
 import {
   createEmptyConfig,
-  createOriginBinding,
-  parseConfigDocument,
+  createOwner,
+  parseConfigDocument as parsePortableConfigDocument,
   serializeConfig,
-  withOrigin,
-} from '../config/config.js';
+  withOwner,
+} from '../config/portable-config.js';
 import { blockedPrerequisite, invalidArgument, storageFailure } from '../errors.js';
 import { createFileHeader } from '../journal/framing.js';
 import { generateCredentialToken } from './credentials.js';
 import { writeFileAtomically } from './files.js';
+import { writeOwnerCredential } from './owner-credentials.js';
 import { createProtectedDirectory, verifyOwnerOnly } from './protection.js';
 
-async function readConfigIfPresent(paths) {
-  let text;
+async function readConfigText(paths) {
   try {
-    text = await readFile(paths.configFile, 'utf8');
+    return await readFile(paths.configFile, 'utf8');
   } catch (cause) {
     if (cause?.code === 'ENOENT') return null;
     throw storageFailure(`could not read ${paths.configFile}`, 'STORAGE_FAILURE', cause);
   }
-  return parseConfigDocument(text);
+}
+
+// The schema-1 readers below still serve the broker, pairing, status, retry and
+// MCP consumers until their own authorized switch. A schema-2 document is
+// refused rather than reinterpreted, so no legacy consumer silently reads
+// portable state (design Migration Plan 5).
+async function readConfigIfPresent(paths) {
+  const text = await readConfigText(paths);
+  return text === null ? null : parseConfigDocument(text);
+}
+
+async function readPortableConfigIfPresent(paths) {
+  const text = await readConfigText(paths);
+  return text === null ? null : parsePortableConfigDocument(text);
 }
 
 // Read access for commands that need an existing configuration.
 export async function loadConfiguration(paths) {
   const config = await readConfigIfPresent(paths);
+  if (config === null) {
+    throw blockedPrerequisite(
+      `no configuration at ${paths.configFile}; run "proceed-mcp init" first`,
+      'STATE_NOT_INITIALIZED',
+    );
+  }
+  return config;
+}
+
+// Portable schema-2 read access for the setup commands switched by this
+// checkpoint (init, owner add).
+export async function loadPortableConfiguration(paths) {
+  const config = await readPortableConfigIfPresent(paths);
   if (config === null) {
     throw blockedPrerequisite(
       `no configuration at ${paths.configFile}; run "proceed-mcp init" first`,
@@ -85,8 +112,30 @@ async function assertBrokerStopped(paths) {
   }
 }
 
+// Design section 2 owner-add stopped-state prerequisite: any existing
+// broker.lock record blocks the mutation, including a stale, malformed, empty or
+// unreadable one. Only an inability to establish existence or absence is a
+// storage failure, and refusing never needs the record content, so this asks
+// only whether the entry exists: no PID probe, deletion, force or recovery.
+async function assertBrokerOwnershipAbsent(paths) {
+  try {
+    await stat(paths.brokerLockFile);
+  } catch (cause) {
+    if (cause?.code === 'ENOENT') return;
+    throw storageFailure(
+      `could not establish whether ${paths.brokerLockFile} exists; owner setup needs a definite answer`,
+      'BROKER_STATE_UNKNOWN',
+      cause,
+    );
+  }
+  throw blockedPrerequisite(
+    `${paths.brokerLockFile} exists, so this state directory may belong to a running broker; stop the broker and keep that record before adding an owner`,
+    'BROKER_STATE_PRESENT',
+  );
+}
+
 export async function initializeState(paths) {
-  if ((await readConfigIfPresent(paths)) !== null) {
+  if ((await readPortableConfigIfPresent(paths)) !== null) {
     throw invalidArgument(
       `state is already initialized at ${paths.stateDir}; init never overwrites existing state`,
       'STATE_ALREADY_INITIALIZED',
@@ -173,4 +222,35 @@ export async function addOrigin(paths, { originId, url, passwordEnv }) {
   ]);
 
   return { origin, originCredentialFile };
+}
+
+// Owner addition (design section 2): an immutable transport principal plus its
+// own protected 256-bit credential. Identifiers and labels are validated, and a
+// repeated owner_id is refused, before any state is touched; the record and the
+// credential then commit together or not at all, and no token leaves its file.
+export async function addOwner(paths, { ownerId, label }) {
+  const config = await loadPortableConfiguration(paths);
+  const owner = createOwner({ ownerId, label });
+  const nextConfig = withOwner(config, owner);
+  await assertBrokerOwnershipAbsent(paths);
+  await verifyOwnerOnly([paths.stateDir, paths.credentialsDir, paths.configFile]);
+
+  const ownerCredentialFile = paths.ownerCredentialFile(owner.owner_id);
+  const created = await writeOwnerCredential(ownerCredentialFile);
+  try {
+    await writeFileAtomically(paths.configFile, serializeConfig(nextConfig));
+  } catch (error) {
+    // The owner record never committed, so the credential this call created
+    // names no principal: remove it rather than leave an unrecorded secret.
+    await rm(created.file, { force: true }).catch(() => {});
+    throw error;
+  }
+  await verifyOwnerOnly([
+    paths.stateDir,
+    paths.credentialsDir,
+    paths.configFile,
+    ownerCredentialFile,
+  ]);
+
+  return { owner, ownerCredentialFile };
 }
