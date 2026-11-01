@@ -153,8 +153,10 @@ test('PORT-BIND-RELEASE: stalled release shares finite close budget and aborts',
     assert.equal(deletes(f).length, 1);
     assert.ok(release.options.signal instanceof AbortSignal && release.options.signal.aborted);
     assert.ok(release.headers[m.REGISTRATION_HEADER] === authority(1).registration_secret);
+    const count = f.calls.length;
     held.resolve({ status: 204, body: null }); await delay(40);
     await assert.rejects(f.binding.ensure()); assert.equal(deletes(f).length, 1);
+    assert.equal(f.calls.length, count, 'late release cannot start new HTTP');
   } finally { held.resolve({ status: 204, body: null }); await f.binding.close(); privateOutput(f); }
 });
 
@@ -177,9 +179,10 @@ test('PORT-BIND-CLOSE: delayed create/heartbeat fenced; captured release and ter
       const start = performance.now(); await Promise.all([f.binding.close(), f.binding.close()]);
       assert.ok(performance.now() - start < 500, 'small injected shared shutdown budget');
       assert.ok(blocked.options.signal instanceof AbortSignal && blocked.options.signal.aborted, 'tracked HTTP cancellation');
+      const count = f.calls.length; // After close, BEFORE the held response can trigger immediate work.
       held.resolve(phase === 'heartbeat' ? { status: 204, body: null } : reply(2));
       await Promise.allSettled([pending]);
-      const count = f.calls.length;
+      assert.equal(f.calls.length, count, 'settlement cannot start immediate HTTP');
       await assert.rejects(f.binding.ensure()); await delay(50);
       assert.equal(f.calls.length, count, 'late completion cannot create timers or new HTTP');
       assert.ok(deletes(f).every(c => c.path.endsWith(authority(1).registration_id) &&

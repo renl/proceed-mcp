@@ -40,11 +40,25 @@ test('PORT-HTTP-ABORT: pre-aborted signal opens no socket; cancellation listener
 test('PORT-HTTP-ABORT: actual stalled request/partial response transport is destroyed', { timeout: 5000 }, async () => {
   for (const partial of [false, true]) await fixture(async ({ server, client, sockets }) => {
     const received = once(server, 'request'), controller = new AbortController();
-    const pending = client.request('POST', '/v1/adapter', {}, {}, { signal: controller.signal });
+    // Observe actual client-side bytes, not merely a successful server write.
+    const original = http.request; let sawData;
+    const data = new Promise(resolve => { sawData = resolve; });
+    let pending;
+    try {
+      http.request = function (...args) {
+        const request = original.apply(this, args);
+        request.once('response', response => response.once('data', chunk => sawData(chunk)));
+        return request;
+      };
+      pending = client.request('POST', '/v1/adapter', {}, {}, { signal: controller.signal });
+    } finally { http.request = original; }
     pending.catch(() => {});
     const [request, response] = await bounded(received); request.resume();
     assert.equal(request.headers.authorization, 'Bearer test-only-owner');
-    if (partial) { response.writeHead(201, { 'content-type': 'application/json' }); response.write('{'); }
+    if (partial) {
+      response.writeHead(201, { 'content-type': 'application/json' }); response.write('{');
+      assert.equal((await bounded(data)).toString(), '{');
+    }
     const socket = request.socket, closed = once(socket, 'close');
     controller.abort(); await assert.rejects(bounded(pending), error => error.code !== 'TEST_DEADLINE'); await bounded(closed);
     assert.equal(socket.destroyed, true); assert.equal(sockets.size, 0);
