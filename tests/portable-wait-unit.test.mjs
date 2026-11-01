@@ -181,6 +181,44 @@ test('WAIT-RESPONSE-001-CONTROLS: complete create201/200 pending/terminal and wa
       } finally { await f.ex.close(); }
     });
 });
+// Attempt2: design 5 Respond scalar bound; design 3/6 current ledger; design 2 privacy.
+// One changed semantic per invalid view; unrelated extensions are not under test.
+test('WAIT-RESPONSE-001-ATTEMPT2: seven observed invalid views fail closed', async t => {
+  const responded = response_text => ({ ...terminal(), resolution: 'responded', response_text });
+  const stale = { code: 'DELIVERY_BLOCKED', message: 'safe diagnostic', retryable: false };
+  const cases = [
+    ['Respond4097 scalars', reply(responded('😀'.repeat(4097))), 'wait'],
+    ['Respond malformed UTF lone surrogate', reply(responded('\ud800')), 'wait'],
+    ...['returned', 'confirmed'].map(delivery_state =>
+      [`${delivery_state} stale error`, reply({ ...terminal(), delivery_state, delivery_error: stale }), 'wait']),
+    ['authority field capability echo', reply({ ...terminal(), request_capability: args().request_capability }), 'wait'],
+    ['create201 pending confirmed', reply(view({ delivery_state: 'confirmed' }), 201), 'create'],
+    ['create200 pending returned', reply(view({ delivery_state: 'returned' })), 'create'],
+  ];
+  for (const [label, response, stage] of cases)
+    await t.test(label, () => unusable(response, stage));
+});
+test('WAIT-RESPONSE-001-ATTEMPT2-CONTROLS: scalar/nullable ledger and caller text remain valid', async t => {
+  // Existing CONTROLS covers pending not_applicable/null receipts at both201/200.
+  const callerText = `Caller quotes request_capability and ${args().request_capability}`;
+  const controls = [
+    ['Respond4096 supplementary scalars', { resolution: 'responded', response_text: '😀'.repeat(4096) }],
+    ['Respond whitespace preserved', { resolution: 'responded', response_text: ' \n\t ' }],
+    ...['returned', 'confirmed'].map(delivery_state => [`${delivery_state} null error`, { delivery_state }]),
+    ['blocked current diagnostic', { delivery_state: 'blocked', delivery_error:
+      { code: 'DELIVERY_BLOCKED', message: 'safe diagnostic', retryable: false } }],
+    ['caller-authored authority-like action/context', { action: callerText, context: callerText }],
+  ];
+  for (const [label, extra] of controls) await t.test(label, async () => {
+    const expected = { ...terminal(), ...extra };
+    const f = fixture(() => reply(expected), () => reply(view({ action: expected.action, context: expected.context }), 201));
+    try {
+      const input = { ...args(), action: expected.action, context: expected.context };
+      success(await f.ex.execute('request_approval', input), expected);
+      assert.equal(f.calls.length, 1); assert.equal(f.waits.length, 1); assert.equal(f.refreshes.length, 0);
+    } finally { await f.ex.close(); }
+  });
+});
 test('WAIT-U-ENVELOPE: broker failures and malformed creation do not enter transport retry', async () => {
   for (const response of [fault('NOT_FOUND', 404), fault('STORAGE_FAILURE', 500), fault('BROKER_UNAVAILABLE', 503)]) {
     const f = fixture(() => response);
