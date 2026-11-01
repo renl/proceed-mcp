@@ -2,7 +2,7 @@
 
 Parent: [tasks](../tasks.md). Contract: [design](../design.md), sections 3/7. Product mapping: [continuation delta](../specs/opencode-session-continuation/spec.md), **Exact originating-session delivery / Capability does not cross transport principals** and **Portable waiting-call outcome delivery / Prepare then ask and wait**. This is prerequisite coverage, not completion of either outcome.
 
-**Architect bounded preparation approval received; conditional corrections resolved below and in [EOF faults](03a1c-u2b3-public-faults.md). Public tests are ready for an implementation sizing forecast, not implementation authorization or wiring acceptance.**
+**Ready for bounded implementation handoff:** Architect accepted the public lifecycle/fault preparation and focused corrections completed at `391091fb0df254e6b42b5b6c035d3c52a034b9aa`; implementation-selected cut/forecast is recorded below. This is not wiring acceptance.
 
 ## Goal and ownership
 
@@ -11,7 +11,7 @@ Founder-visible question: can an ordinary MCP adapter privately acquire, maintai
 - Worktree: `.worktree/add-telegram-approval-opencode-v2`; branch/change `add-telegram-approval-opencode-v2`; owner Test engineering. Project baseline `main@f385409792aff3d46d96b5c4f03358f10c8dc5ba`; preparation baseline `cfc0edda7520a57d3d183ee49761d619ff9918aa`.
 - Prerequisite: accepted U2b-1 `bc4ac686d66bb3cea23f4c53cffa3310b19b27a7` is present on this branch. Same worktree, sequential checkpoints, one eventual OpenSpec PR. Status active/retained, not cleanup-ready; no new worktree or promotion.
 - Owned files: `tests/support/public-registration.mjs`, `tests/portable-registration-public.test.mjs`, `tests/public-registration-consumer.test.mjs`, this slice and the mapped tasks entries. Fault packet reuses this helper without recounting it.
-- Anticipated wiring consumers are existing `src/mcp/execution.js`, `src/cli/main.js`, `src/mcp/server.js`. This preparation grants no production edits. Implementation engineering must supply its exact bounded cut and gross-line forecast before implementation routing; no invented internal exports. Public tests require no production test API. The already-selected `onInputClosed` callback/ordinary abort semantics remain implementation choices, not new test-only hooks.
+- Wiring is limited to existing `src/mcp/execution.js`, `src/mcp/server.js`, `src/cli/main.js`; exact supplied cut/forecast and post-code gates follow below. This documentation update makes no production edits. Public tests require no production test API; private executor and callback choices remain implementation-selected, not public contract additions.
 - Preserve all other owner edits, credentials/setup data and unknown artifacts. No design/product/index-owner/README/config edits, real Telegram/pairing/host/model, external scratch, install, push, PR, archive, publication or nested agents.
 
 ## Boundary Verification
@@ -47,3 +47,18 @@ Decomposition triggers **1 YES / 2 YES / 3 YES / 4 YES / 5 YES**: the wiring con
 Initial bounded combined run on baseline `cfc0edd`, Windows Node 24.22.2: syntax PASS; **1 consumer PASS / 10 public expected RED**, exit 1, 44385ms, zero cancelled/skipped. LAZY passed brokerless catalog/invalid prepare/unimplemented/no-contact/EOF and real prepare, then stopped at zero registrations versus one. RESTART stopped at the same missing binding before heartbeat. Fault stopping points are recorded separately. Subsequent additions expand invalid-call coverage and strengthen downstream shared-budget/privacy assertions; final evidence follows in tasks. All downstream registration/duplicate/heartbeat/restart/release assertions remain unexecuted. Managed process/directory and relay socket/listener cleanup PASS separately. This is not wiring acceptance.
 
 Correction parent `119bfb23`: public assertion now explicitly labels registration reuse, not public single-flight. No production concurrency change is required; execution remains serialized until the waiting unit. Accepted binding-unit single-flight evidence is reused unchanged, not replayed or promoted into public proof. Corrected current run and separate correction size are recorded in tasks.
+
+## Bounded implementation handoff — 2026-11-01
+
+Preparation HEAD `391091fb0df254e6b42b5b6c035d3c52a034b9aa`; same retained worktree/branch and project baseline above. Reuse reviewed preparation **475 gross / 7 paths** and focused correction **78 / 6 paths** as separate existing review units. Unchanged tests are not new production lines. Supplied source-grounded production forecast is **145–195 gross**, ceiling **220**, only the three wiring paths above. Recount actual production at acceptance; return scope/ceiling growth through coordination before expanding.
+
+Implementation-selected cut (not additional production design): private executor returns `{execute,close}`. One ordinary `AbortController` aborts actual local-client requests; close fences work, then awaits existing `registration.close` within one shared budget. Server `onInputClosed` runs immediately on stdin closure **before** draining the serialized execution chain and skips queued work. CLI constructs binding/executor and closes once in `finally`. Existing binding, local-client and broker stay unchanged; no new public API or test shape. Preserve valid-input/lazy-registration ordering and brokerless catalog behavior.
+
+Post-code acceptance, in order, using the Node/environment and bounded harness above:
+
+1. Syntax-check the three wiring modules and existing four public test/helper files (10s each).
+2. Consumer/public lifecycle command above (120s), including actual production **10s** heartbeat and retained-adapter restart; then the EOF/fault packet command (180s). Both packets must pass; downstream RED barriers cannot be credited as proof.
+3. Binding/actual abort: `& $Node24 --test tests/portable-registration-binding.test.mjs tests/local-client-abort.test.mjs` (20s); U2a: `& $Node24 --test tests/portable-registration-unit.test.mjs tests/portable-registration-http.test.mjs` (100s); affected U1/setup/CLI/catalog/reservation: `& $Node24 --test tests/portable-setup.test.mjs tests/portable-setup-cli-checkpoint.test.mjs tests/portable-mcp-catalog.test.mjs` (300s).
+4. Review source ordering (immediate EOF fencing before drain, actual ordinary abort, captured release/shared 2000ms budget, no queued broker work, closed errors); `& $Node24 scripts/build.mjs` (30s), formatter above (30s), scoped production/owned-doc `git diff --check` (10s). Record assertion and owned cleanup verdicts separately, including process/directory/socket absence and listener rebind.
+
+Readiness recheck: existing decomposition **1–5 YES** and boundary/test-artifact conditions are covered by supplied Architect acceptance; the combined release barrier is corrected. No new cross-unit contract or assertion is introduced here, so no further blanket review is required. A source/contract conflict returns for focused review; do not weaken assertions. Existing **1 consumer PASS / 10 public expected RED** is reused, not rerun for unchanged readiness; downstream lifecycle/fault assertions remain unexecuted. Implementation must pass the gates above before bounded wiring acceptance. No waiting, Telegram, Events, feature, release or promotion claim; worktree remains active/retained, not cleanup-ready.
