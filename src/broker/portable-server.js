@@ -6,7 +6,8 @@
 // before authentication, so no CORS allowance exists on any route. Only a
 // completed durable reservation is acknowledged here: pairing and retry are
 // honest temporary unavailability in this setup checkpoint (design section 3),
-// and no request, wait or delivery route exists yet.
+// and the reserved request routes verify authority only to deny, because a
+// reservation is not yet an actionable request. No wait or delivery route exists.
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import {
@@ -25,6 +26,11 @@ export const MAX_BODY_BYTES = 64 * 1024;
 
 const PAIRING_UNAVAILABLE = 'pairing is not implemented in this setup checkpoint';
 const RETRY_UNAVAILABLE = 'request retry is not implemented in this setup checkpoint';
+const REQUEST_CAPABILITY_HEADER = 'x-proceed-request-capability';
+// One denial for every reserved outcome: an unknown request, a reservation with
+// no committed approval, and a missing, malformed, foreign or mismatched
+// capability must be indistinguishable here.
+const RESERVED_DENIAL = 'no such request';
 
 const STORAGE_ENVELOPE = Object.freeze({
   schema_version: 1,
@@ -34,6 +40,16 @@ const STORAGE_ENVELOPE = Object.freeze({
     retryable: false,
   },
 });
+
+// Recognized reserved routes only. A different method, an extra segment or any
+// other suffix stays an unknown route, so route recognition itself never passes
+// for an authorized lookup.
+function reservedRoute(method, segments) {
+  if (segments.length === 3 && method === 'GET') return 'read';
+  if (segments.length !== 4 || method !== 'POST') return null;
+  if (segments[3] === 'cancel' || segments[3] === 'acknowledge') return segments[3];
+  return null;
+}
 
 function constantTimeEquals(left, right) {
   const a = Buffer.from(left ?? '', 'utf8');
@@ -126,11 +142,35 @@ export function createPortableServer({ broker, credentials, port, logger = () =>
     send(response, 201, reservation);
   };
 
+  const requestCapability = (request) => {
+    const value = request.headers[REQUEST_CAPABILITY_HEADER];
+    return typeof value === 'string' ? value : undefined;
+  };
+
+  // A reserved handle has no committed approval, so nothing is readable yet and
+  // every owner outcome below is the same nondisclosing denial. The lookup still
+  // runs, binding the credential-derived owner, the exact path request ID and the
+  // header capability together; an absent route can never produce this denial.
+  const reserved = async (request, response, principal, segments) => {
+    if (!requireRole(response, principal, 'owner')) return;
+    // Malformed input is reported before any lookup, so validation does not
+    // depend on whether the named request exists.
+    if (request.method === 'POST') await readJsonBody(request);
+    // The result is intentionally not used: a reservation has no committed
+    // approval, so a valid capability and a wrong one deny identically here.
+    void broker.authorize({
+      ownerId: principal.ownerId,
+      capability: requestCapability(request),
+      requestId: segments[2],
+    });
+    throw notFound(RESERVED_DENIAL);
+  };
+
   const route = async (request, response, principal, url) => {
     const { pathname } = url;
     const segments = pathname.split('/').filter((segment) => segment !== '');
-    const requestRoute =
-      segments.length === 4 && segments[0] === 'v1' && segments[1] === 'requests';
+    const requestsPath = segments[0] === 'v1' && segments[1] === 'requests';
+    const requestRoute = requestsPath && segments.length === 4;
 
     if (request.method === 'POST' && pathname === '/v1/handles') {
       if (requireRole(response, principal, 'owner')) await reserve(request, response, principal);
@@ -139,6 +179,11 @@ export function createPortableServer({ broker, credentials, port, logger = () =>
 
     if (request.method === 'GET' && pathname === '/v1/status') {
       if (requireRole(response, principal, 'control')) send(response, 200, broker.status());
+      return;
+    }
+
+    if (requestsPath && reservedRoute(request.method, segments) !== null) {
+      await reserved(request, response, principal, segments);
       return;
     }
 

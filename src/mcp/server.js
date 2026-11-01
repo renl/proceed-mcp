@@ -1,9 +1,11 @@
 // Stdio MCP adapter (design sections 2 and 3). It serves one protected transport
 // principal chosen by the operator and speaks only standard MCP over
 // newline-delimited JSON-RPC: no harness API, password, host version admission or
-// proprietary session metadata. Tool execution needs the broker and is a later
-// authorized unit, so every tools/call answers ENHANCEMENT_UNAVAILABLE instead of
-// pretending to prepare, wait for or deliver a decision.
+// proprietary session metadata. Tool execution forwards to the authenticated
+// loopback broker, so preparation reserves real durable authority and the
+// reserved management calls report the broker's denial; the waiting tool is a
+// later authorized unit and still answers ENHANCEMENT_UNAVAILABLE rather than
+// pretending to wait for or deliver a decision.
 import { createInterface } from 'node:readline';
 import {
   CLIENT_REQUEST_ID_PATTERN,
@@ -23,24 +25,27 @@ const pattern = (expression) => ({ type: 'string', pattern: expression.source })
 
 const INSTRUCTIONS = [
   'proceed-mcp asks the paired human operator to approve, reject or respond to one stated action, and returns their decision to the waiting MCP call.',
-  'Call prepare_approval first: it reserves durable request identity and a private request capability, and sends no question to the human.',
+  'Call prepare_approval first: prepare_approval is available in this build and reserves durable request identity and a private request capability through the running local broker, sending no question to the human.',
   'Then call request_approval with the returned request_handle and request_capability; that call waits for the human resolution, expiry or cancellation and returns the outcome itself.',
   'Keep the request capability private and retain it with its request_handle and request_id, because it is the only authority for a later get_approval, cancel_approval or acknowledge_approval call.',
   'Never echo, print or otherwise expose the request capability in an assistant message or a Telegram message.',
+  'request_approval returns ENHANCEMENT_UNAVAILABLE in this build: no question is sent and no human outcome is delivered yet.',
+  'Reserved get_approval, cancel_approval and acknowledge_approval calls return NOT_FOUND only, because a prepared reservation is not yet an actionable request and a wrong capability is indistinguishable from it.',
   'A received terminal decision_id must be acknowledged with acknowledge_approval and reported to the operator with its request_id and outcome; deduplicate by request_id and decision_id before acting on it.',
   'A rejection forbids the requested action; a response is instructions only and never an approval; pending, expired, cancelled and failed requests grant nothing, so an action that still needs approval requires a new request.',
-  'Tool execution is not implemented in this build: every tools/call returns ENHANCEMENT_UNAVAILABLE, so this catalog advertises the workflow without preparing, waiting for or delivering any decision.',
 ].join('\n');
 
-const NOT_EXECUTED = 'This build returns ENHANCEMENT_UNAVAILABLE instead of executing the call.';
+const RESERVED_ONLY =
+  'Available in this build for capability-authenticated calls, but a prepared reservation has no approval yet, so it returns NOT_FOUND only.';
 
 // Design section 3 tool contracts. Argument names, required sets and bounds are
-// the reviewed public interface; the effects are the target behavior of the later
-// execution unit, and each description says so rather than implying it exists.
+// the reviewed public interface. Each description states what this build actually
+// does, so prepare availability is never mistaken for a waiting outcome.
 const TOOLS = [
   {
     name: 'prepare_approval',
-    description: `Reserve durable request identity and a private request capability for one later approval; no Telegram question is sent. ${NOT_EXECUTED}`,
+    description:
+      'Reserve durable request identity and a private request capability for one later approval; no Telegram question is sent. prepare_approval is available in this build and writes that reservation through the running local broker.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -52,7 +57,8 @@ const TOOLS = [
   },
   {
     name: 'request_approval',
-    description: `Create or reuse the request of an authorized prepared handle and keep this call waiting for the human resolution, expiry or cancellation; the actual outcome is this call's result. ${NOT_EXECUTED}`,
+    description:
+      'Create or reuse the request of an authorized prepared handle and keep this call waiting for the human resolution, expiry or cancellation; the result of this call is the actual outcome. request_approval returns ENHANCEMENT_UNAVAILABLE in this build, so no question is sent and no outcome exists yet.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -69,7 +75,7 @@ const TOOLS = [
   },
   {
     name: 'get_approval',
-    description: `Read only the capability-authorized request, applying expiry before the read; no delivery side effect. ${NOT_EXECUTED}`,
+    description: `Read only the capability-authorized request, applying expiry before the read; no delivery side effect. ${RESERVED_ONLY}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -82,7 +88,7 @@ const TOOLS = [
   },
   {
     name: 'cancel_approval',
-    description: `Cancel only the capability-authorized pending request; a terminal outcome that already exists is returned unchanged. ${NOT_EXECUTED}`,
+    description: `Cancel only the capability-authorized pending request; a terminal outcome that already exists is returned unchanged. ${RESERVED_ONLY}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -95,7 +101,7 @@ const TOOLS = [
   },
   {
     name: 'acknowledge_approval',
-    description: `Record that the capability holder received the matching terminal outcome; idempotent, never creating a second decision or a continuation. ${NOT_EXECUTED}`,
+    description: `Record that the capability holder received the matching terminal outcome; idempotent, never creating a second decision or a continuation. ${RESERVED_ONLY}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -109,27 +115,11 @@ const TOOLS = [
   },
 ];
 
-// Tool error envelope (design section 3). Nothing in this build may stand in for
-// a prepared handle, a waiting outcome or a recorded decision, so a known tool
-// reports the missing execution unit and claims no effect.
-const EXECUTION_UNAVAILABLE = Object.freeze({
-  schema_version: 1,
-  error: {
-    code: 'ENHANCEMENT_UNAVAILABLE',
-    message: 'MCP tool execution is not implemented in this build; only catalog discovery runs',
-    retryable: false,
-  },
-});
-
-function unavailableResult() {
-  return {
-    content: [{ type: 'text', text: JSON.stringify(EXECUTION_UNAVAILABLE) }],
-    structuredContent: EXECUTION_UNAVAILABLE,
-    isError: true,
-  };
-}
-
-export async function runMcpServer({ stdin = process.stdin, stdout = process.stdout } = {}) {
+export async function runMcpServer({
+  stdin = process.stdin,
+  stdout = process.stdout,
+  execute,
+} = {}) {
   const write = (message) =>
     new Promise((resolve) => {
       stdout.write(`${JSON.stringify(message)}\n`, () => resolve());
@@ -177,7 +167,20 @@ export async function runMcpServer({ stdin = process.stdin, stdout = process.std
           error: { code: -32601, message: `unknown tool ${String(name)}` },
         };
       }
-      return { jsonrpc: '2.0', id: message.id, result: unavailableResult() };
+      // An adapter started without a broker connection must not answer as if the
+      // call executed; that is a wiring failure, not a product outcome.
+      if (typeof execute !== 'function') {
+        return {
+          jsonrpc: '2.0',
+          id: message.id,
+          error: { code: -32603, message: 'tool execution is not connected' },
+        };
+      }
+      return {
+        jsonrpc: '2.0',
+        id: message.id,
+        result: await execute(name, message.params?.arguments),
+      };
     }
     if (typeof message.id === 'undefined') return null;
     return { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'method not found' } };
