@@ -4,6 +4,32 @@ Parent: [tasks](../tasks.md). Contract: [design](../design.md), sections 3/7. Pr
 
 **Ready for bounded implementation handoff:** Architect accepted the public lifecycle/fault preparation and focused corrections completed at `391091fb0df254e6b42b5b6c035d3c52a034b9aa`; implementation-selected cut/forecast is recorded below. This is not wiring acceptance.
 
+## Independent affected verdict — 2026-11-01
+
+**PASS, bounded enabling only.** Immutable code candidate `0d94855e3a288d3439287e510495f5eaa64818b9`, project baseline unchanged. Exactly three authorized production paths: 122 additions + 20 deletions = **142 gross / 220 ceiling**. No production/test/dependency/configuration edits during verification. Historical readiness/RED statements below are superseded for this bounded scope only.
+
+Executed on Windows project Node **24.22.2**, using the ordered commands below:
+
+| Check | Result / assertion scope |
+|---|---|
+| Seven production/test/helper syntax checks | PASS, exit 0 |
+| Consumer + public lifecycle, 120s bound | **3/3 PASS**, exit 0, 41286ms: one consumer calibration proxy, two actual public executable/real private-broker tests |
+| EOF/fault packet, 180s bound | **8/8 PASS**, exit 0, 72863ms; mapping in fault verdict |
+| Binding/actual local HTTP abort | **10/10 PASS**, exit 0, 1260ms; fake-client binding assertions remain unit evidence, actual abort tests exercise real HTTP |
+| U2a registry/public HTTP | **5/5 PASS**, exit 0, 10206ms; controlled-clock lease logic is not 45s wall-clock proof |
+| Setup/CLI/catalog/reservation, 300s bound | **14/14 PASS**, exit 0, 45208ms; both PORT-RESERVE plus three setup, eight CLI and one catalog |
+| Build / formatter / candidate whitespace | PASS, exit 0; 36 production modules parse; formatter excludes tests/OpenSpec |
+
+Zero failed/cancelled/skipped in every run. Binding and U2a ran sequentially in one 120s outer command, with finite repository test deadlines. These and setup regressions were rerun to cover changed wiring, not counted as public lifecycle proof. Untouched helper/authority/strict-consumer evidence remains reusable only within its pinned original scope; no blanket historical suite replay or acceptance.
+
+Direct public proof: brokerless catalog/invalid/unknown/unimplemented/EOF cause zero HTTP; valid preparation registers first; serialized submitted calls reuse registration; duplicate owner gets `OWNER_IN_USE` without handle/journal mutation or incumbent deletion; EOF releases captured authority and immediate replacement succeeds. The SAME retained adapter observes real production heartbeat after at least 9500ms, real broker restart rejects its old heartbeat with 401, re-registration occurs without another tool call, and replacement heartbeat again uses production cadence. No preparation replay. Captured owner/registration authority authenticates lifecycle traffic and never appears in bounded stdout/stderr through shutdown.
+
+Source review: `server.js` raises its closed fence and invokes `onInputClosed` before chain drain; queued closures check the fence and suppress post-close writes. Executor close immediately aborts ordinary requests, then awaits terminal/idempotent binding close. CLI callback/finally share that close promise rather than restarting cleanup. Binding retains **10000ms heartbeat / 2000ms shutdown** defaults; captured release uses the sole shutdown timer. No independent drain timeout extends it. Closed tool-code validation redacts unknown/malformed envelopes. Execution remains serialized: this is **not** overlapping public execution/single-flight proof and is incomplete for concurrent waiting. Unit single-flight remains separate evidence.
+
+Cleanup **PASS separately**: harness verifies registered owned process absence and run-directory removal; relay asserts actual socket set empty, listener close and same-port rebind. Recovery teardown is not EOF assertion evidence. Unknown artifacts untouched; worktree remains active/retained, not cleanup-ready. Native Windows stdio/loopback represents this bounded local boundary only; no other OS, real host/model, Telegram, waiting, Events, first-use, integrated feature or release proof. Existing seven dirty owner documents and nine untracked entries remain outside this evidence commit. Later finalization must remain evidence-only or require affected revalidation.
+
+Next prerequisite: coherent request/wait plus Telegram vertical preparation against approved contracts and full PORT-A/PORT-B gates, with implementation-selected bounded cuts/paths/gross forecast and applicable decomposition/boundary review. Shared-stdio concurrency/original-RPC correlation, registration-bound wait/returned authority, durable terminal outcomes and real Telegram boundary proof remain required. Do not prescribe a registration-header accessor or concurrency API; private design belongs to implementation engineering. Baseline toolkit is standard MCP, not an OpenCode callback.
+
 ## Goal and ownership
 
 Founder-visible question: can an ordinary MCP adapter privately acquire, maintain and release its broker registration without making catalog use depend on a running broker? Direct proof is public executable/MCP output plus authenticated real broker HTTP lifecycle; journal byte preservation and consumer calibration are supporting proxies. None proves a human decision or cancellation of an actionable approval.

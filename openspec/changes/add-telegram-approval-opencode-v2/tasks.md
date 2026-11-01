@@ -1,5 +1,11 @@
 # Tasks
 
+## U2b independent verification — current disposition (2026-11-01)
+
+- [x] P.D2-U2b-wiring-verified Bounded public adapter lifecycle/fault candidate `0d94855e3a288d3439287e510495f5eaa64818b9` independently **PASS**, ENABLING ONLY. Supersedes earlier wiring-pending/expected-RED entries below, not waiting/feature acceptance. Three authorized production paths, **142 gross / 220 ceiling**. Windows project Node 24.22.2: **1 consumer calibration + 2 actual public lifecycle + 8 actual public faults + 10 binding/abort + 5 U2a + 14 affected regression PASS**, zero failed/cancelled/skipped. Syntax/build/format/candidate whitespace PASS. [Exact commands/results, source trace and proof limits](slices/03a1c-u2b2-public-lifecycle.md#independent-affected-verdict--2026-11-01), [fault mapping](slices/03a1c-u2b3-public-faults.md#independent-affected-verdict--2026-11-01).
+- Assertion PASS and owned process/directory/socket/listener cleanup PASS separately. Code/tests/dependencies/configuration unchanged throughout verification; initial seven dirty tracked owner documents, nine untracked entries and empty index preserved outside this evidence commit. Finalization changes only this file and the two public slices. No complete integrated-feature verdict or release proof.
+- Next prerequisite: coherent actual request/wait and Telegram vertical preparation against approved design and full PORT-A/PORT-B gates, using implementation-selected bounded cuts, paths/gross forecast and applicable decomposition/boundary review. Resolve concurrent shared-stdio original-RPC correlation, registration-bound wait/returned authority, durable outcomes and real Telegram proof; do not invent a registration-header accessor or concurrency API. Standard MCP is the toolkit baseline, not an OpenCode callback. No waiting/Telegram/host/model/Events/first-use acceptance. Retain worktree; no promotion, PR, archive or cleanup authorization.
+
 ## Portable correction — current disposition (2026-10-31)
 
 The corrected proposal/specs/design supersede the OpenCode-API-specific implementation criteria below. Earlier evidence remains historical, not a portable waiting-call or Events pass. Stale host/API calibration is paused; no allowlist bypass or event-wire implementation is authorized.
@@ -107,8 +113,8 @@ Direct proof is real Telegram interaction followed by that exact session's ackno
 | branch / change | `add-telegram-approval-opencode-v2` |
 | baseline | `main` and fetched `origin/main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba` |
 | owner | Test engineering (lifecycle); implementation engineering (implementation custody) |
-| status | active / retained, not cleanup-ready; U1 and U2a accepted ENABLING ONLY; U2b-1 independently PASS at `bc4ac68` (10 binding/abort + 5 U2a + 14 regressions); public binding/waiting incomplete; live/Events BLOCKED |
-| next action | Ready for bounded three-path wiring handoff: [U2b-2 cut/sequence](slices/03a1c-u2b2-public-lifecycle.md#bounded-implementation-handoff--2026-11-01), [U2b-3 fault conditions](slices/03a1c-u2b3-public-faults.md#bounded-fault-handoff-conditions--2026-11-01); 145–195 production gross / 220 ceiling. Then independent public/affected acceptance; preserve unknown artifacts, no promotion or first-use claim. |
+| status | active / retained, not cleanup-ready; U1/U2a/U2b accepted ENABLING ONLY; public lifecycle/fault candidate `0d94855` PASS; waiting incomplete; live/Events BLOCKED |
+| next action | Prepare coherent waiting/Telegram vertical decomposition after accepted public lifecycle/fault prerequisites above. Obtain implementation-selected bounded cuts/forecast and applicable reviews; preserve unknown artifacts, no promotion or first-use claim. |
 | cleanup evidence | Initial registry contained only repository root on `chore/project-workflow`; no pre-existing dangling worktree. No removal authorized now. After verified landing return to current `main`, verify registry/directory removal; retain unknown work. |
 
 Root bootstrap originals remain untouched. Worktree copies are the delivery artifacts; do not implement in the root or silently overwrite newer owner edits there. No publication, archive, license selection, or PR operation is authorized by this setup.
