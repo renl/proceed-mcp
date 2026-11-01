@@ -142,8 +142,12 @@ test('WAIT-CORE-TURNOVER: before/at deadline, later closure and core close detac
   const p = h.ps[0]; h.now += 59999; assert.deepEqual(await h.b.waitRequest(bind(p)), { state: 'pending' });
   const turning = h.b.waitRequest(bind(p)); await h.b.readRequest(bind(h.ps[2])); h.now++;
   const v = (await turning).request; assert.equal(v.resolution, 'expired'); assert.equal(v.delivery_state, 'pending');
-  const bytes = await h.bytes(), c = new AbortController(), active = h.b.waitRequest({ ...bind(h.ps[1]), signal: c.signal });
-  await h.b.close(); assert.deepEqual(await active, { state: 'detached' }); assert.deepEqual(await h.bytes(), bytes); assert.equal(getEventListeners(c.signal, 'abort').length, 0);
+   const future = h.ps[2]; await h.b.createRequest({ ...bind(future), requestHandle: future.request_handle, clientRequestId: 'future', action: 'Still pending?', context: '', expiresInSeconds: 60 });
+   const bytes = await h.bytes(), c = new AbortController(), active = h.b.waitRequest({ ...bind(future), signal: c.signal });
+   await bounded(async () => { assert.equal((await h.b.readRequest(bind(future))).resolution, 'pending'); assert.deepEqual(await h.b.waitRequest(bind(future)), { state: 'conflict' }); }, 800, 'future pending waiter admitted before close');
+   assert.ok(getEventListeners(c.signal, 'abort').length > 0); await bounded(() => h.b.close(), 800, 'close drains admitted wait');
+   assert.deepEqual(await active, { state: 'detached' }); assert.equal(getEventListeners(c.signal, 'abort').length, 0); assert.deepEqual(await h.bytes(), bytes);
+   await h.reopen(); assert.deepEqual(await h.b.waitRequest(bind(future)), { state: 'pending' }); assert.deepEqual(await h.bytes(), bytes);
 }));
 test('WAIT-HTTP-ORDER: actual wire validation/auth precedence, denial has no deadline effects', opts, () => run(async h => {
   const p = h.ps[0], path = `/v1/requests/${p.request_id}/wait`, r = await h.reg(), before = await h.bytes(), samples = h.counts(); h.regNow += 44000; h.now += 60000;
@@ -169,7 +173,7 @@ for (const outcome of ['clock', 'append', 'duplicate', 'abort', 'immediate', 'wa
   else if (outcome === 'immediate') { const v = await h.b.cancelRequest(bind(p)); assert.deepEqual(await h.wait(p, r).p, { status: 200, body: v }); }
   else {
     x = await h.admit(p, r);
-    if (outcome === 'duplicate') { code(await h.wait(p, r).p, 409, 'WAIT_ALREADY_ACTIVE'); h.regNow++; code(await x.p, 401, 'AUTH_REQUIRED'); }
+     if (outcome === 'duplicate') { code(await h.wait(p, r).p, 409, 'WAIT_ALREADY_ACTIVE'); h.regNow += 1000; code(await x.p, 401, 'AUTH_REQUIRED'); }
     else if (outcome === 'abort') { const detached = gate(); h.waitSignal.addEventListener('abort', detached.release, { once: true }); x.abort(); await assert.rejects(x.p); await bounded(() => detached.promise, 800, 'abort cleanup'); }
     else { if (outcome === 'append') h.sync = async () => { throw storageFailure('synthetic wake append failure'); };
       const closing = h.call(`/v1/requests/${p.request_id}/cancel`, {}, { headers: cap(p) });
@@ -177,7 +181,7 @@ for (const outcome of ['clock', 'append', 'duplicate', 'abort', 'immediate', 'wa
       else { assert.equal((await closing).status, 200); assert.equal((await x.p).status, 200); }
     }
   }
-  if (outcome !== 'duplicate') h.regNow++;
+   if (outcome !== 'duplicate') h.regNow += 1000;
   if (['immediate', 'wake'].includes(outcome)) { code(await h.call('/v1/adapter'), 409, 'OWNER_IN_USE'); h.regNow += 44000; }
   const replacement = await h.reg(); code(await h.wait(p, r).p, 401, 'AUTH_REQUIRED');
   if (outcome !== 'append') { const retry = await h.wait(p, replacement).p; assert.ok([200, 204].includes(retry.status), 'no leaked conflict after prior settlement/fault'); }
