@@ -68,6 +68,9 @@ export async function startPortableRuntime({
       broker,
       credentials: { control, owners },
       port: config.broker.port,
+      // One clock drives lease expiry in production; the listener creates its
+      // registry from it, so nothing selects a test-only route or interval.
+      clock,
       logger,
     });
     try {

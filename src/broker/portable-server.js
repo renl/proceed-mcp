@@ -7,7 +7,8 @@
 // completed durable reservation is acknowledged here: pairing and retry are
 // honest temporary unavailability in this setup checkpoint (design section 3),
 // and the reserved request routes verify authority only to deny, because a
-// reservation is not yet an actionable request. No wait or delivery route exists.
+// reservation is not yet an actionable request. Adapter registration is an
+// ephemeral reachability lease here and never touches approval state.
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import {
@@ -21,12 +22,17 @@ import {
   unavailable,
 } from '../errors.js';
 import { isPlainObject } from '../util/values.js';
+import { createRegistrationRegistry } from './registration.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
 
 const PAIRING_UNAVAILABLE = 'pairing is not implemented in this setup checkpoint';
 const RETRY_UNAVAILABLE = 'request retry is not implemented in this setup checkpoint';
 const REQUEST_CAPABILITY_HEADER = 'x-proceed-request-capability';
+const REGISTRATION_HEADER = 'x-proceed-registration';
+// One denial for every rejected registration authentication: missing, malformed,
+// wrong, foreign, unknown and expired all stay indistinguishable here.
+const REGISTRATION_DENIAL = 'registration authentication required';
 // One denial for every reserved outcome: an unknown request, a reservation with
 // no committed approval, and a missing, malformed, foreign or mismatched
 // capability must be indistinguishable here.
@@ -64,6 +70,12 @@ function send(response, status, body) {
   response.setHeader('content-type', 'application/json; charset=utf-8');
   response.setHeader('content-length', String(Buffer.byteLength(payload)));
   response.end(payload);
+}
+
+// Lifecycle successes carry no representation at all.
+function sendNoContent(response) {
+  response.statusCode = 204;
+  response.end();
 }
 
 // A validation or blocked-prerequisite message is safe to return; a storage
@@ -105,9 +117,18 @@ async function readJsonBody(request) {
   return value;
 }
 
-export function createPortableServer({ broker, credentials, port, logger = () => {} } = {}) {
+export function createPortableServer({
+  broker,
+  credentials,
+  port,
+  clock = () => Date.now(),
+  logger = () => {},
+} = {}) {
   let ready = false;
   let server = null;
+  // Registrations belong to this process, so the listener that admits them also
+  // owns closing them.
+  const registrations = createRegistrationRegistry({ clock, logger });
 
   const authorize = (request) => {
     const header = request.headers.authorization;
@@ -147,6 +168,51 @@ export function createPortableServer({ broker, credentials, port, logger = () =>
     return typeof value === 'string' ? value : undefined;
   };
 
+  const registrationSecret = (request) => {
+    const value = request.headers[REGISTRATION_HEADER];
+    return typeof value === 'string' ? value : undefined;
+  };
+
+  // Registration bodies carry no fields. This runs after the caller's identity
+  // is established and, on heartbeat, before the lease can renew.
+  const requireEmptyBody = (body) => {
+    if (Object.keys(body).length > 0) throw invalidRequest('request body must contain no fields');
+  };
+
+  // Creates the ephemeral incarnation of the credential-derived owner. The body
+  // is validated before admission, so a malformed create never collides.
+  const registerAdapter = async (request, response, principal) => {
+    const body = await readJsonBody(request);
+    requireEmptyBody(body);
+    send(response, 201, await registrations.register({ ownerId: principal.ownerId }));
+  };
+
+  // Parsing precedes registration authentication, so a malformed body is invalid
+  // arguments while every rejected identifier or secret is the same denial.
+  const heartbeatAdapter = async (request, response, principal, segments) => {
+    const body = await readJsonBody(request);
+    const identity = {
+      ownerId: principal.ownerId,
+      registrationId: segments[2],
+      secret: registrationSecret(request),
+    };
+    if (!registrations.authenticate(identity)) throw authRequired(REGISTRATION_DENIAL);
+    requireEmptyBody(body);
+    if (!registrations.heartbeat(identity)) throw authRequired(REGISTRATION_DENIAL);
+    sendNoContent(response);
+  };
+
+  // Release addresses the captured incarnation only; a stale one removes nothing.
+  const releaseAdapter = (request, response, principal, segments) => {
+    const released = registrations.release({
+      ownerId: principal.ownerId,
+      registrationId: segments[2],
+      secret: registrationSecret(request),
+    });
+    if (!released) throw authRequired(REGISTRATION_DENIAL);
+    sendNoContent(response);
+  };
+
   // A reserved handle has no committed approval, so nothing is readable yet and
   // every owner outcome below is the same nondisclosing denial. The lookup still
   // runs, binding the credential-derived owner, the exact path request ID and the
@@ -170,7 +236,35 @@ export function createPortableServer({ broker, credentials, port, logger = () =>
     const { pathname } = url;
     const segments = pathname.split('/').filter((segment) => segment !== '');
     const requestsPath = segments[0] === 'v1' && segments[1] === 'requests';
+    const adapterPath = segments[0] === 'v1' && segments[1] === 'adapter';
     const requestRoute = requestsPath && segments.length === 4;
+
+    // Route shape precedes the role check, so an unknown adapter path stays 404.
+    if (adapterPath && request.method === 'POST' && segments.length === 2) {
+      if (requireRole(response, principal, 'owner')) {
+        await registerAdapter(request, response, principal);
+      }
+      return;
+    }
+
+    if (adapterPath && request.method === 'DELETE' && segments.length === 3) {
+      if (requireRole(response, principal, 'owner')) {
+        releaseAdapter(request, response, principal, segments);
+      }
+      return;
+    }
+
+    if (
+      adapterPath &&
+      request.method === 'POST' &&
+      segments.length === 4 &&
+      segments[3] === 'heartbeat'
+    ) {
+      if (requireRole(response, principal, 'owner')) {
+        await heartbeatAdapter(request, response, principal, segments);
+      }
+      return;
+    }
 
     if (request.method === 'POST' && pathname === '/v1/handles') {
       if (requireRole(response, principal, 'owner')) await reserve(request, response, principal);
@@ -242,6 +336,9 @@ export function createPortableServer({ broker, credentials, port, logger = () =>
     },
     async close() {
       ready = false;
+      // Closing the registry is terminal: no late completion may re-admit,
+      // renew or release a registration once the listener stops.
+      registrations.close();
       if (server === null) return;
       server.closeIdleConnections();
       await new Promise((resolve) => server.close(() => resolve()));
