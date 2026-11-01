@@ -5,7 +5,8 @@
 // loopback broker, so preparation reserves real durable authority and the
 // reserved management calls report the broker's denial; the waiting tool is a
 // later authorized unit and still answers ENHANCEMENT_UNAVAILABLE rather than
-// pretending to wait for or deliver a decision.
+// pretending to wait for or deliver a decision. Closing stdin starts cleanup
+// immediately: submitted work that has not begun never reaches the broker.
 import { createInterface } from 'node:readline';
 import {
   CLIENT_REQUEST_ID_PATTERN,
@@ -119,6 +120,7 @@ export async function runMcpServer({
   stdin = process.stdin,
   stdout = process.stdout,
   execute,
+  onInputClosed,
 } = {}) {
   const write = (message) =>
     new Promise((resolve) => {
@@ -188,11 +190,17 @@ export async function runMcpServer({
 
   const lines = createInterface({ input: stdin, crlfDelay: Number.POSITIVE_INFINITY });
   let chain = Promise.resolve();
+  // Design section 3/7: the closure fence is raised before the serialized chain
+  // drains, so queued work never reaches the broker after EOF and no response is
+  // written to closed input.
+  let closed = false;
 
   lines.on('line', (line) => {
+    if (closed) return;
     const text = line.trim();
     if (text === '') return;
     chain = chain.then(async () => {
+      if (closed) return;
       let message;
       try {
         message = JSON.parse(text);
@@ -203,16 +211,20 @@ export async function runMcpServer({
       const responses = Array.isArray(message) ? message : [message];
       for (const item of responses) {
         const response = await handle(item);
+        if (closed) return;
         if (response !== null) await write(response);
       }
     });
   });
 
-  const closed = new Promise((resolve) => {
+  await new Promise((resolve) => {
     lines.on('close', () => {
+      closed = true;
+      // Cleanup starts here, not after the chain drains: the execution owner fences
+      // new and in-flight broker work and closes its own transport once.
+      onInputClosed?.();
       chain.then(resolve, resolve);
     });
   });
-  await closed;
   return {};
 }

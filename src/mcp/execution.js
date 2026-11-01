@@ -1,10 +1,14 @@
-// MCP tool execution boundary (design section 3). Preparation forwards to the
-// authenticated broker reservation route, so the private capability is returned
-// only after a real durable reservation, and the reserved management calls
-// forward their authority so the broker can deny them honestly. The waiting call
-// stays unavailable until its own unit exists: a prepared reservation is never an
+// MCP tool execution boundary (design section 3). Only a valid implemented
+// operation asks the broker for admission, so a catalog-only adapter never
+// contacts it, and the first such operation establishes this adapter's private
+// registration before any business route is forwarded. Preparation then forwards
+// to the authenticated reservation route, so the private capability is returned
+// only after a real durable reservation, and the reserved management calls forward
+// their authority so the broker can deny them honestly. The waiting call stays
+// unavailable until its own unit exists: a prepared reservation is never an
 // approval and cannot stand in for a human decision.
 import { LocalRequestError } from '../http/local-client.js';
+import { RegistrationError } from './registration.js';
 import {
   DECISION_ID_PATTERN,
   REQUEST_CAPABILITY_PATTERN,
@@ -46,6 +50,33 @@ function complete(value, isError) {
 }
 
 const invalid = (message) => complete(envelope('INVALID_ARGUMENT', message, false), true);
+
+// Design section 3's tool-code list is closed: a broker value outside it is never
+// reported as a new private outcome, and a transport abort, an unreadable reply or
+// an unrecognized envelope is one redacted, retryable unavailable prerequisite.
+const TOOL_CODES = new Set([
+  'INVALID_ARGUMENT',
+  'NOT_PAIRED',
+  'BROKER_UNAVAILABLE',
+  'AUTH_REQUIRED',
+  'FORBIDDEN',
+  'OWNER_IN_USE',
+  'WAIT_ALREADY_ACTIVE',
+  'IDEMPOTENCY_CONFLICT',
+  'DECISION_MISMATCH',
+  'NOT_FOUND',
+  'ENHANCEMENT_UNAVAILABLE',
+  'STORAGE_FAILURE',
+  'UNSUPPORTED_SCHEMA',
+]);
+const UNAVAILABLE_MESSAGE = 'the broker did not return a usable result';
+
+function closedEnvelope(code, message, retryable) {
+  if (typeof message !== 'string' || typeof retryable !== 'boolean' || !TOOL_CODES.has(code)) {
+    return envelope('BROKER_UNAVAILABLE', UNAVAILABLE_MESSAGE, true);
+  }
+  return envelope(code, message, retryable);
+}
 
 // Shape rules mirror the advertised inputSchema: one object, no additional
 // properties, exactly the documented fields and their identifier formats.
@@ -93,41 +124,68 @@ function argumentProblem(name, args) {
   return null;
 }
 
-// One broker error travels unchanged: its versioned envelope already names the
-// tool error code and whether repeating the call can help.
+// One recognized broker error travels unchanged: its versioned envelope already
+// names the tool error code and whether repeating the call can help. A status or
+// body outside that documented shape proves nothing, so it is redacted.
 function outcomeOf(response) {
   if (response.status >= 200 && response.status < 300 && isPlainObject(response.body)) {
     return complete(response.body, false);
   }
-  const error = isPlainObject(response.body?.error) ? response.body.error : {};
-  const code = typeof error.code === 'string' ? error.code : 'BROKER_REJECTED';
-  const message =
-    typeof error.message === 'string' ? error.message : 'the broker rejected the call';
-  return complete(envelope(code, message, error.retryable === true), true);
+  const error =
+    isPlainObject(response.body) &&
+    response.body.schema_version === 1 &&
+    isPlainObject(response.body.error)
+      ? response.body.error
+      : {};
+  return complete(closedEnvelope(error.code, error.message, error.retryable), true);
 }
 
-export function createToolExecutor({ client }) {
+export function createToolExecutor({ client, registration }) {
+  // Ordinary broker exchanges are cancelled as one unit when the adapter closes;
+  // the registration binding cancels its own lifecycle traffic, and both stay
+  // inside the single shutdown budget.
+  const ordinary = new AbortController();
+  let closing = null;
+
   const send = async (method, path, body, headers) => {
+    let response;
     try {
-      return outcomeOf(await client.request(method, path, body, headers));
+      response = await client.request(method, path, body, headers, { signal: ordinary.signal });
     } catch (error) {
       // A missing or unreachable broker is a temporary prerequisite, not a
       // decision and not a reason to invent request authority.
       if (error instanceof LocalRequestError) {
         return complete(
-          envelope(error.code, error.message, error.code === 'BROKER_UNAVAILABLE'),
+          closedEnvelope(error.code, error.message, error.code === 'BROKER_UNAVAILABLE'),
           true,
         );
       }
       throw error;
     }
+    return outcomeOf(response);
   };
 
-  return async function execute(name, args) {
+  // Admission precedes the first implemented operation and never the catalog:
+  // initialize, discovery, invalid arguments and the unimplemented waiting call
+  // reach no broker, while a duplicate live owner surfaces as its own tool error
+  // without forwarding or mutating anything.
+  async function execute(name, args) {
     if (name === 'request_approval') return complete(WAITING_UNAVAILABLE, true);
     const problem = argumentProblem(name, args);
     if (problem !== null) return invalid(problem);
 
+    try {
+      await registration.ensure();
+    } catch (error) {
+      if (error instanceof RegistrationError) {
+        return complete(closedEnvelope(error.code, error.message, error.retryable), true);
+      }
+      throw error;
+    }
+
+    // Registration admits this adapter to the broker; it never authenticates an
+    // agent session and never replaces a request capability, so the reserved
+    // routes keep their owner-plus-capability authority exactly as before.
     if (name === 'prepare_approval') {
       const body = args.session_label === undefined ? {} : { session_label: args.session_label };
       return send('POST', '/v1/handles', body);
@@ -140,5 +198,19 @@ export function createToolExecutor({ client }) {
     if (name === 'get_approval') return send('GET', path, undefined, headers);
     if (name === 'cancel_approval') return send('POST', `${path}/cancel`, {}, headers);
     return send('POST', `${path}/acknowledge`, { decision_id: args.decision_id }, headers);
+  }
+
+  return {
+    execute,
+    // Terminal and idempotent: fence new and queued ordinary exchanges first, then
+    // let the binding release only its captured registration. Repeated close shares
+    // this one shutdown instead of starting another budget.
+    close() {
+      closing ??= (async () => {
+        ordinary.abort();
+        await registration.close();
+      })();
+      return closing;
+    },
   };
 }

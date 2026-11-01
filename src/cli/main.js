@@ -5,6 +5,7 @@ import { TELEGRAM_TOKEN_ENV } from '../config/portable-config.js';
 import { CliError, EXIT_CODE, blockedPrerequisite, invalidArgument } from '../errors.js';
 import { createLocalClient, LocalRequestError } from '../http/local-client.js';
 import { createToolExecutor } from '../mcp/execution.js';
+import { createRegistrationBinding } from '../mcp/registration.js';
 import { runMcpServer } from '../mcp/server.js';
 import { startPortableRuntime } from '../broker/portable-runtime.js';
 import { readLocalCredential } from '../state/credentials.js';
@@ -265,7 +266,24 @@ async function runMcp(argv, { env }) {
   );
   const client = createLocalClient({ port: config.broker.port, token: credential });
 
-  await runMcpServer({ execute: createToolExecutor({ client }) });
+  // The executor owns this adapter's private registration: it is created lazily by
+  // the first implemented call, renewed while the adapter lives, and released here.
+  // Closing stdin fences new work immediately and one close covers ordinary and
+  // lifecycle traffic under the single shutdown budget.
+  const executor = createToolExecutor({
+    client,
+    registration: createRegistrationBinding({ client }),
+  });
+  try {
+    await runMcpServer({
+      execute: executor.execute,
+      onInputClosed: () => {
+        void executor.close();
+      },
+    });
+  } finally {
+    await executor.close();
+  }
   return EXIT_CODE.OK;
 }
 
