@@ -39,6 +39,13 @@ Worktree lifecycle: retain the same path/branch/change and pinned project baseli
 - **ENABLING ONLY:** real durable public MCP preparation and recognized reserved denials pass, but reserved-only `404` cannot prove positive actionable capability access. Later same-principal success and missing/fake/mismatched/foreign-key no-mutation denial remain required. No waiting/Telegram/host/Events/first-use/feature/release pass or live-connection claim.
 - Worktree remains **active / retained / not cleanup-ready**, same path/branch/change/owner/baseline. Next action: prepare U2 registration tests/boundary after implementation-selected cuts, exact paths and gross forecast; obtain applicable review before implementation. U2 registration/heartbeat/lease/delete/restart/deactivation must pass before actual request/wait. Other owners' dirty/untracked material and unknown artifact are preserved. This finalization changes only the two owned evidence documents; no U2 implementation/API/test authoring or promotion authorized.
 
+### U2a broker registry/routes — current readiness
+
+- [x] P.D2-U2a-ready Prepare [U2a tests, selected internal binding, Boundary Verification and proof limits](slices/03a1c-u2a-registration.md). Parent `1286ca4`, U1 prerequisite `88d337d` present. Review-ready only: affected Architect interface/decomposition/test-artifact review required before implementation. No adapter binding in this packet.
+- [ ] P.D2-U2a Implement only selected registration/portable-server/portable-runtime cut (~200 production gross forecast), pass `tests/portable-registration-unit.test.mjs` and `tests/portable-registration-http.test.mjs`, then affected U1/setup/CLI/catalog. Node 24.22.2 readiness: 0/5 expected RED, unit missing module and HTTP first create 404 vs 201; downstream unexecuted. Syntax and managed resource cleanup PASS separately. Size and final checks in the slice.
+- [ ] P.D2-U2b After pinned passing U2a, separately prepare adapter binding/lazy single-flight registration/heartbeat/EOF fencing/re-registration. Open: implementation-selected actual HTTP cancellation within 2s, not Promise timeout alone. Keep waiting/Telegram/Events/feature acceptance pending.
+- Current lifecycle: same worktree/branch/change/baseline/owner below, active and retained; next action U2a affected review via coordination, then bounded implementation. No new worktree or worktree cleanup due. Preserve unknown artifacts and other owner edits; owned run cleanup PASS. U1's 14/14 evidence is reused by revision and unchanged scope, not registration proof.
+
 ### Active portable commands versus historical tests
 
 Use project Node 24 and the exact commands in [03A](slices/03a-portable-shared-waiting.md#run-sequence-and-evidence). `npm test` currently discovers legacy criteria too; it is **not** a reconciled portable acceptance command. This is explicit retirement/re-scope by test ownership, not permission for implementation to rewrite tests, add skip flags, or report excluded tests passed.
@@ -81,8 +88,8 @@ Direct proof is real Telegram interaction followed by that exact session's ackno
 | branch / change | `add-telegram-approval-opencode-v2` |
 | baseline | `main` and fetched `origin/main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba` |
 | owner | Test engineering (lifecycle); implementation engineering (implementation custody) |
-| status | active / retained, not cleanup-ready; full setup ENABLING ONLY at `ee6d720`, 3/3 setup + 8/8 CLI + 1/1 catalog independently PASS; waiting incomplete; live/Events BLOCKED |
-| next action | U1 implementation from [03A.1c handoff](slices/03a1c-reservation-readiness.md#u1--targeted-review-correction-and-implementation-handoff), subject to its targeted-review conditions and combined gross size gate; prepare U2 separately before request/wait. Preserve unknown artifacts; no promotion or first-use claim. |
+| status | active / retained, not cleanup-ready; U1 ENABLING ONLY independently accepted at `88d337d` (14/14); U2a readiness expected RED, waiting incomplete; live/Events BLOCKED |
+| next action | Review [U2a registration packet](slices/03a1c-u2a-registration.md) before bounded broker implementation; U2b separately depends on pinned passing U2a. Preserve unknown artifacts; no promotion or first-use claim. |
 | cleanup evidence | Initial registry contained only repository root on `chore/project-workflow`; no pre-existing dangling worktree. No removal authorized now. After verified landing return to current `main`, verify registry/directory removal; retain unknown work. |
 
 Root bootstrap originals remain untouched. Worktree copies are the delivery artifacts; do not implement in the root or silently overwrite newer owner edits there. No publication, archive, license selection, or PR operation is authorized by this setup.
