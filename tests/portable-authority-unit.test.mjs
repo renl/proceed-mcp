@@ -96,6 +96,40 @@ test('PORT-AUTH-DURABLE: exact reservation, hash-only persistence, restart and o
     assert.deepEqual(await reopened.broker.authorize(auth), expected);
   }));
 
+for (const [scenario, currentOwners] of [['empty', []], ['other-only', [owners[1]]]]) {
+  test(`AUTH-OWNER-DRIFT-001: ${scenario} configuration retains history, denies old authority`,
+    { timeout: 10000 }, () => fixture(async h => {
+      const { broker } = await h.open();
+      await broker.recover();
+      const reservation = await broker.reserveHandle({ ownerId: 'a', sessionLabel: 'Original 🛰' });
+      const expected = { owner_id: 'a', request_handle: reservation.request_handle,
+        request_id: reservation.request_id, session_label: 'Original 🛰',
+        prepared_at: new Date(now).toISOString() };
+      const auth = { ownerId: 'a', capability: reservation.request_capability,
+        requestHandle: reservation.request_handle, requestId: reservation.request_id };
+      assert.deepEqual(await broker.authorize(auth), expected, 'configured-owner positive control');
+      assert.deepEqual(await broker.authorize({ ...auth }), expected, 'same-principal transfer remains valid');
+      await h.close();
+      const bytes = await readFile(h.path);
+      const configured = await h.open();
+      assert.deepEqual(await configured.broker.recover(), { records: 1 });
+      assert.deepEqual(await configured.broker.authorize({ ...auth }), expected,
+        'configured owner and transferred key remain valid after actual journal reopen');
+      await h.close();
+      const reopened = await h.open({ owners: currentOwners });
+      assert.deepEqual(await reopened.broker.recover(), { records: 1 });
+      const snapshot = { prepared: [expected], requests: [] };
+      assert.deepEqual(await reopened.broker.snapshot(), snapshot, 'exact redacted history retained');
+      assert.deepEqual(await readFile(h.path), bytes, 'replay preserves journal bytes');
+      const sequence = reopened.journal.sequence;
+      const result = await reopened.broker.authorize({ ...auth });
+      assert.deepEqual(await reopened.broker.snapshot(), snapshot, 'authorization does not mutate history');
+      assert.equal(reopened.journal.sequence, sequence, 'authorization does not commit');
+      assert.deepEqual(await readFile(h.path), bytes, 'authorization preserves journal bytes');
+      assert.equal(result, null, 'historical owner absent from CURRENT configuration must not authorize');
+    }));
+}
+
 test('PORT-AUTH-GUARDS: recovery prerequisite, scalar labels, known owner and closed mutation',
   { timeout: 10000 }, () => fixture(async h => {
     const { broker, journal } = await h.open();
