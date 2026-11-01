@@ -73,6 +73,20 @@ test('consumer: semantic instructions accept different wording, reject omissions
   }
 });
 
+test('consumer: partial execution retains two-call/privacy requirements and explicit limitations', () => {
+  const clauses = ['First invoke prepare_approval before request_approval.',
+    'request_approval waits for a human decision.', 'The capability is private.',
+    'Keep the key with the handle and request ID.', 'Never echo the key.',
+    'prepare_approval is available.', 'request_approval returns ENHANCEMENT_UNAVAILABLE.',
+    'Reserved read/cancel/ack operations return NOT_FOUND only.'];
+  workflowInstructions({ instructions: clauses.join('\n') }, []);
+  for (const index of [0, 1, 2, 3, 4, 6, 7]) {
+    assert.throws(() => workflowInstructions({ instructions: clauses.filter((_, i) => i !== index).join('\n') }, []));
+  }
+  assert.throws(() => workflowInstructions({ instructions: clauses.slice(0, 6).join('\n') }, []),
+    'prepare availability alone is not an honest partial limitation');
+});
+
 test('consumer: valid response, then clean EOF/close is required', async () => {
   const { child, peer, end } = fixture();
   const call = peer.call('initialize', {});

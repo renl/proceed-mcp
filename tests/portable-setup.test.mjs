@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { managed } from './support/managed-spike.mjs';
 import { freePort } from './support/startup-guards.mjs';
-import { portable, authority, until, telegramFixture } from './support/portable-waiting.mjs';
+import { portable, authority, question, until, telegramFixture } from './support/portable-waiting.mjs';
 import { successful } from './support/catalog-consumer.mjs';
 
 async function protectedPaths(paths, env) {
@@ -254,6 +254,76 @@ test('PORT-SETUP-IPC: owner CLI handshake/catalog and control/browser separation
     assert.equal(h.fixture.messages.length, 0, 'setup/catalog produce no Telegram question');
   }, { pair: false }));
 
+test('PORT-RESERVE-HTTP: recognized reserved routes authenticate, validate and deny without effects',
+  { timeout: 65000 }, () => portable(async (h) => {
+    const owners = await Promise.all((await readdir(join(h.state, 'credentials')))
+      .filter(name => name !== 'control.token').map(async name =>
+        (await readFile(join(h.state, 'credentials', name), 'utf8')).trim()));
+    assert.equal(owners.length, 2);
+    const [owner, foreign] = owners;
+    const logs = [];
+    for (const stream of [h.broker.child.stdout, h.broker.child.stderr]) stream.on('data', bytes => logs.push(String(bytes)));
+    const reserve = async () => {
+      const response = await h.http('/v1/handles', owner, { method: 'POST', body: {} });
+      assert.equal(response.status, 201);
+      return response.json();
+    };
+    const a = await reserve(), b = await reserve();
+    const journalPath = join(h.state, 'journal.log'), journal = await readFile(journalPath);
+    const secrets = [...owners, h.control, a.request_capability, b.request_capability];
+    const error = async (response, status, code) => {
+      assert.equal(response.status, status);
+      assert.equal(response.headers.has('access-control-allow-origin'), false);
+      const value = await response.json();
+      assert.ok(value.schema_version === 1 && value.error?.code === code
+        && typeof value.error.message === 'string' && typeof value.error.retryable === 'boolean');
+      assert.ok(secrets.every(secret => !JSON.stringify(value).includes(secret)), 'redacted HTTP error');
+      return value;
+    };
+    const routes = id => [[`/v1/requests/${id}`, { method: 'GET' }],
+      [`/v1/requests/${id}/cancel`, { method: 'POST', body: {} }],
+      [`/v1/requests/${id}/acknowledge`, { method: 'POST', body: { decision_id: `dec_${'0'.repeat(32)}` } }]];
+    let denial;
+    for (const id of [a.request_id, `req_${'0'.repeat(32)}`]) {
+      for (const [path, options] of routes(id)) {
+        await error(await h.http(path, h.control, options), 403, 'FORBIDDEN');
+        for (const bearer of ['', 'invalid']) await error(await h.http(path, bearer,
+          { ...options, headers: { authorization: bearer ? `Bearer ${bearer}` : '' } }), 401, 'AUTH_REQUIRED');
+        for (const [bearer, key] of [[owner, undefined], [owner, 'bad'],
+          [owner, `cap_${'0'.repeat(64)}`], [owner, b.request_capability],
+          [foreign, a.request_capability], [owner, a.request_capability]]) {
+          const value = await error(await h.http(path, bearer, { ...options,
+            headers: key === undefined ? {} : { 'X-Proceed-Request-Capability': key } }), 404, 'NOT_FOUND');
+          denial ??= value;
+          assert.deepEqual(value, denial, 'uniform reserved/missing/key/principal denial');
+        }
+      }
+      const port = JSON.parse(await readFile(join(h.state, 'config.json'), 'utf8')).broker.port;
+      for (const suffix of ['cancel', 'acknowledge']) {
+        await error(await fetch(`http://127.0.0.1:${port}/v1/requests/${id}/${suffix}`, {
+          method: 'POST', headers: { authorization: `Bearer ${owner}`, 'content-type': 'application/json',
+            'X-Proceed-Request-Capability': a.request_capability }, body: '{',
+          redirect: 'error', signal: AbortSignal.timeout(1000),
+        }), 400, 'INVALID_ARGUMENT');
+      }
+    }
+    // A control principal differentiates recognized owner routes (403) from unknown routes (404).
+    for (const [path, method] of [[`/v1/requests/${a.request_id}`, 'POST'],
+      [`/v1/requests/${a.request_id}/cancel`, 'GET'], [`/v1/requests/${a.request_id}/acknowledge`, 'GET'],
+      [`/v1/requests/${a.request_id}/extra`, 'POST'], [`/v1/requests/${a.request_id}/cancel/extra`, 'POST'],
+      [`/v1/requests/${a.request_id}/acknowledge/extra`, 'POST']]) {
+      await error(await h.http(path, h.control, { method }), 404, 'NOT_FOUND');
+    }
+    await error(await h.http(`/v1/requests/${a.request_id}/retry`, owner,
+      { method: 'POST', body: {} }), 403, 'FORBIDDEN');
+    assert.ok(journal.equals(await readFile(journalPath)), 'all denied/invalid routes preserve journal');
+    assert.deepEqual((await (await h.http('/v1/status', h.control)).json()).requests, []);
+    assert.equal(h.fixture.messages.length, 0);
+    assert.ok(secrets.every(secret => !JSON.stringify([logs, h.fixture.calls]).includes(secret)
+      && !journal.includes(Buffer.from(secret))), 'no plaintext HTTP authority in logs/Telegram/journal');
+    await h.scan();
+  }, { pair: false, strictProtocol: true }));
+
 test('PORT-RESERVE: prepare then reserved read/cancel/ack NOT_FOUND, no Telegram',
   { timeout: 65000 }, () => portable(async (h) => {
     const a = await h.prepare(), b = await h.prepare();
@@ -286,6 +356,7 @@ test('PORT-RESERVE: prepare then reserved read/cancel/ack NOT_FOUND, no Telegram
     for (const args of [{ session_label: '' }, { owner_id: 'foreign' }]) {
       await failure(h.shared, 'prepare_approval', args, 'INVALID_ARGUMENT');
     }
+    await failure(h.shared, 'request_approval', question(a), 'ENHANCEMENT_UNAVAILABLE');
     const foreign = await h.connect('foreign');
     const reservedErrors = async (connection) => {
       for (const name of ['get_approval', 'cancel_approval', 'acknowledge_approval']) {

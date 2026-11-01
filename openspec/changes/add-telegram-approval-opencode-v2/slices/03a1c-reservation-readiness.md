@@ -1,8 +1,8 @@
-# 03A.1c — public reservation execution (Phase A)
+# 03A.1c — public reservation execution
 
 Parent: [tasks](../tasks.md); authority: [design](../design.md) sections 2–4 and [portable waiting sequence](03a-portable-shared-waiting.md).
 
-**Status: review input, not implementation-ready.** Tests/spec only; implementation cuts, production forecast and remaining executable bindings must be supplied before implementation authorization. One OpenSpec branch/worktree/PR; no separate slice PR or promotion.
+**Status: U1 implementation preparation ready under the targeted review conditions below.** No production implementation or behavioral pass. The U1 addendum supersedes Phase A's open sequencing questions, not later registration/waiting gates. One OpenSpec branch/worktree/PR; no separate slice PR or promotion.
 
 ## Goal and baseline
 
@@ -62,7 +62,7 @@ Product sources: [continuation delta](../specs/opencode-session-continuation/spe
 
 Reserved-only wrong-owner/key errors cannot distinguish correct validation from generic route-not-found. Final acceptance additionally requires source review of actual owner/key validation and a selected positive/negative boundary test that distinguishes them; existing authority tests support, not replace, that consumer seam. Authorization on actionable requests remains a later waiting gate, not waived here.
 
-## Proposed sequencing and questions before readiness
+## Historical Phase A sequencing and questions (superseded by U1 below)
 
 1. **First proposed enabling unit:** real ephemeral registration lifecycle over authenticated private HTTP, without request creation/pairing. This supplies the later adapter's prerequisite. SE must select safe internal cuts, exact production paths/forecast, and its internal test binding; no private signatures imposed here.
 2. Subsequent checkpoint(s): owner-selected adapter connection to real handle reservation, private response/error handling, then capability-authorized reserved request operations and EOF/restart. Keep final PORT-RESERVE vertical gate intact. No partial promotion or separate PRs.
@@ -93,3 +93,46 @@ Windows project Node 24.22.2: both syntax checks exit 0. PORT-RESERVE exit 1, **
 Sizing against `b9c463a`, gross additions plus deletions: **4 owned paths / 198 lines** (test 49+8, helper 31+7, tasks 4+4, new slice 95). Production actual **0**; forecast **unknown**, blocked pending SE-selected cuts. This packet does not reserve an invented production budget or authorize broad implementation.
 
 Final syntax (both files), repository format check and owned whitespace checks exit 0. Tests/OpenSpec manually reviewed because formatter excludes them. Final test-only edit replaces error-JSON property-order comparison with semantic equality; unchanged first-prepare RED barrier not replayed. Full setup/CLI/catalog evidence reused only in its unchanged production scope, not claimed as executed against the extended test. Final artifact metadata listing contains only the pre-existing unknown namespace; not read or deleted. No production, dependency or configuration changes, and no archive/promotion authority.
+
+## U1 — targeted-review correction and implementation handoff
+
+Targeted Architect review supplied through coordination approves **U1 preparation/reserved denials before U2 registration**, conditionally on the boundaries here. Design section 3 makes handles owner-only; registration remains required for later actual request/wait execution. No eager broker registration for initialize/catalog discovery. No new public contracts, registration ID encoding or production test APIs.
+
+This correction packet owns only this slice, `../tasks.md`, `tests/portable-setup.test.mjs`, `tests/support/catalog-consumer.mjs` and `tests/catalog-consumer.test.mjs`; no production edits. The five production paths below describe the subsequent implementation handoff, not work performed here.
+
+- Prerequisite: shared change-branch commit `4c5a57f` (full setup prerequisite `ee6d720` present); use this worktree's committed U1 tests/spec, not a root copy. Same project baseline/path/branch/change and lifecycle owner as above; status active, retain; next action U1 implementation through coordination; cleanup evidence: only managed run resources removed, no worktree removal due.
+- Selected production cut: approximately **300 gross changed lines / 5 paths**: new `src/mcp/execution.js`, existing `src/mcp/server.js`, `src/broker/portable-server.js`, `src/cli/main.js`, `src/http/local-client.js`. This is a forecast, not implementation or permission to exceed the 600-line unit limit. Recount new test/doc corrections plus U1 production against `4c5a57f`; split owned packets before exceeding it. The previously reviewed 198-line Phase A packet is reused separately, not automatically recounted as new U1 growth.
+- Implement public prepare → real durable owner-authenticated `POST /v1/handles` → private original RPC response, plus reserved get/cancel/ack forwarding and denial. Keep `request_approval` explicitly `ENHANCEMENT_UNAVAILABLE`; no pairing, business request, wait, Telegram wiring or delivery success. Preserve all other dirty/untracked owner material.
+- U2 is a **later separately prepared/reviewed gate**, not part of this authorization: real registration/duplicate owner/heartbeat/expiry/delete/restart/deactivation proof must pass before actual request creation/wait. EOF here proves graceful reachability loss and journal replay only, not registration release.
+- Catalog instructions must honestly disclose prepare availability, reserved-only `NOT_FOUND` results and `request_approval` `ENHANCEMENT_UNAVAILABLE`, while retaining the two-call workflow, waiting-outcome purpose, private key retention and no echo. Consumer calibration accepts an explicit partial disclosure without weakening the catalog-only limitation branch or globally accepting vague unavailable text.
+
+### Boundary Verification — U1 binding
+
+Reuse the exact public MCP/HTTP URLs, authorities, bodies and envelopes in the boundary table above; no live external platform calls. The existing real broker, not a fake handler or injected production test API, serves the HTTP test. Native Windows Node 24 is representative for this local stdio/loopback/protected-state seam; Telegram remains a controlled proxy, not platform proof.
+
+| U1 criterion | Required assertion / review |
+|---|---|
+| Route recognition | New `PORT-RESERVE-HTTP` in `tests/portable-setup.test.mjs`: exact GET request-ID, POST cancel and POST acknowledge with control credential produce `403/FORBIDDEN`; unknown suffix/extra segments/wrong methods produce `404/NOT_FOUND`. Retry stays control-only, not captured by request handlers. No wildcard route swallowing. |
+| Authentication/denial | Recognized routes reject missing/bad Bearer `401/AUTH_REQUIRED`. Owner plus absent, malformed, fabricated, mismatched or foreign capability and valid reserved authority yield the same `404/NOT_FOUND` envelope; a nonexistent request does too. No durable effects. |
+| Input ordering | Malformed JSON on cancel/ack returns `400/INVALID_ARGUMENT` for reserved and absent request IDs, independent of existence. No invented source-error message or code. Body/header validation preserves the design boundary and body limit. |
+| Actual authorization trace | At implementation review, trace each recognized route into **real `broker.authorize`**, with owner derived from verified Bearer credential, request ID from the exact path, capability from `X-Proceed-Request-Capability`. Neither model/body owner nor path/key substitution is allowed. This source criterion supplements public execution; it is not a new prescribed private API. |
+| Proof limitation | Reserved authority deliberately always denies. HTTP positive capability discrimination **cannot be proven here**, even if all tests pass. Keep the later actionable positive/negative gate: correct same-principal key succeeds, missing/fake/mismatched/foreign key denies with no mutation; existing authority unit cases are supporting evidence only. |
+| Vertical enabling proof | Keep the existing unpaired strict `PORT-RESERVE`: direct MCP prepare must persist real broker handle/ID/hash before response, then malformed prepares and reserved MCP operations, EOF/replay, redaction and no Telegram effects. No replacing this with direct HTTP reservation alone. |
+
+Decomposition checklist rerun: **1 YES** (U1 authority consumed later), **2 NO** (run-isolated reservation; no shared reset), **3 YES** (U2 receiver before actual wait, not before U1 prepare), **4 YES** (enabling/registration/wait proof chain), **5 YES** (unpaired setup versus later pairing proof). These are the targeted review's explicit conditions, now retained without a changed cross-unit contract; no additional Architect round required if implemented faithfully. Any actual ambiguity or changed condition returns through coordination, not an invented contract.
+
+### U1 test order and evidence
+
+PowerShell, same project-owned Node 24.22.2 (`$Node24`), active worktree; bounded native commands, existing managed harness only:
+
+1. Syntax: `& $Node24 --check tests/portable-setup.test.mjs`; same for `tests/support/catalog-consumer.mjs` and `tests/catalog-consumer.test.mjs` (10s each).
+2. Consumer proxy only: `& $Node24 --test tests/catalog-consumer.test.mjs` (15s).
+3. RED first / implementation gate: `& $Node24 --test --test-name-pattern='PORT-RESERVE' tests/portable-setup.test.mjs` (150s outer; each test 65s / harness 55s). New HTTP seam first, unchanged MCP vertical gate second. All must pass after U1; inspect authorization trace separately.
+4. After U1: affected setup/CLI/catalog regressions: `& $Node24 --test tests/portable-setup.test.mjs tests/portable-setup-cli-checkpoint.test.mjs tests/portable-mcp-catalog.test.mjs` (300s outer). Existing brokerless catalog must remain runnable; no U2 or pairing prerequisite introduced. Broader PORT-A/B remain blocked until their later implementations, not skipped acceptance.
+5. Format `& $Node24 node_modules/prettier/bin/prettier.cjs --check .` (30s); manual test/OpenSpec review plus owned `git diff --check` (10s). No full waiting, host/model, live Telegram, archive, PR, push or publication authorized.
+
+RED on `4c5a57f` with only owned test corrections, Windows Node 24.22.2: **0 PASS / 2 RED / 0 cancelled / 0 skipped**, 13,903ms. HTTP test stops at first recognized route: actual `404` versus required control `403`; all downstream HTTP matrices unexecuted. MCP test still stops at first prepare (`ENHANCEMENT_UNAVAILABLE` in catalog-only production); downstream private-result/denial/EOF/replay assertions unexecuted. Managed assertion failures are separate from **cleanup PASS** (process/tree/state and fixture close/rebind). No feature pass or new platform compatibility proof.
+
+Final syntax (three changed test/consumer files), isolated strict-consumer proxy **10/10**, repository format and owned whitespace checks exit **0**. After RED, added only downstream request-unavailable/redaction assertions and the `question` helper import; unchanged first-failure barriers were not replayed, and those downstream assertions remain unexecuted. Historical production setup/CLI/catalog evidence above is reused only for its pinned unchanged assertion scope; run affected regressions after U1. No finalization delta or implementation acceptance is claimed.
+
+U1 correction size against `4c5a57f`: **152 gross changed lines / 5 owned paths** (additions plus deletions, including this record); production actual **0**. Combined with the selected **~300 production-line / 5-path forecast**: **~452 gross / 10 paths**, below 600/20; forecast is not actual implementation size. Recount only affected growth and split before exceeding the limit. Phase A's separately reviewed 198 lines remain reused evidence, not new correction growth.
