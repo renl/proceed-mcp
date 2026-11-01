@@ -110,9 +110,9 @@ test('A0-REOPEN: copied private pairing survives expiry/owner changes; reservati
       assert.equal(broker.authorize({ ...auth, ...change }), null);
     }
     assert.deepEqual(broker.snapshot(), snapshot);
-    assert.deepEqual(broker.status(), { schema_version: 1, broker: { pid: process.pid,
+    assert.deepEqual(await broker.status(), { schema_version: 1, broker: { pid: process.pid,
       port: 43189, started_at: '2040-01-01T00:00:00.000Z' }, requests: [] });
-    const surfaces = JSON.stringify([broker.snapshot(), broker.status(), h.logs]);
+    const surfaces = JSON.stringify([broker.snapshot(), await broker.status(), h.logs]);
     for (const privateValue of [hash, pairing().user_id, pairing().chat_id, reservation.request_capability]) {
       assert.equal(surfaces.includes(privateValue), false, 'private data stays off public/log views');
     }

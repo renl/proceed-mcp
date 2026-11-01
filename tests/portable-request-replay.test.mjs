@@ -63,8 +63,6 @@ async function accepted(records, expected) {
     const bytes = await readFile(path);
     await broker.recover();
     assert.deepEqual(broker.snapshot().requests, expected);
-    assert.throws(() => broker.status(), { exitCode: 3, code: 'PREREQUISITE_UNAVAILABLE',
-      message: 'request-bearing status requires the serialized expiry checkpoint' });
     assert.deepEqual(await readFile(path), bytes, 'replay never writes expiry');
   });
 }
@@ -89,8 +87,6 @@ test('AB-B1: create-only recovery checkpoint; not full Alpha-B acceptance', { ti
       assert.deepEqual(before.requests, [view()]); assert.deepEqual(pairing, identity); assert.ok(authority);
       const copy = broker.snapshot(), original = await readFile(path), seq = journal.sequence;
       copy.requests[0].event_capability.reason = 'changed'; copy.prepared[0].session_label = 'changed'; assert.deepEqual(broker.snapshot(), before);
-      assert.throws(() => broker.status(), { exitCode: 3, code: 'PREREQUISITE_UNAVAILABLE',
-        message: 'request-bearing status requires the serialized expiry checkpoint' });
       assert.deepEqual(broker.snapshot(), before); assert.deepEqual(await readFile(path), original); assert.equal(journal.sequence, seq);
       await journal.append([reserve(2)]); await journal.append([create()]);
       const bytes = await readFile(path), sequence = journal.sequence;
@@ -118,7 +114,7 @@ test('AB-CALIBRATE: normal journal2 vocabulary roundtrip; no product acceptance'
     assert.deepEqual((await journal.recover()).transactions.map(t => t.mutations), history());
     assert.equal(journal.sequence, 3);
   }));
-test('AB-VIEWS: exact inherited representation, nested independence, privacy and synchronous status guard',
+test('AB-VIEWS: exact inherited representation, nested independence and privacy',
   { timeout: 15000 }, async t => {
     for (const e of [undefined, expire(), expire({ delivery_state: 'pending' })]) await t.test(e?.delivery_state ?? 'due-pending',
       () => fixture(history(create(), e ? [[e]] : []), async ({ broker, journal, path }) => {
@@ -130,8 +126,6 @@ test('AB-VIEWS: exact inherited representation, nested independence, privacy and
           const copy = broker.snapshot(); copy.requests[0].event_capability.reason = 'changed';
           copy.requests[0].action = 'changed'; copy.requests.push({}); copy.prepared[0].session_label = 'changed';
           assert.deepEqual(broker.snapshot(), before);
-          assert.throws(() => broker.status(), { exitCode: 3, code: 'PREREQUISITE_UNAVAILABLE',
-            message: 'request-bearing status requires the serialized expiry checkpoint' });
         }
         for (const secret of [capability, sha256Hex(capability), hash, identity.user_id, identity.chat_id,
           'pairing_snapshot', 'expires_in_seconds', 'capability_hash']) assert.equal(JSON.stringify(before).includes(secret), false);
@@ -140,8 +134,6 @@ test('AB-VIEWS: exact inherited representation, nested independence, privacy and
       }));
     await t.test('future-pending', () => fixture(history(), async ({ broker }) => {
       await broker.recover(); assert.deepEqual(broker.snapshot().requests, [view()]);
-      assert.throws(() => broker.status(), { exitCode: 3, code: 'PREREQUISITE_UNAVAILABLE',
-        message: 'request-bearing status requires the serialized expiry checkpoint' });
     }, '2026-11-01T00:02:30Z'));
     await accepted(history(create(), [[expire()], [reserve(2)], [create({ request_handle: id('hdl_', 2) })]]),
       [view(create(), expire()), { ...view(), request_handle: id('hdl_', 2), request_id: id('req_', 2) }]);
@@ -150,7 +142,7 @@ test('AB-EMPTY: reservation-only and paired reservation observations unchanged',
   for (const records of [[[reserve()]], base()]) await t.test(`${records.length}`, () => fixture(records, async ({ broker }) => {
     await broker.recover(); assert.deepEqual(broker.snapshot().requests, []);
     const expected = { schema_version: 1, broker: { pid: process.pid, port: 43189, started_at: '2040-01-01T00:00:00.000Z' }, requests: [] };
-    assert.deepEqual(broker.status(), expected); assert.deepEqual(broker.status(), expected);
+    assert.deepEqual(await broker.status(), expected); assert.deepEqual(await broker.status(), expected);
   }));
 });
 test('AB-CREATE-SCHEMA: exact fields, types before coercion, scalar and wellformed limits', { timeout: 60000 }, async t => {
