@@ -123,6 +123,53 @@ test('CANCEL-CLOCK-ID: invalid time/identity and global collision refuse before 
   await assert.rejects(h.cancel(h.p[1]), e => e.exitCode === 4 && e.code === 'JOURNAL_IDENTIFIER_COLLISION');
   assert.deepEqual(await h.bytes(), bytes);
 }));
+// Global means across producers AND owners, live and recovered; disjoint per-op sets fail.
+for (const first of ['expire', 'cancel']) for (const mode of ['writer-live', 'writer-recovered', 'replay'])
+  for (const collide of [false, true]) test(`CANCEL-GLOBAL-${first}-${mode}-${collide ? 'collision' : 'valid'}`, { timeout: 10000 }, () => native(async h => {
+    h.now = at + 30000;
+    const other = await h.b.reserveHandle({ ownerId: 'foreign' });
+    await h.b.createRequest({ ownerId: 'foreign', capability: other.request_capability,
+      requestHandle: other.request_handle, clientRequestId: 'same', action: 'Question?', context: '', expiresInSeconds: 60 });
+    const foreignBinding = { ...binding(other), ownerId: 'foreign' };
+    const second = first === 'expire' ? 'cancel' : 'expire';
+    h.now = first === 'expire' ? at + 60000 : at + 30000;
+    const initial = first === 'expire' ? await h.b.readRequest(binding(h.p[0])) : await h.cancel();
+    assert.equal(initial.resolution, first === 'expire' ? 'expired' : 'cancelled');
+    const actual = mutations(await h.bytes()).at(-1);
+    assert.equal(actual.op, `request.${first}`); assert.equal(actual.request_id, h.p[0].request_id);
+    assert.equal(actual.decision_id, initial.decision_id, 'unmodified actual production record supplies reused ID');
+    if (mode === 'writer-recovered') await h.reopen();
+    assert.equal(h.b.snapshot().requests.find(p => p.request_id === other.request_id).resolution, 'pending');
+    h.now = second === 'expire' ? at + 90000 : at + 60000;
+    const nextId = collide ? actual.decision_id : decision(99);
+    const installed = h.b.snapshot(), bytes = await h.bytes(), counts = h.counts();
+    if (mode !== 'replay') {
+      h.generate = () => nextId;
+      const act = () => second === 'expire' ? h.b.readRequest(foreignBinding) : h.cancel(other, { ownerId: 'foreign' });
+      if (collide) {
+        await assert.rejects(act(), e => e?.exitCode === 4 && e.code === 'JOURNAL_IDENTIFIER_COLLISION');
+        assert.deepEqual(h.b.snapshot(), installed); assert.deepEqual(await h.bytes(), bytes);
+        assert.equal(h.counts().appends, counts.appends, 'collision refused before append');
+      } else {
+        const v = await act(); assert.equal(v.resolution, second === 'expire' ? 'expired' : 'cancelled');
+        assert.equal(v.decision_id, nextId); assert.equal(mutations(await h.bytes()).at(-1).op, `request.${second}`);
+        await h.reopen(); assert.deepEqual(await h.b.readRequest(foreignBinding), v);
+      }
+    } else {
+      // Decoder-only input, never claimed as actual second-producer writer proof.
+      await h.j.append([closure(other, 99, { op: `request.${second}`, resolved_at: iso(h.now), decision_id: nextId })]);
+      const history = await h.bytes(), samples = h.counts().samples;
+      if (collide) {
+        await assert.rejects(h.b.recover(), invalidHistory); assert.deepEqual(h.b.snapshot(), installed);
+        await assert.rejects(h.cancel(other, { ownerId: 'foreign' }), storage);
+      } else {
+        await h.b.recover(); const v = h.b.snapshot().requests.find(p => p.request_id === other.request_id);
+        assert.equal(v.resolution, second === 'expire' ? 'expired' : 'cancelled'); assert.equal(v.decision_id, nextId);
+      }
+      assert.equal(h.counts().samples, samples, 'mixed replay and fenced refusal are clock-free');
+      assert.deepEqual(await h.bytes(), history);
+    }
+  }));
 test('CANCEL-NOFRAME: pre-write rejection fences without inventing rollback; reopen permits explicit new cancellation', { timeout: 10000 }, () => native(async h => {
   const before = h.b.snapshot(), bytes = await h.bytes(), append = h.j.append.bind(h.j);
   h.j.append = async () => { throw storageFailure('synthetic pre-write refusal'); };
