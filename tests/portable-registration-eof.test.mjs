@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { publicRegistration, observe, success, toolError } from './support/public-registration.mjs';
 
 for (const phase of ['create', 'heartbeat', 'release', 'handles', 'get', 'cancel', 'acknowledge']) {
-  test(`PORT-PUBLIC-EOF-${phase}: actual socket closes, shared budget and queued-work fence`,
+  test(`PORT-PUBLIC-EOF-${phase}: actual socket closes, shared budget and dispatch fence`,
     { timeout: 65000 }, () => publicRegistration(async h => {
       await h.restart(); const a = await h.connect();
       let prepared, blocked;
@@ -41,13 +41,24 @@ for (const phase of ['create', 'heartbeat', 'release', 'handles', 'get', 'cancel
               'foreground ordinary exchange held alongside heartbeat before submitting queued calls');
           }
         }
+        if (phase !== 'release') {
+          // Concurrent calls cannot be assumed queued behind an ordinary GET.
+          // Hold registration for pre-forward proof; otherwise own each dispatch.
+          const previous = h.calls.filter(c => c.path === '/v1/handles').length;
+          const original = match;
+          h.hold(c => original(c) || c.path === '/v1/handles' || c.method === 'DELETE');
+          for (let i = 0; i < 3; i++) a.call('prepare_approval', { session_label: 'before-close' });
+          if (phase === 'create') {
+            assert.equal((await a.peer.call('ping', {}).outcome).kind, 'response', 'registration awaiters dispatched');
+            assert.equal(h.calls.filter(c => c.path === '/v1/handles').length, 0, 'ensure barrier prevents forwarding');
+          } else await observe(() => h.calls.filter(c => c.path === '/v1/handles' && c.held).length >=
+            (phase === 'handles' || phase === 'heartbeat' ? 1 : 0) + 3 &&
+            h.calls.filter(c => c.path === '/v1/handles').length === previous + 3,
+          'all preEOF ordinary requests reached owned holds');
+        }
         const journal = await h.journal();
         if (phase === 'handles') h.secrets.push(blocked.reply.request_capability);
         const before = h.calls.length;
-        if (phase !== 'release') {
-          // These calls were submitted before EOF but must never execute after it.
-          for (let i = 0; i < 3; i++) a.call('prepare_approval', { session_label: 'queued' });
-        }
         // Arm the combined barrier BEFORE EOF; no serial per-socket budget extensions.
         const deadline = performance.now() + 2750;
         socketsDone = observe(() => {
@@ -64,7 +75,7 @@ for (const phase of ['create', 'heartbeat', 'release', 'handles', 'get', 'cancel
         assert.ok(h.calls.filter(c => c.held).every(c => c.socketClosed && c.socketClosedAt - eofAt <= 2750),
           'simultaneous ordinary/lifecycle and release stalls share ONE budget');
         const added = h.calls.slice(before);
-        assert.ok(added.every(c => c.method === 'DELETE'), 'no queued/new ordinary work after EOF');
+        assert.ok(added.every(c => c.method === 'DELETE'), 'no new ordinary work after EOF, including abandoned ensure awaiters');
         const releases = h.calls.filter(c => c.method === 'DELETE');
         if (phase === 'create') {
           assert.equal(releases.length, 0, 'lost create authority never guesses a delete');

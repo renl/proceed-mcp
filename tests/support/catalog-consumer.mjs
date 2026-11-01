@@ -75,6 +75,7 @@ export function catalogPeer(child, { secrets = [], maxBytes = 65536, ms = 8000 }
   let failure;
   let closed = false;
   const pending = new Map();
+  const issued = new Set();
   const ended = new Set();
   const tails = new Map();
   const needles = secrets.map(value => Buffer.from(value)).filter(value => value.length);
@@ -101,6 +102,7 @@ export function catalogPeer(child, { secrets = [], maxBytes = 65536, ms = 8000 }
       fail('unexpected or invalid protocol frame');
       return;
     }
+    if (pending.get(frame.id).suppressed) { fail('response for suppressed invocation'); return; }
     finish(frame.id, { kind: 'response', frame });
   };
   for (const [name, stream] of [['stdout', child.stdout], ['stderr', child.stderr]]) {
@@ -130,15 +132,16 @@ export function catalogPeer(child, { secrets = [], maxBytes = 65536, ms = 8000 }
     for (const id of pending.keys()) finish(id, { kind: 'transport-closed' });
   });
   return {
-    call(method, params) {
+    call(method, params, { id, ms: deadline = ms, suppressed = false } = {}) {
       if (failure || closed) return { outcome: Promise.resolve({ kind: 'transport-closed' }) };
-      const id = next++;
+      if (id === undefined) { while (issued.has(next)) next++; id = next++; }
+      assert.ok(!issued.has(id), 'test client uses unique typed IDs'); issued.add(id);
       const outcome = new Promise(resolve => {
-        const timer = setTimeout(() => finish(id, { kind: 'timeout' }), ms);
-        pending.set(id, { timer, resolve });
+        const timer = setTimeout(() => finish(id, { kind: suppressed ? 'suppressed' : 'timeout' }), deadline);
+        pending.set(id, { timer, resolve, suppressed });
       });
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
-      return { outcome };
+      return { id, outcome };
     },
     assertComplete() {
       assert.ok(closed && ended.size === 2, 'inspect only after process closure and both output EOFs');

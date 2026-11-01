@@ -24,9 +24,15 @@ test('PORT-PUBLIC-LAZY: brokerless catalog/invalid/unimplemented; first valid pr
     assert.equal(h.calls.length, 0, 'brokerless EOF never creates/releases');
     await h.restart();
     const b = await h.connect();
-    const prepared = await Promise.all([b.call('prepare_approval'), b.call('prepare_approval')]);
+    h.hold(c => c.path === '/v1/adapter');
+    const first = b.call('prepare_approval');
+    await observe(() => creates(h)[0]?.held, 'registration held before second invocation');
+    const second = b.call('prepare_approval');
+    assert.equal((await b.peer.call('ping', {}).outcome).kind, 'response', 'overlapping public registration awaiters');
+    creates(h)[0].release();
+    const prepared = await Promise.all([first, second]);
     prepared.forEach(success);
-    assert.equal(creates(h).length, 1, 'registration reuse across two concurrently submitted, serialized public calls');
+    assert.equal(creates(h).length, 1, 'single-flight registration across overlapping public calls');
     assert.equal(creates(h)[0].method, 'POST'); assert.deepEqual(creates(h)[0].body, {});
     assert.ok(creates(h)[0].token === `Bearer ${h.owner}`, 'configured owner Bearer authenticates create');
     assert.equal(handles(h).length, 2);

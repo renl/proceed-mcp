@@ -141,3 +141,18 @@ test('consumer: output cap terminates and remains failed after shutdown', async 
   assert.ok(child.kills > 0);
   await end(); assert.throws(() => peer.assertComplete(), /output limit/);
 });
+
+test('consumer: typed IDs correlate independently and suppressed/late frames never disappear', async () => {
+  const f = fixture();
+  const n = f.peer.call('ping', {}, { id: 7 }), s = f.peer.call('ping', {}, { id: '7' });
+  for (const id of ['7', 7]) f.child.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: {} }) + '\n');
+  assert.equal((await n.outcome).frame.id, 7); assert.equal((await s.outcome).frame.id, '7');
+  await f.end(); f.peer.assertComplete();
+  for (const late of [false, true]) {
+    const g = fixture(); const c = g.peer.call('ping', {}, { id: 'cancelled', ms: 10, suppressed: true });
+    if (late) assert.equal((await c.outcome).kind, 'suppressed');
+    g.child.stdout.write('{"jsonrpc":"2.0","id":"cancelled","result":{}}\n');
+    await c.outcome; await g.end();
+    assert.throws(() => g.peer.assertComplete(), /suppressed|unexpected/);
+  }
+});

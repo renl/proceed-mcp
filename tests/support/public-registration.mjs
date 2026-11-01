@@ -3,9 +3,9 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer, request } from 'node:http';
-import { readFile, writeFile, access } from 'node:fs/promises';
+import { readFile, writeFile, access, mkdir } from 'node:fs/promises';
 import { Journal } from '../../src/journal/journal.js';
-import { join, resolve } from 'node:path';
+import { join, resolve, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -52,7 +52,12 @@ export function toolError(outcome, code) {
 }
 export async function publicRegistration(work, { paired = false, foreign = false } = {}) {
   const finalChecks = [];
-  const result = await managed(async context => {
+  let progress;
+  const result = await bounded(() => managed(async context => {
+    await mkdir(resolve('.scratch/public-registration'), { recursive: true });
+    progress = phase => writeFile(resolve('.scratch/public-registration', `${basename(context.directory)}.json`),
+      JSON.stringify({ phase, namespace: basename(context.directory) }));
+    await progress('setup');
     const executable = resolve('bin/proceed-mcp.js'), state = join(context.directory, 'state');
     const env = Object.fromEntries(['PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC']
       .filter(k => process.env[k]).map(k => [k, process.env[k]]));
@@ -122,14 +127,19 @@ export async function publicRegistration(work, { paired = false, foreign = false
             record.status = reply.statusCode; record.reply = body; record.committed = true;
             if (body?.registration_secret) secrets.push(body.registration_secret);
             // Hold AFTER real server completion: this can lose a committed mutation.
+            record.release = () => {
+              if (record.released || res.destroyed) return;
+              record.released = true;
+              const changed = mutate({ status: reply.statusCode, body }, record);
+              res.writeHead(changed.status, { 'content-type': 'application/json' });
+              res.end(changed.body === null ? '' : JSON.stringify(changed.body));
+            };
             if (hold(record)) {
               record.held = true; record.heldAt = performance.now();
               record.heldSocketOpen = !req.socket.destroyed;
               return;
             }
-            const changed = mutate({ status: reply.statusCode, body }, record);
-            res.writeHead(changed.status, { 'content-type': 'application/json' });
-            res.end(changed.body === null ? '' : JSON.stringify(changed.body));
+            record.release();
           });
         });
         upstreams.add(up); up.on('close', () => upstreams.delete(up));
@@ -147,28 +157,34 @@ export async function publicRegistration(work, { paired = false, foreign = false
         'real broker authenticated readiness', 8000);
       await save(port);
     };
-    const connect = async (ownerId = 'shared') => {
+    const connect = async (ownerId = 'shared', { observeOutput = () => {} } = {}) => {
       const resource = spawnProduct(['mcp', '--owner', ownerId]);
+      observeOutput(resource.child); // Independent observer attaches before protocol/setup events.
       const peer = catalogPeer(resource.child, { secrets, ms: 3000 });
       connections.push({ resource, peer });
       const init = initializeResult(await peer.call('initialize', { protocolVersion: '2025-11-25', capabilities: {},
         clientInfo: { name: 'public-lifecycle', version: '0' } }).outcome);
       resource.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
       const tools = await allTools(peer); assert.equal(tools.length, 5);
-      return { resource, peer, init, tools, call: (name, args = {}) => peer.call('tools/call', { name, arguments: args }).outcome };
+      return { resource, peer, init, tools, call: (name, args = {}, options) => peer.call('tools/call', { name, arguments: args }, options).outcome };
     };
     const eof = async c => {
+      let lateOutput = false;
+      c.resource.child.stdout.on('data', () => { lateOutput = true; });
       const start = performance.now(); c.resource.child.stdin.end();
       await observe(() => c.resource.closed, 'EOF exits within shared 2s plus 750ms process tolerance', 2750);
       assert.equal(c.resource.child.exitCode, 0, 'normal EOF exit'); c.peer.assertComplete();
+      assert.ok(!lateOutput, 'no stdout frames after EOF');
       return start;
     };
     try {
       await save(port);
+      await progress('execution');
       await work({ connect, restart, eof, http, calls, secrets, requestSecrets, state, owner, control,
         hold: fn => { hold = fn; }, mutate: fn => { mutate = fn; },
         journal: () => readFile(join(state, 'journal.log')) });
     } finally {
+      await progress('teardown');
       // Teardown cannot stand in for the tested EOF deadline. Outer harness owns forced recovery.
       for (const c of connections) if (!c.resource.closed) {
         c.resource.child.stdin.end();
@@ -188,7 +204,8 @@ export async function publicRegistration(work, { paired = false, foreign = false
       await new Promise((done, reject) => { backendProbe.once('error', reject); backendProbe.listen(backend, '127.0.0.1', done); });
       await new Promise(done => backendProbe.close(done));
     }
-  }, { totalMs: 50000 });
+  }, { totalMs: 50000 }), 60000, 'public registration aggregate setup/execution/teardown deadline');
+  if (progress) await progress(result.cleanupError ? 'cleanup-failed' : 'cleaned');
   assert.ifError(result.cleanupError);
   for (const check of finalChecks) check();
   assert.ifError(result.assertionError);
