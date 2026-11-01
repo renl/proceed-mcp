@@ -1,0 +1,43 @@
+# U2b-3 — public EOF and ordinary HTTP fault preparation
+
+Parent: [tasks](../tasks.md). Prerequisite/helper, worktree/baseline, environment, ownership and real broker source grounding: [U2b-2](03a1c-u2b2-public-lifecycle.md). Contract: [design](../design.md) sections 3/7 (closed errors, lost preparation, terminal close, ordinary cancellation and shared two-second budget); [Telegram delta](../specs/telegram-approval/spec.md), **Fail closed without misleading status / Waiting call ends before the human decides**, prerequisite only.
+
+**Review-ready only; Architect boundary/decomposition/test-artifact review of BOTH packets is required before implementation.** Same retained change worktree and single eventual PR. No production changes or private exports are prescribed here; the executor/CLI/EOF cut and forecast are still needed from implementation engineering.
+
+## Goal and proof limits
+
+Founder-visible question: does closing an adapter stop its local network work promptly without turning transport cleanup into a business instruction? Direct proof is the actual executable's EOF exit, actual HTTP socket-close events and observed no-extra-work trace. Existing reservation bytes and reserved-only 404 are supporting evidence of unused reservations, **not cancellation proof for a nonexistent actionable approval**. No waiting, Telegram, Events, host/model, first-use, feature or release acceptance.
+
+Owned additions: `tests/portable-registration-eof.test.mjs`, this slice and its mapped tasks entries. Reuse `tests/support/public-registration.mjs` from U2b-2, not a second harness. The two preparation packets are distinct review scopes; neither is an implementation dispatch. Preserve unknown state and all other owner files under the lifecycle/authorization constraints in U2b-2.
+
+## Boundary Verification and executable mapping
+
+Real wire address/auth/encodings remain exactly those in U2b-2. Source-grounded ordinary routes in `src/mcp/execution.js`/`src/broker/portable-server.js`: `POST /v1/handles` with optional `session_label`; `GET /v1/requests/{request_id}`; `POST /v1/requests/{request_id}/cancel` with `{}`; `POST /v1/requests/{request_id}/acknowledge` with `{decision_id}`. All use owner Bearer; management additionally uses `X-Proceed-Request-Capability`. No request capability in URLs or ordinary bodies. Explicit cancel is a submitted operation, not an EOF-created compensation.
+
+| Test selector | Required deterministic assertions |
+|---|---|
+| `PORT-PUBLIC-EOF-create` | Relay forwards real create, consumes real committed reply but withholds it from actual adapter socket. EOF closes socket/executable; queued prepares cannot execute, and no guessed delete/replay occurs. Independent owner create still gets real 409: lost authority can leave a remote lease until expiry. No immediate remote-release claim. |
+| `PORT-PUBLIC-EOF-heartbeat` | Observe real production 10s heartbeat, hold its reply; also hold a foreground ordinary prepare before submitting queued calls. EOF closes heartbeat, ordinary and best-effort release sockets under ONE shared budget. Only captured release may start during cleanup. |
+| `PORT-PUBLIC-EOF-release` | Hold actual DELETE response, close stdin, require socket destruction plus executable exit under the same budget. No cleanup retry or second delete. |
+| `PORT-PUBLIC-EOF-handles/get/cancel/acknowledge` | Hold the selected real ordinary exchange after backend completion, submit three prepares behind the blocked call, then EOF. Ordinary and release sockets close; queued prepares do not start. Only one exact captured release is permitted; no replay or new compensation. Handles fault confirms real 201 committed, withheld capability remains private, and capability-authorized read still gives reserved-only 404; journal remains unchanged by EOF. |
+| `PORT-PUBLIC-ERROR` | Real binding/prepare prerequisite first. Relay then changes ordinary handle error replies only: recognized schema-1 `NOT_PAIRED` message/retryable preserved exactly in matching text/structured results; null, unknown code and schema-2 replies map to redacted `BROKER_UNAVAILABLE`, retryable true. Unknown/malformed messages contain the raw synthetic registration secret; complete stdout/stderr scan remains attached through shutdown. Positive operation results still originate from real broker. |
+
+Every fault begins with actual production execution, not a replacement decoder/flag or a fixture-success branch. Relay holds complete real backend responses: it proves response-loss transport cleanup, not that the remote operation was rolled back. Actual `req.socket` close events are measured, not only AbortSignal flags, response-object closure or a raced Promise. Internal late-binding completion and pre-aborted/listener tests remain accepted U2b-1 evidence; this public packet adds real process/socket coverage rather than inventing a clock/testing API.
+
+EOF is signalled by ending the actual child stdin. Contract budget remains **2000ms shared**, not 2000ms per socket/drain/release. The public assertion allows **750ms total process/IPC scheduling tolerance** and requires BOTH exit and every held socket close within 2750ms from the same EOF timestamp. This does not authorize a 2750ms production constant; accepted 2000ms binding constant/source must remain unchanged. No response to a closed invocation is required. Strict consumer rejects unsolicited/malformed frames; verified process absence prevents post-close frames/timer revival. A 100ms post-exit trace check is supporting only, not accelerated heartbeat evidence.
+
+For queued-call assertions, the current public server serializes execution; a stalled foreground call precedes three submitted calls before EOF. The test does not inspect a private queue or require a new export. Any proposed concurrency change that changes which invocations are already executing must return for contract/test review before weakening queued-work fencing. No timer or guessed private callback stands in for EOF.
+
+## Run sequence, teardown and review gate
+
+1. Run U2b-2 consumer/public lifecycle packet first; both are required before wiring acceptance.
+2. From active worktree with the same `$Node24`, `& $Node24 --check tests/portable-registration-eof.test.mjs` (10s), then `& $Node24 --test tests/portable-registration-eof.test.mjs` (180s outer; eight cases, each 65s test / 50s managed-work bound). No operator-started server.
+3. Run affected accepted binding/abort, registry/public HTTP, setup/CLI/catalog/reservation regression sequence referenced in U2b-2; then scoped whitespace and project formatter command there. Do not run unreconciled blanket historical `npm test` as portable acceptance.
+
+Cleanup is asserted separately: registered owned process trees absent, run directory removed, actual relay socket set empty, listener closed/rebound. On a behavioral RED, recovery EOF/forced harness teardown may clean resources but cannot turn the failed 2750ms assertion green. Shared/unknown artifacts are not removed. Native Windows rationale and environment limits are unchanged from U2b-2.
+
+Decomposition triggers **1 YES / 2 YES / 3 YES / 4 YES / 5 YES**, same combined proof chain as U2b-2. Review must check relay hold ordering (backend commit BEFORE EOF), raw-secret lifetime through shutdown, actual socket event versus response completion, foreground/queued execution ordering and simultaneous stalls sharing one deadline. Known boundary reuse needs no novel-platform spike; it does not waive this boundary-fidelity review or eventual real public execution.
+
+## Preparation evidence — 2026-11-01
+
+Initial combined Windows Node 24.22.2 run: this file **0 PASS / 8 expected RED**, exit 1. CREATE stopped at absent real registration/hold barrier (current production forwarded prepare without create); other seven cases stopped at zero registrations versus one after successful public preparation. No downstream fault/socket-budget, queued fence, closed-error, privacy-with-registration or lost-result assertions executed. Ordinary preparation and authenticated real broker readiness were observed, not fault acceptance. Run-owned process/directory/socket/listener cleanup PASS separately. Final affected rerun and separate gross accounting are recorded in tasks; U2b-1 unit passes are reused by revision, not recounted as public proof.
