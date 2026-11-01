@@ -25,6 +25,8 @@ const CAPABILITY_HEADER = 'X-Proceed-Request-Capability';
 const MAX_LABEL_SCALARS = 128;
 const MAX_ACTION_SCALARS = 1000;
 const MAX_CONTEXT_SCALARS = 1000;
+// The same ceiling the human Respond prompt accepts: nonempty text up to 4096 scalars.
+const MAX_RESPONSE_SCALARS = 4096;
 const MIN_EXPIRY_SECONDS = 60;
 const MAX_EXPIRY_SECONDS = 86400;
 
@@ -199,6 +201,51 @@ const DELIVERY_STATES = new Set([
   'blocked',
 ]);
 const EVENT_STATES = new Set(['unverified', 'unsupported', 'verified']);
+// Design section 3 "Response fields and authority privacy": a representation exposes
+// only these fields, and the two nested objects expose only their documented members.
+// Additional broker metadata is additive detail, so it is omitted rather than rejected
+// or given the meaning of an extension to schema version 1.
+const COMMON_FIELDS = [
+  'schema_version',
+  'request_handle',
+  'request_id',
+  'client_request_id',
+  'owner_id',
+  'session_label',
+  'action',
+  'context',
+  'created_at',
+  'expires_at',
+  'resolution',
+  'resolved_at',
+  'response_text',
+  'decision_id',
+  'telegram_state',
+  'delivery_state',
+  'delivery_error',
+  'event_capability',
+];
+const DIAGNOSTIC_FIELDS = ['code', 'message', 'retryable'];
+const EVENT_FIELDS = ['status', 'revision', 'reason'];
+// Request authority is issued to the caller, never echoed by a request representation,
+// so its name at the top level is a malformed disclosure whatever the value is. The
+// same words quoted inside caller or human text are that text and stay exactly.
+const AUTHORITY_FIELDS = ['request_capability', 'registration_secret'];
+
+function admitted(body, fields) {
+  const value = {};
+  for (const field of fields) value[field] = body[field];
+  return value;
+}
+
+function projection(body) {
+  const value = admitted(body, COMMON_FIELDS);
+  value.delivery_error =
+    body.delivery_error === null ? null : admitted(body.delivery_error, DIAGNOSTIC_FIELDS);
+  value.event_capability = admitted(body.event_capability, EVENT_FIELDS);
+  return value;
+}
+
 // A request instant is UTC RFC 3339: `-00:00` states that the offset is unknown, so
 // only `Z` and `+00:00` carry UTC, and the calendar must be its own round-trip.
 const UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$/;
@@ -231,9 +278,13 @@ function events(value) {
 
 // A request representation is this outcome only when it names the prepared handle,
 // the committed request and its complete common view; a pending or invented shape is
-// never promoted, and a terminal one names exactly one decision.
+// never promoted, and a terminal one names exactly one decision. What survives is the
+// documented projection, so additive metadata never reaches an MCP result channel.
 function requestView(body, handle, requestId) {
   if (!isPlainObject(body) || body.schema_version !== 1) return null;
+  // A disclosed authority field makes the whole representation unusable, before any
+  // of it is promoted or reported, and nothing from it is echoed.
+  if (AUTHORITY_FIELDS.some((field) => Object.hasOwn(body, field))) return null;
   if (body.request_handle !== handle) return null;
   if (typeof body.request_id !== 'string' || !REQUEST_ID_PATTERN.test(body.request_id)) return null;
   if (requestId !== null && body.request_id !== requestId) return null;
@@ -254,21 +305,39 @@ function requestView(body, handle, requestId) {
   ) {
     return null;
   }
-  // A live request carries no outcome yet, and its nullable outcome fields are present.
+  // A live request carries no outcome and no delivery standing yet, and its nullable
+  // outcome fields are present.
   if (body.resolution === 'pending') {
-    return body.resolved_at === null && body.response_text === null && body.decision_id === null
-      ? body
+    return body.delivery_state === 'not_applicable' &&
+      body.delivery_error === null &&
+      body.resolved_at === null &&
+      body.response_text === null &&
+      body.decision_id === null
+      ? projection(body)
       : null;
   }
   if (!RESOLUTIONS.has(body.resolution) || !instant(body.resolved_at)) return null;
   // Only a live request has no delivery standing at all.
   if (body.delivery_state === 'not_applicable') return null;
+  // Acknowledgement and a successful write are evidence that clears the current
+  // diagnostic, so a non-null one contradicts the standing it accompanies.
+  if (
+    (body.delivery_state === 'confirmed' || body.delivery_state === 'returned') &&
+    body.delivery_error !== null
+  ) {
+    return null;
+  }
   if (typeof body.decision_id !== 'string' || !DECISION_ID_PATTERN.test(body.decision_id)) {
     return null;
   }
-  // Respond is the one outcome that carries text; every other closure keeps it null.
-  if (body.resolution !== 'responded') return body.response_text === null ? body : null;
-  return typeof body.response_text === 'string' && body.response_text.length > 0 ? body : null;
+  // Respond is the one outcome that carries text, bounded and well-formed exactly as
+  // the broker accepts it; every other closure keeps it null.
+  if (body.resolution !== 'responded') {
+    return body.response_text === null ? projection(body) : null;
+  }
+  return textProblem(body.response_text, 'response_text', 1, MAX_RESPONSE_SCALARS) === null
+    ? projection(body)
+    : null;
 }
 
 function creationBody(args) {
