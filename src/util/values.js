@@ -7,6 +7,11 @@ export const CLIENT_REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 export const CALLBACK_TOKEN_PATTERN = /^[a-f0-9]{32}$/;
 export const PAIRING_CODE_PATTERN = /^[a-f0-9]{32}$/;
 
+// Ephemeral adapter registration (design sections 3 and 7): one identifier and
+// one protected 256-bit secret, both held only in memory.
+export const REGISTRATION_ID_PATTERN = /^reg_[a-f0-9]{32}$/;
+export const REGISTRATION_SECRET_PATTERN = /^[a-f0-9]{64}$/;
+
 // Request authority (design section 3): a handle is stable correlation, the
 // capability is the private key and a decision ID names one resolution.
 export const REQUEST_HANDLE_PATTERN = /^hdl_[a-f0-9]{32}$/;

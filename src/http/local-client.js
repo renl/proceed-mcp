@@ -24,8 +24,15 @@ export function createLocalClient({ port, token, timeoutMs = LOCAL_REQUEST_TIMEO
   }
 
   return {
-    request(method, path, body, extraHeaders = {}) {
+    request(method, path, body, extraHeaders = {}, options = {}) {
       return new Promise((resolve, reject) => {
+        // A signal that is already aborted must not open anything at all: the
+        // caller cancelled before the exchange existed.
+        const signal = options?.signal;
+        if (signal?.aborted === true) {
+          reject(new LocalRequestError('BROKER_UNAVAILABLE', 'the local request was cancelled'));
+          return;
+        }
         if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
           reject(new LocalRequestError('INVALID_REQUEST', 'local request path must be absolute'));
           return;
@@ -42,17 +49,27 @@ export function createLocalClient({ port, token, timeoutMs = LOCAL_REQUEST_TIMEO
         }
 
         let settled = false;
+        let request = null;
         const finish = (error, value) => {
           if (settled) return;
           settled = true;
+          if (signal !== undefined && signal !== null) signal.removeEventListener('abort', cancel);
           if (error) reject(error);
           else resolve(value);
+        };
+        // Abort is transport cancellation: it destroys the live request and its
+        // socket, so a stalled exchange cannot outlive the caller's decision and
+        // no promise timeout has to stand in for real teardown.
+        const cancel = () => {
+          if (settled) return;
+          request?.destroy();
+          finish(new LocalRequestError('BROKER_UNAVAILABLE', 'the local request was cancelled'));
         };
 
         // The address is built as one fixed loopback URL: no configured hostname,
         // redirect or environment proxy can redirect this call elsewhere.
         const address = new URL(`http://127.0.0.1:${port}${path}`);
-        const request = http.request(address, { method, headers, agent: false }, (response) => {
+        request = http.request(address, { method, headers, agent: false }, (response) => {
           const chunks = [];
           response.on('data', (chunk) => chunks.push(chunk));
           response.on('error', () =>
@@ -77,6 +94,12 @@ export function createLocalClient({ port, token, timeoutMs = LOCAL_REQUEST_TIMEO
             finish(null, { status: response.statusCode, body: parsed });
           });
         });
+        // Registered after the request exists, so an abort can always destroy a
+        // real transport, and detached on every settlement so a caller's signal
+        // never accumulates listeners.
+        if (signal !== undefined && signal !== null) {
+          signal.addEventListener('abort', cancel, { once: true });
+        }
 
         request.setTimeout(timeoutMs, () => {
           request.destroy();

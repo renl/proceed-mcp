@@ -10,10 +10,14 @@
 // released or expired registration is forgotten rather than retained.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { conflict, invalidArgument, storageFailure } from '../errors.js';
+// The encodings are shared with the adapter binding, so one definition governs
+// what the broker issues and what an adapter accepts; the exports here keep the
+// checkpoint's public surface unchanged.
+import { REGISTRATION_ID_PATTERN, REGISTRATION_SECRET_PATTERN } from '../util/values.js';
+
+export { REGISTRATION_ID_PATTERN, REGISTRATION_SECRET_PATTERN };
 
 export const REGISTRATION_LEASE_MS = 45000;
-export const REGISTRATION_ID_PATTERN = /^reg_[a-f0-9]{32}$/;
-export const REGISTRATION_SECRET_PATTERN = /^[a-f0-9]{64}$/;
 
 // Only the documented encoding reaches the constant-time comparison.
 function sameSecret(presented, stored) {
