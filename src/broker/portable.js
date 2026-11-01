@@ -14,11 +14,11 @@
 // alone, so no transport owner, token or recovery clock can grant, remove or
 // invalidate it, and the private getter below never exposes challenges.
 //
-// Request replay decodes creation from committed history: creation binds to an
-// already committed reservation and pairing, and the whole history is staged
-// before anything is installed. Expiry has no decoder at this checkpoint, so an
-// expiry mutation is refused rather than skipped. Observations are fresh copies
-// of the committed representation; request-bearing status stays refused below.
+// Request replay decodes creation and expiry from committed history: creation
+// binds to an already committed reservation and pairing, expiry closes one
+// pending request, and the whole history is staged before anything is installed.
+// Observations are fresh copies of the committed representation. The incomplete
+// alpha checkpoint refuses request-bearing status instead of presenting it.
 //
 // The journal stays caller-owned. This module never opens, replaces or closes
 // it, and no reservation result becomes visible before its serialized append
@@ -28,6 +28,7 @@ import { blockedPrerequisite, invalidArgument, storageFailure } from '../errors.
 import { MAX_TELEGRAM_TEXT, measurePortablePresentation } from '../telegram/portable-render.js';
 import {
   CLIENT_REQUEST_ID_PATTERN,
+  DECISION_ID_PATTERN,
   REQUEST_CAPABILITY_PATTERN,
   REQUEST_HANDLE_PATTERN,
   REQUEST_ID_PATTERN,
@@ -47,6 +48,7 @@ const CHALLENGE_OP = 'pairing.challenge';
 const CONSUME_OP = 'pairing.challenge.consume';
 const SET_OP = 'pairing.set';
 const CREATE_OP = 'request.create';
+const EXPIRE_OP = 'request.expire';
 const PAIRING_TTL_SECONDS = 300n;
 const MAX_LABEL_SCALARS = 128;
 const MIN_DURATION_SECONDS = 60;
@@ -78,6 +80,10 @@ const CREATE_FIELDS = [
   'pairing_snapshot',
   'request_handle',
 ];
+const EXPIRE_FIELDS = ['decision_id', 'delivery_state', 'op', 'request_id', 'resolved_at'];
+// Initial delivery for a terminal closure: the vocabulary admits the live-waiter
+// value, but no alpha path establishes a waiter, so alpha persists `unavailable`.
+const DELIVERY_STATES = new Set(['pending', 'unavailable']);
 const EVENT_CAPABILITY = Object.freeze({
   status: 'unverified',
   revision: null,
@@ -349,8 +355,38 @@ function readCreate(mutation) {
       created_at: mutation.created_at,
       expires_at: mutation.expires_at,
       createdAt,
+      expiresAt,
       pairedAt,
       snapshot,
+    },
+  };
+}
+
+function readExpire(mutation) {
+  exactFields(mutation, EXPIRE_FIELDS);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string') throw integrity(`${EXPIRE_OP} needs a text request id`);
+  if (!REQUEST_ID_PATTERN.test(requestId))
+    throw integrity(`${EXPIRE_OP} has a malformed request id`);
+  const decisionId = mutation.decision_id;
+  if (typeof decisionId !== 'string') throw integrity(`${EXPIRE_OP} needs a text decision id`);
+  if (!DECISION_ID_PATTERN.test(decisionId)) {
+    throw integrity(`${EXPIRE_OP} has a malformed decision id`);
+  }
+  const resolvedAt = readInstant(mutation.resolved_at);
+  if (resolvedAt === null) throw integrity(`${EXPIRE_OP} has a malformed resolution time`);
+  const delivery = mutation.delivery_state;
+  if (typeof delivery !== 'string' || !DELIVERY_STATES.has(delivery)) {
+    throw integrity(`${EXPIRE_OP} has an unsupported initial delivery state`);
+  }
+  return {
+    kind: 'expire',
+    record: {
+      request_id: requestId,
+      decision_id: decisionId,
+      resolved_at: mutation.resolved_at,
+      delivery_state: delivery,
+      resolvedAt,
     },
   };
 }
@@ -372,6 +408,8 @@ function readMutation(mutation) {
       return readSet(mutation);
     case CREATE_OP:
       return readCreate(mutation);
+    case EXPIRE_OP:
+      return readExpire(mutation);
     default:
       throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
   }
@@ -470,6 +508,7 @@ function stageCreate(record, staged, pairing, reservedNow) {
     context: record.context,
     created_at: record.created_at,
     expires_at: record.expires_at,
+    expiresAt: record.expiresAt,
     resolution: 'pending',
     resolved_at: null,
     response_text: null,
@@ -483,6 +522,27 @@ function stageCreate(record, staged, pairing, reservedNow) {
   }
   staged.created.add(request.request_handle);
   staged.requests.set(request.request_id, request);
+}
+
+// Expiry closes one pending request at or after its recorded deadline and spends
+// its decision identity once across the whole journal.
+function stageExpire(record, staged) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${EXPIRE_OP} names no committed request`);
+  if (request.resolution !== 'pending') {
+    throw integrity(`${EXPIRE_OP} targets an already resolved request`);
+  }
+  if (compareInstants(record.resolvedAt, request.expiresAt) < 0) {
+    throw integrity(`${EXPIRE_OP} precedes the request deadline`);
+  }
+  if (staged.decisions.has(record.decision_id)) {
+    throw integrity(`decision id ${record.decision_id} is used twice`);
+  }
+  staged.decisions.add(record.decision_id);
+  request.resolution = 'expired';
+  request.resolved_at = record.resolved_at;
+  request.decision_id = record.decision_id;
+  request.delivery_state = record.delivery_state;
 }
 
 class PortableBroker {
@@ -550,6 +610,7 @@ class PortableBroker {
       byVerifier: new Map(),
       requests: new Map(),
       created: new Set(),
+      decisions: new Set(),
     };
     const challenges = new Map();
     let pairing = null;
@@ -562,6 +623,7 @@ class PortableBroker {
       for (const record of records) {
         if (record.kind === 'reservation') stageReservation(record.record, staged, reservedNow);
         else if (record.kind === 'create') stageCreate(record.record, staged, pairing, reservedNow);
+        else if (record.kind === 'expire') stageExpire(record.record, staged);
         else pairingRecords.push(record);
       }
       pairing = applyPairing(pairingRecords, challenges, pairing);
