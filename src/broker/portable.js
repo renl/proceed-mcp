@@ -691,6 +691,7 @@ class PortableBroker {
 
   #fence = null;
 
+  #deadlineFailure = null;
   #closing = false;
 
   #closed = false;
@@ -880,6 +881,32 @@ class PortableBroker {
     const refusal = this.#admissionRefusal();
     if (refusal !== null) return Promise.reject(refusal);
     return this.#enqueue(async () => ({ expired: await this.#sweepDue() }));
+  }
+
+  // Ordinary periodic deadline processing (design sections 4 and 7): the same
+  // bounded sweep, but a failure installs the operational latch inside the
+  // serialized turn, before the queue releases, so a follower released after the
+  // failed attempt cannot sample time, allocate an identity, append or succeed.
+  scheduledSweep() {
+    const refusal = this.#admissionRefusal();
+    if (refusal !== null) return Promise.reject(refusal);
+    return this.#enqueue(async () => {
+      try {
+        return { expired: await this.#sweepDue() };
+      } catch (error) {
+        this.latchDeadlineFailure();
+        throw error;
+      }
+    });
+  }
+
+  // Idempotent, append-free, never cleared: the fence above stays separate.
+  latchDeadlineFailure() {
+    this.#deadlineFailure ??= storageFailure(
+      'deadline processing failed; stop and restart the portable broker',
+      'STORAGE_FAILURE',
+    );
+    return this.#deadlineFailure;
   }
 
   // Awaited status (design sections 3 and 7): expiry and the response view are
@@ -1155,6 +1182,7 @@ class PortableBroker {
 
   async #admitted(task) {
     if (this.#fence !== null) throw this.#fence;
+    if (this.#deadlineFailure !== null) throw this.#deadlineFailure;
     return task();
   }
 

@@ -2,7 +2,13 @@
 // `doctor` remains a documented target that this build does not implement, so
 // it fails as an invalid command rather than pretending to check anything.
 import { TELEGRAM_TOKEN_ENV } from '../config/portable-config.js';
-import { CliError, EXIT_CODE, blockedPrerequisite, invalidArgument } from '../errors.js';
+import {
+  CliError,
+  EXIT_CODE,
+  blockedPrerequisite,
+  invalidArgument,
+  storageFailure,
+} from '../errors.js';
 import { createLocalClient, LocalRequestError } from '../http/local-client.js';
 import { createToolExecutor } from '../mcp/execution.js';
 import { createRegistrationBinding } from '../mcp/registration.js';
@@ -73,6 +79,11 @@ function failureFromResponse(response) {
   const message = response.body?.error?.message ?? 'the broker rejected the request';
   if (response.status === 400 || response.status === 404 || response.status === 409) {
     return invalidArgument(`${message} (${code})`, code);
+  }
+  // A runtime whose deadline processing failed is still listening, so this is an
+  // operational storage refusal to act on, not a prerequisite to wait out.
+  if (response.status === 500 && code === 'STORAGE_FAILURE') {
+    return storageFailure(`${message} (${code})`, code);
   }
   return blockedPrerequisite(`${message} (${code})`, code);
 }
@@ -212,6 +223,13 @@ async function runServe(argv, { stdout, stderr, env }) {
 
   stdout.write(`proceed-mcp: broker ready on http://127.0.0.1:${runtime.port}\n`);
   stdout.write(`proceed-mcp: state directory ${paths.stateDir}\n`);
+  // Local readiness does not depend on the token: one diagnostic after success only.
+  const token = env[TELEGRAM_TOKEN_ENV];
+  if (token === undefined || token === '') {
+    stderr.write(
+      `proceed-mcp: Telegram unavailable: set ${TELEGRAM_TOKEN_ENV} and restart serve; local broker only\n`,
+    );
+  }
   await waitForSignal();
   await runtime.stop();
   stdout.write('proceed-mcp: broker stopped\n');

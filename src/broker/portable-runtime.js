@@ -13,6 +13,7 @@ import { readLocalCredential } from '../state/credentials.js';
 import { readOwnerCredential } from '../state/owner-credentials.js';
 import { acquireStateOwnership } from '../state/ownership.js';
 import { verifyOwnerOnly } from '../state/protection.js';
+import { startExpirySchedule } from './expiry-schedule.js';
 import { createPortableBroker } from './portable.js';
 import { createPortableServer } from './portable-server.js';
 
@@ -39,6 +40,7 @@ export async function startPortableRuntime({
   let journal = null;
   let broker = null;
   let server = null;
+  let schedule = null;
   try {
     const control = await readLocalCredential(
       paths.controlCredentialFile,
@@ -63,6 +65,9 @@ export async function startPortableRuntime({
       logger,
     });
     await broker.recover();
+    // The serialized startup expiry flushes before the port binds, so overdue work
+    // never waits for an observation call.
+    await broker.sweepExpired();
 
     server = createPortableServer({
       broker,
@@ -86,9 +91,11 @@ export async function startPortableRuntime({
     }
     await verifyOwnerOnly([paths.stateDir, paths.credentialsDir, paths.journalFile]);
     server.markReady();
+    schedule = startExpirySchedule({ broker, logger });
   } catch (error) {
     // Nothing may outlive a failed start: close only this invocation's own
     // listener, journal activity and ownership record, then report the cause.
+    await schedule?.stop().catch(() => {});
     await server?.close().catch(() => {});
     await broker?.close().catch(() => {});
     await journal?.close().catch(() => {});
@@ -96,26 +103,33 @@ export async function startPortableRuntime({
     throw error;
   }
 
-  let stopped = false;
+  let stopping = false;
+  let stopPromise = null;
   return {
     broker,
     port: config.broker.port,
     journalSequence: journal.sequence,
-    ready: true,
-    async stop() {
-      if (stopped) return;
-      stopped = true;
-      await server.close().catch(() => {});
-      // Closing the authority drains accepted commits and refuses new ones;
-      // only after the journal is closed may this invocation release the record
-      // that bears its own identity.
-      await broker.close().catch(() => {});
-      await journal.close().catch(() => {});
-      await ownership.release().catch((error) => {
-        logger(
-          `the ownership record was not released: ${error?.message ?? 'unknown error'}; remove it only after verifying this broker has stopped`,
-        );
-      });
+    // Operational health, never the listener's transport admission alone.
+    get ready() {
+      return !stopping && !schedule.failed;
+    },
+    stop() {
+      if (stopPromise !== null) return stopPromise;
+      stopping = true;
+      stopPromise = (async () => {
+        // Scheduling stops first, so a queued attempt settles before any close.
+        await schedule.stop();
+        await server.close().catch(() => {});
+        // The authority drains accepted commits before its journal and record close.
+        await broker.close().catch(() => {});
+        await journal.close().catch(() => {});
+        await ownership.release().catch((error) => {
+          logger(
+            `the ownership record was not released: ${error?.message ?? 'unknown error'}; remove it only after verifying this broker has stopped`,
+          );
+        });
+      })();
+      return stopPromise;
     },
   };
 }
