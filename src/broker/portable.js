@@ -17,14 +17,14 @@
 // Request replay decodes creation and expiry from committed history: creation
 // binds to an already committed reservation and pairing, expiry closes one
 // pending request, and the whole history is staged before anything is installed.
-// Observations are fresh copies of the committed representation. The incomplete
-// alpha checkpoint refuses request-bearing status instead of presenting it.
+// Observations are fresh copies of the committed representation. Expiry is
+// written here, and awaited status captures its view in one serialized turn.
 //
 // The journal stays caller-owned. This module never opens, replaces or closes
 // it, and no reservation result becomes visible before its serialized append
 // has completed the journal's own file flush.
 import { timingSafeEqual } from 'node:crypto';
-import { blockedPrerequisite, invalidArgument, storageFailure } from '../errors.js';
+import { invalidArgument, storageFailure } from '../errors.js';
 import { MAX_TELEGRAM_TEXT, measurePortablePresentation } from '../telegram/portable-render.js';
 import {
   CLIENT_REQUEST_ID_PATTERN,
@@ -33,6 +33,7 @@ import {
   REQUEST_HANDLE_PATTERN,
   REQUEST_ID_PATTERN,
   isPlainObject,
+  randomDecisionId,
   randomRequestCapability,
   randomRequestHandle,
   randomRequestId,
@@ -82,16 +83,16 @@ const CREATE_FIELDS = [
 ];
 const EXPIRE_FIELDS = ['decision_id', 'delivery_state', 'op', 'request_id', 'resolved_at'];
 // Initial delivery for a terminal closure: the vocabulary admits the live-waiter
-// value, but no alpha path establishes a waiter, so alpha persists `unavailable`.
+// value, but no path establishes a waiter yet, so an expiry persists `unavailable`.
 const DELIVERY_STATES = new Set(['pending', 'unavailable']);
 const EVENT_CAPABILITY = Object.freeze({
   status: 'unverified',
   revision: null,
   reason: 'No verified Events contract or host support',
 });
-// Temporary incomplete-checkpoint refusal (design section 7): request-bearing
-// status needs the serialized expiry writer that alpha does not have yet.
-const STATUS_REFUSAL = 'request-bearing status requires the serialized expiry checkpoint';
+// A sweep commits one bounded transaction per group; grouping is an internal
+// batching choice, not an ordering promise to the caller.
+const SWEEP_GROUP_SIZE = 100;
 // Pairing timestamps are UTC RFC 3339 instants. The offset is `Z` or `+00:00`
 // only: `-00:00` states that the offset is unknown, so it is not UTC here.
 const UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|\+00:00)$/;
@@ -244,6 +245,19 @@ function compareInstants(left, right) {
   const rightDigits = right.fraction.padEnd(width, '0');
   if (leftDigits === rightDigits) return 0;
   return leftDigits < rightDigits ? -1 : 1;
+}
+
+// A clock reading becomes an exact instant: the stored deadline keeps its
+// fractional spelling, so a submillisecond deadline is never rounded into the
+// past and a sample that reaches only the whole second is not yet due.
+function clockInstant(milliseconds) {
+  const seconds = Math.floor(milliseconds / 1000);
+  const fraction = String(milliseconds - seconds * 1000).padStart(3, '0');
+  return { seconds: BigInt(seconds), fraction: fraction.replace(/0+$/, '') };
+}
+
+function isDue(request, milliseconds) {
+  return compareInstants(clockInstant(milliseconds), request.expiresAt) >= 0;
 }
 
 // Telegram IDs are stored losslessly as decimal strings: no numeric conversion,
@@ -556,6 +570,8 @@ class PortableBroker {
 
   #logger;
 
+  #generateDecisionId;
+
   #startedAt;
 
   #byHandle = new Map();
@@ -568,6 +584,8 @@ class PortableBroker {
 
   #requests = new Map();
 
+  #decisions = new Set();
+
   #queue = Promise.resolve();
 
   #recovered = false;
@@ -578,7 +596,7 @@ class PortableBroker {
 
   #closingPromise = null;
 
-  constructor({ journal, owners, port, clock, logger }) {
+  constructor({ journal, owners, port, clock, logger, generateDecisionId }) {
     this.#journal = journal;
     this.#owners = new Map();
     for (const owner of owners) {
@@ -595,6 +613,7 @@ class PortableBroker {
     this.#port = port;
     this.#clock = clock;
     this.#logger = logger;
+    this.#generateDecisionId = generateDecisionId;
     this.#startedAt = utcTimestamp(clock());
   }
 
@@ -632,6 +651,7 @@ class PortableBroker {
     this.#byRequestId = staged.byRequestId;
     this.#byVerifier = staged.byVerifier;
     this.#requests = staged.requests;
+    this.#decisions = staged.decisions;
     this.#pairing = pairing;
     this.#recovered = true;
     return { records: transactions.length };
@@ -689,16 +709,38 @@ class PortableBroker {
     };
   }
 
-  // Temporary incomplete-checkpoint gate (design section 7). Request-bearing
-  // status needs the serialized expiry writer, so it refuses synchronously
-  // without sampling time, appending or changing committed state.
+  // Authorized target read (design sections 3-4). The configured principal, one
+  // explicit exact request id and the capability must name one committed
+  // reservation before anything is queued, so any missing, malformed, foreign or
+  // mismatched binding is denied without sampling time, appending or mutating
+  // state.
+  readRequest(input) {
+    const target = this.#readBinding(input);
+    if (target === null) return Promise.resolve(null);
+    return this.#enqueue(() => this.#expireTarget(target.request_id));
+  }
+
+  // Bounded sweep (design section 7): each nonempty pending group samples its own
+  // fresh time inside the serialized turn and commits at most SWEEP_GROUP_SIZE
+  // closures in one append. A group is installed only after that flush returns, so
+  // an earlier flushed group survives a later refusal, which rejects instead of
+  // reporting a partial success count.
+  sweepExpired() {
+    return this.#enqueue(async () => ({ expired: await this.#sweepDue() }));
+  }
+
+  // Awaited status (design sections 3 and 7): expiry and the response view are
+  // captured inside one serialized turn, so the reported requests are exactly the
+  // committed state this call observed, never a stale pending or empty success.
   status() {
-    if (this.#requests.size > 0) throw blockedPrerequisite(STATUS_REFUSAL);
-    return {
-      schema_version: PORTABLE_REPRESENTATION_SCHEMA_VERSION,
-      broker: { pid: process.pid, port: this.#port, started_at: this.#startedAt },
-      requests: [],
-    };
+    return this.#enqueue(async () => {
+      await this.#sweepDue();
+      return {
+        schema_version: PORTABLE_REPRESENTATION_SCHEMA_VERSION,
+        broker: { pid: process.pid, port: this.#port, started_at: this.#startedAt },
+        requests: [...this.#requests.values()].map(requestView),
+      };
+    });
   }
 
   // Drains accepted commits, then refuses further mutation. The caller's
@@ -758,6 +800,94 @@ class PortableBroker {
     this.#byVerifier.set(record.capability_hash, record);
   }
 
+  // Authority binding for a target read, resolved before the queue: the principal
+  // must still be configured, the request id must be an explicitly supplied
+  // well-formed identifier, and the capability must verify against that reservation.
+  #readBinding(input) {
+    if (!isPlainObject(input)) return null;
+    const { ownerId, capability, requestId } = input;
+    if (typeof ownerId !== 'string' || !this.#owners.has(ownerId)) return null;
+    if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) return null;
+    return this.authorize({ ownerId, capability, requestId });
+  }
+
+  // Closes at most this one target and reports the committed representation: a
+  // pending request is sampled once, and a terminal or absent one is not sampled.
+  async #expireTarget(requestId) {
+    const request = this.#requests.get(requestId);
+    if (request === undefined) return null;
+    if (request.resolution === 'pending') {
+      const now = this.#clock();
+      if (isDue(request, now)) await this.#commitExpiry(now, [request]);
+    }
+    return requestView(request);
+  }
+
+  // Expiry work for one serialized turn: pending requests are grouped, and only a
+  // group with a reached deadline samples time, generates identities or appends.
+  // An empty or terminal-only journal samples nothing at all.
+  async #sweepDue() {
+    const pending = [...this.#requests.values()].filter(
+      (request) => request.resolution === 'pending',
+    );
+    let expired = 0;
+    for (let start = 0; start < pending.length; start += SWEEP_GROUP_SIZE) {
+      const now = this.#clock();
+      const group = pending.slice(start, start + SWEEP_GROUP_SIZE);
+      const due = group.filter((request) => isDue(request, now));
+      if (due.length === 0) continue;
+      await this.#commitExpiry(now, due);
+      expired += due.length;
+    }
+    return expired;
+  }
+
+  // One transaction of closures: every identity is generated and checked first, so
+  // a malformed, throwing or colliding generator refuses the whole group before a
+  // byte is written, and the closures become visible only after the flush.
+  async #commitExpiry(now, due) {
+    const resolvedAt = utcTimestamp(now);
+    const issued = new Set();
+    const mutations = due.map((request) => ({
+      op: EXPIRE_OP,
+      request_id: request.request_id,
+      decision_id: this.#nextDecisionId(issued),
+      resolved_at: resolvedAt,
+      delivery_state: 'unavailable',
+    }));
+    await this.#journal.append(mutations);
+    for (const mutation of mutations) this.#installExpiry(mutation);
+    this.#logger('portable.request.expired', { count: mutations.length });
+  }
+
+  // A decision identity is spent once across recovered history and the pending
+  // batch, and only its exact persisted spelling is accepted.
+  #nextDecisionId(issued) {
+    let value;
+    try {
+      value = this.#generateDecisionId();
+    } catch (cause) {
+      throw storageFailure('the decision identity generator failed', 'STORAGE_FAILURE', cause);
+    }
+    if (typeof value !== 'string' || !DECISION_ID_PATTERN.test(value)) {
+      throw storageFailure('the decision identity generator produced an invalid identifier');
+    }
+    if (issued.has(value) || this.#decisions.has(value)) {
+      throw storageFailure('a decision identity is already spent', 'JOURNAL_IDENTIFIER_COLLISION');
+    }
+    issued.add(value);
+    return value;
+  }
+
+  #installExpiry(mutation) {
+    const request = this.#requests.get(mutation.request_id);
+    request.resolution = 'expired';
+    request.resolved_at = mutation.resolved_at;
+    request.decision_id = mutation.decision_id;
+    request.delivery_state = mutation.delivery_state;
+    this.#decisions.add(mutation.decision_id);
+  }
+
   #enqueue(task) {
     const run = this.#queue.then(task);
     this.#queue = run.then(ignore, ignore);
@@ -771,6 +901,7 @@ export function createPortableBroker({
   port,
   clock = () => Date.now(),
   logger = () => {},
+  generateDecisionId = randomDecisionId,
 } = {}) {
   if (typeof journal?.append !== 'function' || typeof journal?.recover !== 'function') {
     throw invalidArgument('a portable broker needs a caller-owned journal');
@@ -781,5 +912,5 @@ export function createPortableBroker({
   }
   if (typeof clock !== 'function') throw invalidArgument('clock must be a function');
   if (typeof logger !== 'function') throw invalidArgument('logger must be a function');
-  return new PortableBroker({ journal, owners, port, clock, logger });
+  return new PortableBroker({ journal, owners, port, clock, logger, generateDecisionId });
 }

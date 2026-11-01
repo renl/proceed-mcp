@@ -272,7 +272,8 @@ export function createPortableServer({
     }
 
     if (request.method === 'GET' && pathname === '/v1/status') {
-      if (requireRole(response, principal, 'control')) send(response, 200, broker.status());
+      if (!requireRole(response, principal, 'control')) return;
+      send(response, 200, await broker.status());
       return;
     }
 

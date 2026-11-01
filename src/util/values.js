@@ -32,6 +32,11 @@ export function randomRequestCapability() {
   return `cap_${randomBytes(32).toString('hex')}`;
 }
 
+// One 128-bit identity per resolution, so no decision can be spent twice.
+export function randomDecisionId() {
+  return `dec_${randomBytes(16).toString('hex')}`;
+}
+
 export function randomCallbackToken() {
   return randomBytes(16).toString('hex');
 }
