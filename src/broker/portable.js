@@ -28,6 +28,13 @@
 // after the deadline the existing expiry writer wins instead, and one resolution
 // is kept.
 //
+// Delivery evidence is separate from resolution: a capability-authorized
+// acknowledgement confirms the holder received the matching terminal outcome,
+// and a returned report records an adapter's claim of a successful result write.
+// Each keeps its own first timestamp, neither allocates a decision or changes the
+// outcome, repeats never append, and a returned report never downgrades a
+// confirmation. Both are ledger assertions, never proof of a written response.
+//
 // The journal stays caller-owned. This module never opens, replaces or closes
 // it, and no reservation result becomes visible before its serialized append
 // has completed the journal's own file flush.
@@ -66,6 +73,8 @@ const SET_OP = 'pairing.set';
 const CREATE_OP = 'request.create';
 const EXPIRE_OP = 'request.expire';
 const CANCEL_OP = 'request.cancel';
+const ACKNOWLEDGE_OP = 'request.acknowledge';
+const RETURNED_OP = 'request.returned';
 const PAIRING_TTL_SECONDS = 300n;
 const MAX_LABEL_SCALARS = 128;
 const MIN_DURATION_SECONDS = 60;
@@ -105,6 +114,21 @@ const CREATE_FIELDS = [
 // Expiry and cancellation persist the same five closure fields: one mutation
 // establishes the terminal resolution, its identity and its initial delivery.
 const CLOSURE_FIELDS = ['decision_id', 'delivery_state', 'op', 'request_id', 'resolved_at'];
+// First delivery evidence persists exactly five fields too; the two kinds differ
+// only in the name of their independent timestamp.
+const EVIDENCE_FIELDS = Object.freeze({
+  acknowledge: ['acknowledged_at', 'decision_id', 'delivery_state', 'op', 'request_id'],
+  returned: ['decision_id', 'delivery_state', 'op', 'request_id', 'returned_at'],
+});
+const EVIDENCE_OPS = Object.freeze({ acknowledge: ACKNOWLEDGE_OP, returned: RETURNED_OP });
+const EVIDENCE_TIME = Object.freeze({
+  acknowledge: 'acknowledged_at',
+  returned: 'returned_at',
+});
+// A first evidence kind can only establish a `returned` report or a
+// `confirmed` acknowledgement; a returned report on already confirmed state
+// retains confirmation.
+const EVIDENCE_STATES = new Set(['confirmed', 'returned']);
 // Initial delivery for a terminal closure: the vocabulary admits the live-waiter
 // value, but no path establishes a waiter yet, so an expiry persists `unavailable`.
 const DELIVERY_STATES = new Set(['pending', 'unavailable']);
@@ -365,19 +389,16 @@ function creationTimes(clock, duration) {
   return { created_at: createdText, expires_at: expiresText, createdAt, expiresAt };
 }
 
-// A cancellation samples the clock once inside its serialized turn. An unusable
-// reading or an instant that cannot be represented is the existing storage
-// failure, refused before any append, so it never fences the journal.
-function cancellationTime(clock) {
+// Cancellation and delivery evidence each record one broker time inside their
+// serialized turn. An unusable reading or an instant that cannot be represented
+// is the existing storage failure, refused before any append, so it never fences
+// the journal.
+function turnTime(clock, action, noun) {
   let milliseconds;
   try {
     milliseconds = clock();
   } catch (cause) {
-    throw storageFailure(
-      'the broker clock failed while cancelling a request',
-      'STORAGE_FAILURE',
-      cause,
-    );
+    throw storageFailure(`the broker clock failed while ${action}`, 'STORAGE_FAILURE', cause);
   }
   if (typeof milliseconds !== 'number' || !Number.isFinite(milliseconds)) {
     throw storageFailure('the broker clock did not return a usable instant', 'STORAGE_FAILURE');
@@ -386,20 +407,24 @@ function cancellationTime(clock) {
   try {
     text = utcTimestamp(milliseconds);
   } catch (cause) {
-    throw storageFailure(
-      'the cancellation time cannot be represented in UTC',
-      'STORAGE_FAILURE',
-      cause,
-    );
+    throw storageFailure(`the ${noun} time cannot be represented in UTC`, 'STORAGE_FAILURE', cause);
   }
   const instant = readInstant(text);
   if (instant === null) {
     throw storageFailure(
-      'the cancellation time is outside the representable UTC range',
+      `the ${noun} time is outside the representable UTC range`,
       'STORAGE_FAILURE',
     );
   }
   return { milliseconds, text, instant };
+}
+
+function cancellationTime(clock) {
+  return turnTime(clock, 'cancelling a request', 'cancellation');
+}
+
+function evidenceTime(clock) {
+  return turnTime(clock, 'recording delivery evidence', 'delivery evidence');
 }
 
 // Telegram IDs are stored losslessly as decimal strings: no numeric conversion,
@@ -548,6 +573,38 @@ function readClosure(mutation, op) {
   };
 }
 
+// Delivery evidence decodes from exactly its five persisted fields: the target,
+// the already recorded decision identity, the first time of this kind and the
+// delivery state it must establish.
+function readEvidence(mutation, kind) {
+  const op = EVIDENCE_OPS[kind];
+  exactFields(mutation, EVIDENCE_FIELDS[kind]);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string') throw integrity(`${op} needs a text request id`);
+  if (!REQUEST_ID_PATTERN.test(requestId)) throw integrity(`${op} has a malformed request id`);
+  const decisionId = mutation.decision_id;
+  if (typeof decisionId !== 'string') throw integrity(`${op} needs a text decision id`);
+  if (!DECISION_ID_PATTERN.test(decisionId)) throw integrity(`${op} has a malformed decision id`);
+  const text = mutation[EVIDENCE_TIME[kind]];
+  const recordedAt = readInstant(text);
+  if (recordedAt === null) throw integrity(`${op} has a malformed evidence time`);
+  const delivery = mutation.delivery_state;
+  if (typeof delivery !== 'string') throw integrity(`${op} has an unsupported delivery state`);
+  if (kind === 'acknowledge' ? delivery !== 'confirmed' : !EVIDENCE_STATES.has(delivery)) {
+    throw integrity(`${op} has an unsupported delivery state`);
+  }
+  return {
+    kind,
+    record: {
+      request_id: requestId,
+      decision_id: decisionId,
+      recorded_at: text,
+      recordedAt,
+      delivery_state: delivery,
+    },
+  };
+}
+
 // Pairing joins the reservation vocabulary of committed history. An unfamiliar
 // operation stays fatal rather than skipped.
 function readMutation(mutation) {
@@ -569,6 +626,10 @@ function readMutation(mutation) {
       return readClosure(mutation, EXPIRE_OP);
     case CANCEL_OP:
       return readClosure(mutation, CANCEL_OP);
+    case ACKNOWLEDGE_OP:
+      return readEvidence(mutation, 'acknowledge');
+    case RETURNED_OP:
+      return readEvidence(mutation, 'returned');
     default:
       throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
   }
@@ -671,7 +732,10 @@ function stageCreate(record, staged, pairing, reservedNow) {
     expiresAt: record.expiresAt,
     resolution: 'pending',
     resolved_at: null,
+    resolvedAt: null,
     response_text: null,
+    acknowledgedAt: null,
+    returnedAt: null,
     decision_id: null,
     telegram_state: 'pending',
     delivery_state: 'not_applicable',
@@ -710,8 +774,43 @@ function stageClosure(record, staged, resolution) {
   staged.decisions.add(record.decision_id);
   request.resolution = resolution;
   request.resolved_at = record.resolved_at;
+  request.resolvedAt = record.resolvedAt;
   request.decision_id = record.decision_id;
   request.delivery_state = record.delivery_state;
+}
+
+// First evidence is recorded once per kind against one known terminal request
+// and its already recorded decision identity: it never resolves or re-identifies
+// anything. The recorded time is bounded only by the resolution, and the two
+// kinds are independent, so neither implies the other. A returned report may set
+// `returned` or retain `confirmed`, never downgrade it.
+function stageEvidence(record, staged) {
+  const op = EVIDENCE_OPS[record.kind];
+  const {
+    request_id: requestId,
+    decision_id: decisionId,
+    recordedAt,
+    delivery_state: delivery,
+  } = record.record;
+  const request = staged.requests.get(requestId);
+  if (request === undefined) throw integrity(`${op} names no committed request`);
+  if (request.resolution === 'pending') throw integrity(`${op} targets a pending request`);
+  if (request.decision_id !== decisionId) {
+    throw integrity(`${op} does not match the recorded decision`);
+  }
+  if (request.resolvedAt === null || compareInstants(recordedAt, request.resolvedAt) < 0) {
+    throw integrity(`${op} precedes the resolution`);
+  }
+  const field = record.kind === 'acknowledge' ? 'acknowledgedAt' : 'returnedAt';
+  if (request[field] !== null) throw integrity(`${op} is recorded twice`);
+  const required =
+    record.kind === 'acknowledge' || request.delivery_state === 'confirmed'
+      ? 'confirmed'
+      : 'returned';
+  if (delivery !== required) throw integrity(`${op} has an unsupported delivery state`);
+  request[field] = recordedAt;
+  request.delivery_state = delivery;
+  request.delivery_error = null;
 }
 
 class PortableBroker {
@@ -830,7 +929,9 @@ class PortableBroker {
         else if (record.kind === 'create') stageCreate(record.record, staged, pairing, reservedNow);
         else if (record.kind === 'expire') stageClosure(record.record, staged, 'expired');
         else if (record.kind === 'cancel') stageClosure(record.record, staged, 'cancelled');
-        else pairingRecords.push(record);
+        else if (record.kind === 'acknowledge' || record.kind === 'returned') {
+          stageEvidence(record, staged);
+        } else pairingRecords.push(record);
       }
       pairing = applyPairing(pairingRecords, challenges, pairing);
     }
@@ -939,6 +1040,21 @@ class PortableBroker {
     const refusal = this.#admissionRefusal();
     if (refusal !== null) return Promise.reject(refusal);
     return this.#enqueue(() => this.#cancel(target.request_id));
+  }
+
+  // Capability-authorized acknowledgement (design sections 4 and 6, A2b): the
+  // first evidence that the request-capability holder received the matching
+  // terminal outcome. It resolves nothing, allocates no decision and schedules no
+  // continuation; a repeat is observation, not a new effect.
+  acknowledgeRequest(input = {}) {
+    return this.#evidence('acknowledge', input);
+  }
+
+  // Capability-authorized returned report (design sections 4 and 6, A2b): the
+  // first evidence of a successful terminal-result write, as asserted by the
+  // adapter. It never downgrades a confirmation and never proves client receipt.
+  returnedRequest(input = {}) {
+    return this.#evidence('returned', input);
   }
 
   // Bounded sweep (design section 7): each nonempty pending group samples its own
@@ -1076,6 +1192,32 @@ class PortableBroker {
     return this.authorize({ ownerId, capability, requestHandle });
   }
 
+  // Ledger admission in design order: the argument object and the raw decision
+  // identity are validated before authority, authority before admission, and a
+  // reservation without a committed request is not an evidence target. So a
+  // denial or a malformed decision is settled without queueing, sampling time or
+  // disclosing whether the target exists.
+  #evidence(kind, input) {
+    return Promise.resolve().then(() => {
+      if (!isPlainObject(input)) throw invalidArgument(`${EVIDENCE_OPS[kind]} needs an object`);
+      const decisionId = input.decisionId;
+      if (typeof decisionId !== 'string' || !DECISION_ID_PATTERN.test(decisionId)) {
+        throw invalidArgument(`${EVIDENCE_OPS[kind]} needs a well-formed decision id`);
+      }
+      const target = this.#readBinding(input);
+      if (target === null || !this.#requests.has(target.request_id)) return null;
+      const refusal = this.#admissionRefusal();
+      if (refusal !== null) throw refusal;
+      if (!this.#recovered) {
+        throw storageFailure(
+          'the portable broker has not recovered the journal',
+          'STORAGE_FAILURE',
+        );
+      }
+      return this.#enqueue(() => this.#recordEvidence(kind, target.request_id, decisionId));
+    });
+  }
+
   // One serialized creation turn: an existing creation is compared with the
   // requested fields before any time is sampled or a deadline is derived, an
   // identical retry returns it through the accepted target-only expiry path,
@@ -1130,7 +1272,10 @@ class PortableBroker {
       expiresAt: times.expiresAt,
       resolution: 'pending',
       resolved_at: null,
+      resolvedAt: null,
       response_text: null,
+      acknowledgedAt: null,
+      returnedAt: null,
       decision_id: null,
       telegram_state: 'pending',
       delivery_state: 'not_applicable',
@@ -1206,6 +1351,50 @@ class PortableBroker {
     return requestView(request);
   }
 
+  // One serialized first-evidence turn (design sections 4 and 6, A2b). A pending
+  // target or a different decision identity is the documented conflict and never
+  // expires, samples or appends, even when the pending target is due. Already
+  // recorded evidence of this kind is returned as the current copied view without
+  // replacing its first time or appending again. Otherwise the clock is sampled
+  // once, bounded by the recorded resolution, and the evidence is installed only
+  // after its flush, so a repeat report can never downgrade a confirmation.
+  async #recordEvidence(kind, requestId, decisionId) {
+    const request = this.#requests.get(requestId);
+    if (request === undefined) return null;
+    const op = EVIDENCE_OPS[kind];
+    if (request.resolution === 'pending' || request.decision_id !== decisionId) {
+      throw conflict(
+        `${op} needs a terminal request with its recorded decision`,
+        'DECISION_MISMATCH',
+      );
+    }
+    const field = kind === 'acknowledge' ? 'acknowledgedAt' : 'returnedAt';
+    if (request[field] !== null) return requestView(request);
+    const sampled = evidenceTime(this.#clock);
+    if (request.resolvedAt === null || compareInstants(sampled.instant, request.resolvedAt) < 0) {
+      throw storageFailure(`${op} would precede its resolution`, 'STORAGE_FAILURE');
+    }
+    // Only a returned report observes the current state; an acknowledgement is
+    // always `confirmed` because it is the strongest recorded evidence.
+    const delivery =
+      kind === 'returned' && request.delivery_state !== 'confirmed' ? 'returned' : 'confirmed';
+    const mutation = {
+      op,
+      request_id: request.request_id,
+      decision_id: decisionId,
+      [EVIDENCE_TIME[kind]]: sampled.text,
+      delivery_state: delivery,
+    };
+    await this.#append([mutation]);
+    request[field] = sampled.instant;
+    request.delivery_state = delivery;
+    // No producer records a delivery error yet; clearing the current problem is
+    // what first evidence means, and it never invents an error or a repair.
+    request.delivery_error = null;
+    this.#logger(`portable.request.${kind}`, { request_id: request.request_id });
+    return requestView(request);
+  }
+
   // Expiry work for one serialized turn: pending requests are grouped, and only a
   // group with a reached deadline samples time, generates identities or appends.
   // An empty or terminal-only journal samples nothing at all.
@@ -1266,6 +1455,9 @@ class PortableBroker {
     const request = this.#requests.get(mutation.request_id);
     request.resolution = resolution;
     request.resolved_at = mutation.resolved_at;
+    // The decoded instant is kept exactly as persisted, so a later evidence
+    // lower bound compares against the closure spelling, not a rounded one.
+    request.resolvedAt = readInstant(mutation.resolved_at);
     request.decision_id = mutation.decision_id;
     request.delivery_state = mutation.delivery_state;
     this.#decisions.add(mutation.decision_id);
