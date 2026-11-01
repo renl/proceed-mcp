@@ -5,11 +5,10 @@
 // loopback broker, so preparation reserves real durable authority, cancellation
 // closes only the authorized pending request, and acknowledgement records the
 // capability holder's receipt of the matching terminal outcome through the same
-// authority. The waiting tool is a later authorized unit and still answers
-// ENHANCEMENT_UNAVAILABLE rather than pretending to wait for or deliver a
-// decision; no tool result claims the adapter wrote an original waiting
-// response. Closing stdin starts cleanup immediately: submitted work that has not
-// begun never reaches the broker.
+// authority. The waiting tool creates or replays its request once per invocation
+// and keeps that one invocation waiting on the broker's bounded poll; no tool result
+// claims a Telegram presentation, a human decision or a returned write. Closing stdin
+// starts cleanup immediately: submitted work that has not begun never reaches the broker.
 import { createInterface } from 'node:readline';
 import {
   CLIENT_REQUEST_ID_PATTERN,
@@ -28,12 +27,12 @@ export const SERVER_VERSION = '0.0.0';
 const pattern = (expression) => ({ type: 'string', pattern: expression.source });
 
 const INSTRUCTIONS = [
-  'proceed-mcp asks the paired human operator to approve, reject or respond to one stated action, and returns their decision to the waiting MCP call.',
+  'proceed-mcp asks the paired human operator to approve, reject or respond to one stated action and returns the recorded outcome to the waiting MCP call.',
   'Call prepare_approval first: prepare_approval is available in this build and reserves durable request identity and a private request capability through the running local broker, sending no question to the human.',
-  'Then call request_approval with the returned request_handle and request_capability; that call waits for the human resolution, expiry or cancellation and returns the outcome itself.',
+  'Then call request_approval with the returned request_handle and request_capability; that single call creates or reuses the one request and keeps waiting for its resolution, expiry or cancellation, and returns that outcome itself.',
   'Keep the request capability private and retain it with its request_handle and request_id, because it is the only authority for a later get_approval, cancel_approval or acknowledge_approval call.',
   'Never echo, print or otherwise expose the request capability in an assistant message or a Telegram message.',
-  'request_approval returns ENHANCEMENT_UNAVAILABLE in this build: no question is sent and no human outcome is delivered yet.',
+  'No Telegram transport is implemented yet, so this build presents no question and no approval outcome to a human; request_approval still returns only the recorded terminal representation.',
   'Call get_approval with the retained request_id and request_capability to observe that exact request: an authorized read returns the committed representation of a pending request, applies expiry first and reports an expired request as expired, and NOT_FOUND covers an unused reservation, an unknown request or denied authority alike.',
   'Call cancel_approval with the retained request_id and request_capability to close only that pending request before its deadline: an authorized cancellation returns the committed cancelled representation, repeating it on an already resolved request returns the same outcome unchanged, expiry wins at the deadline, and NOT_FOUND covers an unused reservation, an unknown request or denied authority alike.',
   'acknowledge_approval records receipt of a terminal decision you already retrieved: call it with the retained request_id, request_capability and that exact decision_id, and it returns the same request marked confirmed.',
@@ -79,7 +78,7 @@ const TOOLS = [
   {
     name: 'request_approval',
     description:
-      'Create or reuse the request of an authorized prepared handle and keep this call waiting for the human resolution, expiry or cancellation; the result of this call is the actual outcome. request_approval returns ENHANCEMENT_UNAVAILABLE in this build, so no question is sent and no outcome exists yet.',
+      'Create or reuse the request of an authorized prepared handle exactly once and keep this call waiting for its resolution, expiry or cancellation; this call returns the recorded terminal representation as its own result and reports no returned write. No Telegram transport is implemented yet, so no question is presented to a human in this build.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

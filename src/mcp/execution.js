@@ -4,14 +4,16 @@
 // registration before any business route is forwarded. Preparation then forwards
 // to the authenticated reservation route, so the private capability is returned
 // only after a real durable reservation, and the reserved management calls forward
-// their authority so the broker can deny them honestly. The waiting call stays
-// unavailable until its own unit exists: a prepared reservation is never an
-// approval and cannot stand in for a human decision.
+// their authority so the broker can deny them honestly. The waiting call creates or
+// replays its request once per invocation and then keeps that one invocation waiting
+// on the broker's bounded poll, claiming neither human presentation nor a returned write.
 import { LocalRequestError } from '../http/local-client.js';
-import { RegistrationError } from './registration.js';
+import { REGISTRATION_HEADER, RegistrationError } from './registration.js';
 import {
+  CLIENT_REQUEST_ID_PATTERN,
   DECISION_ID_PATTERN,
   REQUEST_CAPABILITY_PATTERN,
+  REQUEST_HANDLE_PATTERN,
   REQUEST_ID_PATTERN,
   isPlainObject,
   scalarLength,
@@ -21,18 +23,26 @@ import {
 // an ordinary body field.
 const CAPABILITY_HEADER = 'X-Proceed-Request-Capability';
 const MAX_LABEL_SCALARS = 128;
+const MAX_ACTION_SCALARS = 1000;
+const MAX_CONTEXT_SCALARS = 1000;
+const MIN_EXPIRY_SECONDS = 60;
+const MAX_EXPIRY_SECONDS = 86400;
 
-// The waiting call is the one effect this build does not implement: it says so
-// instead of returning a pending-looking receipt or a fabricated outcome.
-const WAITING_UNAVAILABLE = Object.freeze({
-  schema_version: 1,
-  error: {
-    code: 'ENHANCEMENT_UNAVAILABLE',
-    message:
-      'request_approval is not implemented in this build, so a prepared reservation cannot wait for a human decision or return an outcome yet',
-    retryable: false,
-  },
-});
+// A lone surrogate cannot round-trip through UTF-8, so caller text carrying one is
+// rejected, and only a lost transport delays a repeat: 1, 2, 4, 8, 16, then 30
+// seconds, with no attempt cutoff while the invocation lives and no re-creation.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const WAIT_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
+
+// Only these resolutions are a decision, and an overlapping invocation of one prepared
+// handle is this adapter's own conflict.
+const TERMINAL_RESOLUTIONS = new Set(['approved', 'rejected', 'responded', 'expired', 'cancelled']);
+const CONFLICT = envelope(
+  'WAIT_ALREADY_ACTIVE',
+  'this request already has an active waiter',
+  false,
+);
+const CANCELLED = new LocalRequestError('BROKER_UNAVAILABLE', 'the local request was cancelled');
 
 function envelope(code, message, retryable) {
   return { schema_version: 1, error: { code, message, retryable } };
@@ -82,6 +92,10 @@ function closedEnvelope(code, message, retryable) {
 // properties, exactly the documented fields and their identifier formats.
 const INPUTS = {
   prepare_approval: { required: [], optional: ['session_label'] },
+  request_approval: {
+    required: ['request_handle', 'request_capability', 'client_request_id', 'action', 'context'],
+    optional: ['expires_in_seconds'],
+  },
   get_approval: { required: ['request_id', 'request_capability'], optional: [] },
   cancel_approval: { required: ['request_id', 'request_capability'], optional: [] },
   acknowledge_approval: {
@@ -91,10 +105,21 @@ const INPUTS = {
 };
 
 const PATTERNS = {
+  client_request_id: CLIENT_REQUEST_ID_PATTERN,
+  request_handle: REQUEST_HANDLE_PATTERN,
   request_id: REQUEST_ID_PATTERN,
   request_capability: REQUEST_CAPABILITY_PATTERN,
   decision_id: DECISION_ID_PATTERN,
 };
+
+// Caller text is counted in Unicode scalar values, exactly as the broker counts it.
+function textProblem(value, name, min, max) {
+  if (typeof value !== 'string') return `${name} must be text`;
+  if (LONE_SURROGATE.test(value)) return `${name} must be well-formed text`;
+  const length = scalarLength(value);
+  if (length < min || length > max) return `${name} must be ${min}-${max} Unicode scalars`;
+  return null;
+}
 
 function argumentProblem(name, args) {
   const input = INPUTS[name];
@@ -121,6 +146,20 @@ function argumentProblem(name, args) {
       return 'session_label must be 1-128 Unicode scalar values';
     }
   }
+  // The waiting arguments are validated before any registration or creation.
+  if (name === 'request_approval') {
+    const actionProblem = textProblem(args.action, 'action', 1, MAX_ACTION_SCALARS);
+    if (actionProblem !== null) return actionProblem;
+    const contextProblem = textProblem(args.context, 'context', 0, MAX_CONTEXT_SCALARS);
+    if (contextProblem !== null) return contextProblem;
+    // Only an omitted duration takes the broker default; no value is coerced.
+    const expires = args.expires_in_seconds;
+    const ranged =
+      Number.isInteger(expires) && expires >= MIN_EXPIRY_SECONDS && expires <= MAX_EXPIRY_SECONDS;
+    if (expires !== undefined && !ranged) {
+      return `expires_in_seconds must be an integer ${MIN_EXPIRY_SECONDS}-${MAX_EXPIRY_SECONDS}`;
+    }
+  }
   return null;
 }
 
@@ -138,6 +177,27 @@ function outcomeOf(response) {
       ? response.body.error
       : {};
   return complete(closedEnvelope(error.code, error.message, error.retryable), true);
+}
+
+// A request representation is this outcome only when it names the prepared handle and
+// the committed request; a pending or invented shape is never promoted.
+function requestView(body, handle, requestId) {
+  if (!isPlainObject(body) || body.schema_version !== 1) return null;
+  if (body.request_handle !== handle) return null;
+  if (typeof body.request_id !== 'string' || !REQUEST_ID_PATTERN.test(body.request_id)) return null;
+  if (requestId !== null && body.request_id !== requestId) return null;
+  if (body.resolution === 'pending') return body.decision_id === null ? body : null;
+  if (!TERMINAL_RESOLUTIONS.has(body.resolution)) return null;
+  const decided =
+    typeof body.decision_id === 'string' && DECISION_ID_PATTERN.test(body.decision_id);
+  return decided ? body : null;
+}
+
+function creationBody(args) {
+  const { request_handle, client_request_id, action, context, expires_in_seconds } = args;
+  const body = { request_handle, client_request_id, action, context };
+  if (expires_in_seconds !== undefined) body.expires_in_seconds = expires_in_seconds;
+  return body;
 }
 
 // A cancelled invocation is a transport decision, not a business outcome: it
@@ -184,58 +244,150 @@ function combine(signal, controller) {
   return () => signal.removeEventListener('abort', forward);
 }
 
-export function createToolExecutor({ client, registration }) {
+// The delay between failed wait transports belongs to its invocation: abort settles it.
+function hold(ms, signals) {
+  const active = signals.filter((signal) => signal !== undefined && signal !== null);
+  return new Promise((resolve) => {
+    let timer;
+    const settle = (elapsed) => {
+      clearTimeout(timer);
+      for (const signal of active) signal.removeEventListener('abort', stop);
+      resolve(elapsed);
+    };
+    const stop = () => settle(false);
+    timer = setTimeout(() => settle(true), ms);
+    timer.unref?.();
+    for (const signal of active) signal.addEventListener('abort', stop, { once: true });
+    if (active.some((signal) => signal.aborted)) stop();
+  });
+}
+
+export function createToolExecutor({ client, waitClient, registration }) {
   // Ordinary broker exchanges are cancelled as one unit when the adapter closes;
   // the registration binding cancels its own lifecycle traffic, and both stay
   // inside the single shutdown budget.
   const ordinary = new AbortController();
   let closing = null;
+  // One live waiting invocation per prepared handle, held across turnovers and reconnects.
+  const waiting = new Set();
 
-  const send = async (method, path, body, headers, signal) => {
+  // Each exchange is its own transport, so one invocation's cancel never aborts another's.
+  const transmit = async (which, method, path, body, headers, signal) => {
     const transport = new AbortController();
     const unlinks = [combine(signal, transport), combine(ordinary.signal, transport)];
-    let response;
     try {
-      response = await client.request(method, path, body, headers, { signal: transport.signal });
+      if (transport.signal.aborted) return { error: CANCELLED, aborted: true };
+      return {
+        response: await which.request(method, path, body, headers, { signal: transport.signal }),
+      };
     } catch (error) {
-      // A cancelled or closed exchange reports the same redacted prerequisite; the
-      // cancellation itself is not a request decision and never becomes one.
-      if (transport.signal.aborted) return abandoned();
-      // A missing or unreachable broker is a temporary prerequisite, not a
-      // decision and not a reason to invent request authority.
-      if (error instanceof LocalRequestError) {
-        return complete(
-          closedEnvelope(error.code, error.message, error.code === 'BROKER_UNAVAILABLE'),
-          true,
-        );
-      }
-      throw error;
+      return { error, aborted: transport.signal.aborted };
     } finally {
       for (const unlink of unlinks) unlink();
     }
-    return outcomeOf(response);
   };
 
+  // A cancelled, closed or unreadable exchange never becomes a decision.
+  const localFailure = (sent) => {
+    if (sent.aborted) return abandoned();
+    if (!(sent.error instanceof LocalRequestError)) throw sent.error;
+    const { code, message } = sent.error;
+    return complete(closedEnvelope(code, message, code === 'BROKER_UNAVAILABLE'), true);
+  };
+
+  // Shared registration authority: a cancelled awaiter stops, a recognized error travels.
+  const registrationFailure = (error) => {
+    if (error === ABANDONED) return abandoned();
+    if (!(error instanceof RegistrationError)) throw error;
+    return complete(closedEnvelope(error.code, error.message, error.retryable), true);
+  };
+
+  const send = async (method, path, body, headers, signal) => {
+    const sent = await transmit(client, method, path, body, headers, signal);
+    if (sent.error !== undefined) return localFailure(sent);
+    return outcomeOf(sent.response);
+  };
+
+  // One creation per invocation, then that same invocation waits on the broker's bounded
+  // poll; a pending receipt is not its result and no returned write is reported.
+  async function requestApproval(args, signal) {
+    if (waiting.has(args.request_handle)) return complete(CONFLICT, true);
+    if (signal?.aborted === true) return abandoned();
+    waiting.add(args.request_handle);
+    try {
+      const authority = await untilCancelled(registration.ensure(), signal);
+      const capability = { [CAPABILITY_HEADER]: args.request_capability };
+      const created = await send('POST', '/v1/requests', creationBody(args), capability, signal);
+      if (created.isError) return created;
+      // Only the committed request identity can be waited on; a terminal one replays now.
+      const receipt = requestView(created.structuredContent, args.request_handle, null);
+      if (receipt === null) return abandoned();
+      if (receipt.resolution !== 'pending') return complete(receipt, false);
+      return await waitForDecision(args, receipt.request_id, authority, capability, signal);
+    } catch (error) {
+      return registrationFailure(error);
+    } finally {
+      waiting.delete(args.request_handle);
+    }
+  }
+
+  async function waitForDecision(args, requestId, captured, capability, signal) {
+    const path = `/v1/requests/${encodeURIComponent(requestId)}/wait`;
+    let authority = captured;
+    let retries = 0;
+    for (;;) {
+      // Closing fences new work: no exchange or delay starts after one ended.
+      if (signal?.aborted === true || ordinary.signal.aborted) return abandoned();
+      const body = { registration_id: authority.registration_id };
+      const headers = { ...capability, [REGISTRATION_HEADER]: authority.registration_secret };
+      const sent = await transmit(waitClient, 'POST', path, body, headers, signal);
+      if (sent.error !== undefined) {
+        if (sent.aborted) return abandoned();
+        // Only transport loss delays a repeat: the captured identity and ladder stay.
+        const lost =
+          sent.error instanceof LocalRequestError && sent.error.code === 'BROKER_UNAVAILABLE';
+        if (!lost) return localFailure(sent);
+        const delay = WAIT_RETRY_DELAYS_MS[Math.min(retries, WAIT_RETRY_DELAYS_MS.length - 1)];
+        retries += 1;
+        if (!(await hold(delay, [signal, ordinary.signal]))) return abandoned();
+        continue;
+      }
+      retries = 0;
+      // Still pending: only this bounded exchange ended; this invocation repeats.
+      if (sent.response.status === 204) continue;
+      // The captured incarnation is gone; refresh shares the authenticated replacement.
+      if (sent.response.status === 401) {
+        authority = await untilCancelled(registration.refresh(authority), signal);
+        continue;
+      }
+      const { status } = sent.response;
+      const terminal =
+        status === 200 ? requestView(sent.response.body, args.request_handle, requestId) : null;
+      if (terminal !== null && terminal.resolution !== 'pending') return complete(terminal, false);
+      if (status === 200) return abandoned();
+      // A recognized conflict or failure ends this invocation: no re-creation, no
+      // reconnected or transferred waiter.
+      return outcomeOf(sent.response);
+    }
+  }
+
   // Admission precedes the first implemented operation and never the catalog:
-  // initialize, discovery, invalid arguments and the unimplemented waiting call
-  // reach no broker, while a duplicate live owner surfaces as its own tool error
-  // without forwarding or mutating anything.
+  // initialize, discovery and invalid arguments reach no broker, while a duplicate
+  // live owner surfaces as its own tool error without forwarding or mutating
+  // anything.
   async function execute(name, args, context = {}) {
-    if (name === 'request_approval') return complete(WAITING_UNAVAILABLE, true);
     const problem = argumentProblem(name, args);
     if (problem !== null) return invalid(problem);
 
     const signal = context?.signal ?? null;
     if (signal?.aborted === true) return abandoned();
 
+    if (name === 'request_approval') return requestApproval(args, signal);
+
     try {
       await untilCancelled(registration.ensure(), signal);
     } catch (error) {
-      if (error === ABANDONED) return abandoned();
-      if (error instanceof RegistrationError) {
-        return complete(closedEnvelope(error.code, error.message, error.retryable), true);
-      }
-      throw error;
+      return registrationFailure(error);
     }
     // Cancellation can arrive while a shared ensure settles for other awaiters;
     // this invocation still forwards nothing.

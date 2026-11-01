@@ -101,6 +101,20 @@ class RegistrationBinding {
     return this.#begin();
   }
 
+  // A rejected captured incarnation is replaced through the same single-flight create the
+  // heartbeat uses, so a stale or concurrent rejection never destroys fresh authority.
+  refresh(captured) {
+    if (this.#closed) return Promise.reject(unavailable());
+    const authority = this.#authority;
+    if (authority === null) return this.#pending ?? this.#begin();
+    const current =
+      captured?.registration_id === authority.registration_id &&
+      captured?.registration_secret === authority.registration_secret;
+    if (!current) return Promise.resolve({ ...authority });
+    this.#invalidate();
+    return this.#pending ?? this.#begin();
+  }
+
   // Terminal and idempotent: repeated calls share one shutdown and one budget.
   close() {
     this.#closing ??= this.#shutdown();

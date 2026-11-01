@@ -15,6 +15,9 @@ export class LocalRequestError extends Error {
 
 export const LOCAL_REQUEST_TIMEOUT_MS = 10_000;
 
+// A waiting exchange outlives the broker's bounded poll turnover, so it has its own deadline.
+export const LOCAL_WAIT_TIMEOUT_MS = 32_000;
+
 export function createLocalClient({ port, token, timeoutMs = LOCAL_REQUEST_TIMEOUT_MS }) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new LocalRequestError('BROKER_UNAVAILABLE', 'the configured broker port is not usable');

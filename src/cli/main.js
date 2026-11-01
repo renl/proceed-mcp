@@ -10,6 +10,7 @@ import {
   storageFailure,
 } from '../errors.js';
 import { createLocalClient, LocalRequestError } from '../http/local-client.js';
+import { LOCAL_WAIT_TIMEOUT_MS } from '../http/local-client.js';
 import { createToolExecutor } from '../mcp/execution.js';
 import { createRegistrationBinding } from '../mcp/registration.js';
 import { runMcpServer } from '../mcp/server.js';
@@ -40,8 +41,8 @@ const USAGE = [
   '',
   'The Telegram token is read from the environment, never from state or arguments.',
   'This checkpoint runs portable schema 2 setup: init, owner add, serve, mcp and status.',
-  '`mcp` prepares real request authority through the running broker and answers the reserved',
-  'get/cancel/acknowledge calls NOT_FOUND; the waiting `request_approval` call is not implemented.',
+  '`mcp` prepares real request authority through the running broker; request_approval creates',
+  'or replays one request and waits for its resolution; no Telegram transport exists yet.',
   '`pair` and `retry` report their operation as unavailable; `origin add` refuses schema 2 state.',
   '`doctor` is a documented target that this build does not implement.',
   '',
@@ -121,9 +122,9 @@ async function runInit(argv, { stdout, env }) {
       '  1. proceed-mcp owner add <owner_id> --label <label>   (with the broker stopped)',
       `  2. Set ${TELEGRAM_TOKEN_ENV} in the broker environment; the Telegram token is never stored in state.`,
       '  3. proceed-mcp mcp --owner <owner_id>   (stdio MCP for that transport principal;',
-      '     prepare_approval reserves real request authority through the running broker,',
-      '     the reserved get/cancel/acknowledge calls answer NOT_FOUND, and request_approval',
-      '     still answers ENHANCEMENT_UNAVAILABLE, so no question or decision is delivered)',
+      '     prepare_approval reserves real request authority through the running broker, and',
+      '     request_approval creates that one request and waits for its resolution, expiry or',
+      '     cancellation; no Telegram transport exists yet, so no human decision is delivered)',
       '  4. proceed-mcp serve starts the loopback broker and "status" reports it.',
       '     Pairing, retry and request delivery are later checkpoints: "pair" and "retry"',
       '     report that their operation is unavailable rather than pretending to succeed.',
@@ -259,7 +260,7 @@ async function runPair(argv, { env }) {
 // credential; no harness URL, password, host admission or proprietary metadata is
 // needed to serve the catalog, and stdout is left to protocol messages alone. Tool
 // execution uses that credential against the configured loopback broker port, so
-// preparation reserves real authority while the waiting call stays unavailable.
+// preparation reserves real authority and the waiting call waits on a longer deadline.
 async function runMcp(argv, { env }) {
   const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir', 'owner'] });
   noPositionals(positionals, 'mcp');
@@ -283,6 +284,13 @@ async function runMcp(argv, { env }) {
     owner.owner_id,
   );
   const client = createLocalClient({ port: config.broker.port, token: credential });
+  // The waiting call keeps its own longer deadline, because one broker poll
+  // turnover is slower than an ordinary management exchange.
+  const waitClient = createLocalClient({
+    port: config.broker.port,
+    token: credential,
+    timeoutMs: LOCAL_WAIT_TIMEOUT_MS,
+  });
 
   // The executor owns this adapter's private registration: it is created lazily by
   // the first implemented call, renewed while the adapter lives, and released here.
@@ -290,6 +298,7 @@ async function runMcp(argv, { env }) {
   // lifecycle traffic under the single shutdown budget.
   const executor = createToolExecutor({
     client,
+    waitClient,
     registration: createRegistrationBinding({ client }),
   });
   try {
