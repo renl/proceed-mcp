@@ -142,12 +142,20 @@ export async function runMcpServer({
   execute,
   onInputClosed,
 } = {}) {
-  const write = (message) =>
-    new Promise((resolve) => {
-      stdout.write(`${JSON.stringify(message)}\n`, () => resolve());
-    });
+  // One serialized stdout writer: concurrent invocations may settle in any order,
+  // but no two frames can interleave inside one newline-delimited message.
+  let writing = Promise.resolve();
+  const write = (message) => {
+    writing = writing.then(
+      () =>
+        new Promise((resolve) => {
+          stdout.write(`${JSON.stringify(message)}\n`, () => resolve());
+        }),
+    );
+    return writing;
+  };
 
-  const handle = async (message) => {
+  const handle = async (message, signal) => {
     if (typeof message !== 'object' || message === null || typeof message.method !== 'string') {
       return {
         jsonrpc: '2.0',
@@ -201,7 +209,7 @@ export async function runMcpServer({
       return {
         jsonrpc: '2.0',
         id: message.id,
-        result: await execute(name, message.params?.arguments),
+        result: await execute(name, message.params?.arguments, { signal }),
       };
     }
     if (typeof message.id === 'undefined') return null;
@@ -209,41 +217,88 @@ export async function runMcpServer({
   };
 
   const lines = createInterface({ input: stdin, crlfDelay: Number.POSITIVE_INFINITY });
-  let chain = Promise.resolve();
-  // Design section 3/7: the closure fence is raised before the serialized chain
-  // drains, so queued work never reaches the broker after EOF and no response is
-  // written to closed input.
+  // Design sections 3 and 7: one slow call must not block an unrelated call, so
+  // each request is dispatched on its own. Correlation keeps the exact JSON-RPC
+  // ID type, so numeric `7` and string `"7"` are two independent invocations.
+  const active = new Map();
+  const inflight = new Set();
+  // The closure fence is raised before in-flight work drains, so queued work never
+  // reaches the broker after EOF and no response is written to closed input.
   let closed = false;
+
+  const track = (task) => {
+    inflight.add(task);
+    const forget = () => inflight.delete(task);
+    task.then(forget, forget);
+    return task;
+  };
+
+  const dispatch = async (message) => {
+    const id = message?.id;
+    const cancellable = typeof id === 'number' || typeof id === 'string';
+    const entry = cancellable ? { cancelled: false, controller: new AbortController() } : null;
+    if (entry !== null) active.set(id, entry);
+    let response;
+    try {
+      response = await handle(message, entry?.controller.signal);
+    } catch {
+      // An unexpected local failure is a protocol error, never a tool outcome.
+      response = {
+        jsonrpc: '2.0',
+        id: message?.id ?? null,
+        error: { code: -32603, message: 'internal error' },
+      };
+    } finally {
+      // Settling removes the invocation, so a later cancellation for this exact ID
+      // is an ordinary no-op rather than an adapter-wide abort.
+      if (entry !== null && active.get(id) === entry) active.delete(id);
+    }
+    // A cancelled invocation's frames are suppressed; every other invocation keeps
+    // its own outcome.
+    if (response === null || closed || entry?.cancelled === true) return;
+    await write(response);
+  };
+
+  // Protocol cancellation identifies one invocation by its own request ID and
+  // closes only that transport. It supplies no business cancellation authority.
+  const cancelInvocation = (message) => {
+    const entry = active.get(message.params?.requestId);
+    if (entry === undefined) return;
+    entry.cancelled = true;
+    entry.controller.abort();
+  };
 
   lines.on('line', (line) => {
     if (closed) return;
     const text = line.trim();
     if (text === '') return;
-    chain = chain.then(async () => {
-      if (closed) return;
-      let message;
-      try {
-        message = JSON.parse(text);
-      } catch {
-        await write({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
-        return;
-      }
-      const responses = Array.isArray(message) ? message : [message];
-      for (const item of responses) {
-        const response = await handle(item);
-        if (closed) return;
-        if (response !== null) await write(response);
-      }
-    });
+    let message;
+    try {
+      message = JSON.parse(text);
+    } catch {
+      void track(
+        write({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }),
+      );
+      return;
+    }
+    for (const item of Array.isArray(message) ? message : [message]) {
+      if (item?.method === 'notifications/cancelled') cancelInvocation(item);
+      else void track(dispatch(item));
+    }
   });
 
   await new Promise((resolve) => {
     lines.on('close', () => {
       closed = true;
-      // Cleanup starts here, not after the chain drains: the execution owner fences
-      // new and in-flight broker work and closes its own transport once.
+      // Cleanup starts here, not after in-flight work drains: the execution owner
+      // fences new and in-flight broker work and closes its own transport once,
+      // while every invocation settles without writing to closed input.
+      for (const entry of active.values()) {
+        entry.cancelled = true;
+        entry.controller.abort();
+      }
       onInputClosed?.();
-      chain.then(resolve, resolve);
+      Promise.allSettled([...inflight]).then(resolve);
     });
   });
   return {};

@@ -140,6 +140,50 @@ function outcomeOf(response) {
   return complete(closedEnvelope(error.code, error.message, error.retryable), true);
 }
 
+// A cancelled invocation is a transport decision, not a business outcome: it
+// stops waiting, closes only its own exchange and reports the same redacted
+// unavailable prerequisite, which the adapter then suppresses for that call.
+const ABANDONED = Symbol('cancelled invocation');
+
+function abandoned() {
+  return complete(closedEnvelope('BROKER_UNAVAILABLE', UNAVAILABLE_MESSAGE, true), true);
+}
+
+// Registration is shared work: a cancelled awaiter stops waiting on it, while the
+// single-flight ensure still completes for every other invocation that needs it.
+function untilCancelled(work, signal) {
+  if (signal === undefined || signal === null) return work;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (action, value) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', stop);
+      action(value);
+    };
+    const stop = () => finish(reject, ABANDONED);
+    work.then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
+    );
+    signal.addEventListener('abort', stop, { once: true });
+    if (signal.aborted) stop();
+  });
+}
+
+// Each exchange is its own transport, so cancelling or closing one invocation can
+// never abort another call's in-flight broker work.
+function combine(signal, controller) {
+  if (signal === undefined || signal === null) return () => {};
+  if (signal.aborted) {
+    controller.abort();
+    return () => {};
+  }
+  const forward = () => controller.abort();
+  signal.addEventListener('abort', forward, { once: true });
+  return () => signal.removeEventListener('abort', forward);
+}
+
 export function createToolExecutor({ client, registration }) {
   // Ordinary broker exchanges are cancelled as one unit when the adapter closes;
   // the registration binding cancels its own lifecycle traffic, and both stay
@@ -147,11 +191,16 @@ export function createToolExecutor({ client, registration }) {
   const ordinary = new AbortController();
   let closing = null;
 
-  const send = async (method, path, body, headers) => {
+  const send = async (method, path, body, headers, signal) => {
+    const transport = new AbortController();
+    const unlinks = [combine(signal, transport), combine(ordinary.signal, transport)];
     let response;
     try {
-      response = await client.request(method, path, body, headers, { signal: ordinary.signal });
+      response = await client.request(method, path, body, headers, { signal: transport.signal });
     } catch (error) {
+      // A cancelled or closed exchange reports the same redacted prerequisite; the
+      // cancellation itself is not a request decision and never becomes one.
+      if (transport.signal.aborted) return abandoned();
       // A missing or unreachable broker is a temporary prerequisite, not a
       // decision and not a reason to invent request authority.
       if (error instanceof LocalRequestError) {
@@ -161,6 +210,8 @@ export function createToolExecutor({ client, registration }) {
         );
       }
       throw error;
+    } finally {
+      for (const unlink of unlinks) unlink();
     }
     return outcomeOf(response);
   };
@@ -169,35 +220,42 @@ export function createToolExecutor({ client, registration }) {
   // initialize, discovery, invalid arguments and the unimplemented waiting call
   // reach no broker, while a duplicate live owner surfaces as its own tool error
   // without forwarding or mutating anything.
-  async function execute(name, args) {
+  async function execute(name, args, context = {}) {
     if (name === 'request_approval') return complete(WAITING_UNAVAILABLE, true);
     const problem = argumentProblem(name, args);
     if (problem !== null) return invalid(problem);
 
+    const signal = context?.signal ?? null;
+    if (signal?.aborted === true) return abandoned();
+
     try {
-      await registration.ensure();
+      await untilCancelled(registration.ensure(), signal);
     } catch (error) {
+      if (error === ABANDONED) return abandoned();
       if (error instanceof RegistrationError) {
         return complete(closedEnvelope(error.code, error.message, error.retryable), true);
       }
       throw error;
     }
+    // Cancellation can arrive while a shared ensure settles for other awaiters;
+    // this invocation still forwards nothing.
+    if (signal?.aborted === true) return abandoned();
 
     // Registration admits this adapter to the broker; it never authenticates an
     // agent session and never replaces a request capability, so the reserved
     // routes keep their owner-plus-capability authority exactly as before.
     if (name === 'prepare_approval') {
       const body = args.session_label === undefined ? {} : { session_label: args.session_label };
-      return send('POST', '/v1/handles', body);
+      return send('POST', '/v1/handles', body, undefined, signal);
     }
 
     // The request ID was matched against its format above, so the path cannot
     // carry an unexpected segment.
     const path = `/v1/requests/${encodeURIComponent(args.request_id)}`;
     const headers = { [CAPABILITY_HEADER]: args.request_capability };
-    if (name === 'get_approval') return send('GET', path, undefined, headers);
-    if (name === 'cancel_approval') return send('POST', `${path}/cancel`, {}, headers);
-    return send('POST', `${path}/acknowledge`, { decision_id: args.decision_id }, headers);
+    if (name === 'get_approval') return send('GET', path, undefined, headers, signal);
+    if (name === 'cancel_approval') return send('POST', `${path}/cancel`, {}, headers, signal);
+    return send('POST', `${path}/acknowledge`, { decision_id: args.decision_id }, headers, signal);
   }
 
   return {
