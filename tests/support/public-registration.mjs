@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer, request } from 'node:http';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, access } from 'node:fs/promises';
+import { Journal } from '../../src/journal/journal.js';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -21,7 +22,7 @@ export async function observe(check, label, ms = 3000) {
   }
   assert.fail(label);
 }
-export function outputGuard(child, secrets) {
+export function outputGuard(child, secrets, { requestSecrets = [], prepareOutput = false } = {}) {
   const logs = [[], []]; let bytes = 0, overflow = false;
   [child.stdout, child.stderr].forEach((stream, i) => stream.on('data', chunk => {
     bytes += chunk.length;
@@ -32,6 +33,8 @@ export function outputGuard(child, secrets) {
     assert.ok(!overflow, 'bounded output consumer, no silent truncation');
     assert.ok(logs.every(chunks => secrets.every(secret =>
       !Buffer.concat(chunks).includes(Buffer.from(secret)))), 'private authority absent through shutdown');
+    assert.ok((prepareOutput ? logs.slice(1) : logs).every(chunks => requestSecrets.every(secret =>
+      !Buffer.concat(chunks).includes(Buffer.from(secret)))), 'request capability absent outside preparation output');
   };
 }
 export function toolError(outcome, code) {
@@ -47,14 +50,14 @@ export function toolError(outcome, code) {
   }), 'matching text and structured error, without printing private output');
   return r.structuredContent.error;
 }
-export async function publicRegistration(work) {
+export async function publicRegistration(work, { paired = false, foreign = false } = {}) {
   const finalChecks = [];
   const result = await managed(async context => {
     const executable = resolve('bin/proceed-mcp.js'), state = join(context.directory, 'state');
     const env = Object.fromEntries(['PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC']
       .filter(k => process.env[k]).map(k => [k, process.env[k]]));
     Object.assign(env, { TMP: context.directory, TEMP: context.directory, TMPDIR: context.directory });
-    const secrets = [], resources = [], connections = [], checks = [], calls = [], sockets = new Set(), cliOutput = [];
+    const secrets = [], requestSecrets = [], resources = [], connections = [], checks = [], calls = [], sockets = new Set(), cliOutput = [];
     finalChecks.push(() => assert.ok(cliOutput.every(b => secrets.every(s => !b.includes(Buffer.from(s)))),
       'all setup output inspected after credentials become known'));
     const cli = (...args) => {
@@ -65,9 +68,21 @@ export async function publicRegistration(work) {
       assert.ok(secrets.every(s => !Buffer.concat([r.stdout, r.stderr]).includes(Buffer.from(s))), 'private setup output');
     };
     cli('init'); cli('owner', 'add', 'shared', '--label', 'Lifecycle test');
+    if (foreign) cli('owner', 'add', 'foreign', '--label', 'Other principal');
+    if (paired) {
+      await assert.rejects(access(join(state, 'broker.lock')), { code: 'ENOENT' });
+      const at = '2026-01-01T00:00:00.000Z', hash = 'a'.repeat(64);
+      const seed = await Journal.open(join(state, 'journal.log'));
+      try {
+        await seed.append([{ op: 'pairing.challenge', hash, created_at: at, expires_at: '2026-01-01T00:05:00.000Z' }]);
+        await seed.append([{ op: 'pairing.challenge.consume', hash, consumed_at: at },
+          { op: 'pairing.set', pairing: { user_id: '71', chat_id: '81', paired_at: at } }]);
+      } finally { await seed.close(); }
+    }
     for (const name of ['control.token', 'owner.shared.token'])
       secrets.push((await readFile(join(state, 'credentials', name), 'utf8')).trim());
     const [control, owner] = secrets;
+    if (foreign) secrets.push((await readFile(join(state, 'credentials', 'owner.foreign.token'), 'utf8')).trim());
     const configPath = join(state, 'config.json');
     const config = JSON.parse(await readFile(configPath, 'utf8'));
     const backend = await freePort();
@@ -80,11 +95,11 @@ export async function publicRegistration(work) {
       const resource = { child, pid: child.pid, knownPids: [] };
       context.resources.push(resource); resources.push(resource);
       child.on('close', () => { resource.closed = true; });
-      checks.push(outputGuard(child, secrets)); finalChecks.push(checks.at(-1));
+      checks.push(outputGuard(child, secrets, { requestSecrets, prepareOutput: args[0] === 'mcp' })); finalChecks.push(checks.at(-1));
       return resource;
     };
     const http = (path, token = owner, options = {}) => fetch(`http://127.0.0.1:${backend}${path}`, {
-      ...options, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...options.headers },
+      ...options, headers: { ...(token === null ? {} : { authorization: `Bearer ${token}` }), 'content-type': 'application/json', ...options.headers },
       signal: AbortSignal.timeout(1000), redirect: 'error' });
     let broker, hold = () => false, mutate = value => value;
     const upstreams = new Set();
@@ -132,15 +147,15 @@ export async function publicRegistration(work) {
         'real broker authenticated readiness', 8000);
       await save(port);
     };
-    const connect = async () => {
-      const resource = spawnProduct(['mcp', '--owner', 'shared']);
-      const peer = catalogPeer(resource.child, { secrets: [control, owner], ms: 3000 });
+    const connect = async (ownerId = 'shared') => {
+      const resource = spawnProduct(['mcp', '--owner', ownerId]);
+      const peer = catalogPeer(resource.child, { secrets, ms: 3000 });
       connections.push({ resource, peer });
-      initializeResult(await peer.call('initialize', { protocolVersion: '2025-11-25', capabilities: {},
+      const init = initializeResult(await peer.call('initialize', { protocolVersion: '2025-11-25', capabilities: {},
         clientInfo: { name: 'public-lifecycle', version: '0' } }).outcome);
       resource.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-      assert.equal((await allTools(peer)).length, 5);
-      return { resource, peer, call: (name, args = {}) => peer.call('tools/call', { name, arguments: args }).outcome };
+      const tools = await allTools(peer); assert.equal(tools.length, 5);
+      return { resource, peer, init, tools, call: (name, args = {}) => peer.call('tools/call', { name, arguments: args }).outcome };
     };
     const eof = async c => {
       const start = performance.now(); c.resource.child.stdin.end();
@@ -150,7 +165,7 @@ export async function publicRegistration(work) {
     };
     try {
       await save(port);
-      await work({ connect, restart, eof, http, calls, secrets, state, owner, control,
+      await work({ connect, restart, eof, http, calls, secrets, requestSecrets, state, owner, control,
         hold: fn => { hold = fn; }, mutate: fn => { mutate = fn; },
         journal: () => readFile(join(state, 'journal.log')) });
     } finally {
@@ -161,6 +176,7 @@ export async function publicRegistration(work) {
           3500, 'recovery EOF deadline').catch(() => {});
       }
       if (broker && !broker.closed) await stopped(broker);
+      await assert.rejects(access(join(state, 'broker.lock')), { code: 'ENOENT' });
       for (const up of upstreams) up.destroy();
       relay.closeAllConnections();
       await new Promise(done => relay.close(done));
@@ -168,6 +184,9 @@ export async function publicRegistration(work) {
       const probe = createServer();
       await new Promise((done, reject) => { probe.once('error', reject); probe.listen(port, '127.0.0.1', done); });
       await new Promise(done => probe.close(done));
+      const backendProbe = createServer();
+      await new Promise((done, reject) => { backendProbe.once('error', reject); backendProbe.listen(backend, '127.0.0.1', done); });
+      await new Promise(done => backendProbe.close(done));
     }
   }, { totalMs: 50000 });
   assert.ifError(result.cleanupError);

@@ -18,3 +18,13 @@ test('PORT-PUBLIC-CONSUMER: split/dynamically learned shutdown secrets and overf
   child.stderr.write(Buffer.alloc(65537));
   assert.ok(killed); assert.throws(check, /bounded output consumer/);
 });
+
+test('PORT-PUBLIC-REQUEST-GUARD: only preparation stdout may contain keys, including keys learned after capture', () => {
+  for (const prepareOutput of [false, true]) for (const stream of ['stdout', 'stderr']) {
+    const child = { stdout: new PassThrough(), stderr: new PassThrough(), kill() {} };
+    const requestSecrets = [], check = outputGuard(child, [], { requestSecrets, prepareOutput });
+    child[stream].write('cap_'); requestSecrets.push('cap_synthetic'); child[stream].write('synthetic');
+    if (prepareOutput && stream === 'stdout') assert.doesNotThrow(check);
+    else assert.throws(check, /request capability absent/);
+  }
+});
