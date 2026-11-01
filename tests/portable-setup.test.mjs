@@ -143,6 +143,11 @@ test('PORT-SETUP-IPC: owner CLI handshake/catalog and control/browser separation
     assert.equal(status.broker.pid, h.broker.pid, 'status describes actual managed broker');
     const config = JSON.parse(await readFile(join(h.state, 'config.json'), 'utf8'));
     assert.equal(status.broker.port, config.broker.port, 'no automatic port selection');
+    assert.match(status.broker.started_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$/);
+    assert.ok(Number.isFinite(Date.parse(status.broker.started_at))
+      && Date.parse(status.broker.started_at) <= Date.now(), 'actual UTC startup timestamp');
+    assert.deepEqual(status, { schema_version: 1, broker: { pid: h.broker.pid,
+      port: config.broker.port, started_at: status.broker.started_at }, requests: [] });
     const env = Object.fromEntries(['PATH', 'SystemRoot', 'WINDIR', 'COMSPEC']
       .filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
     const secrets = [h.control, 'offline-synthetic-token'];
@@ -162,7 +167,9 @@ test('PORT-SETUP-IPC: owner CLI handshake/catalog and control/browser separation
       const owner = (await readFile(join(h.state, 'credentials', name), 'utf8')).trim();
       secrets.push(owner);
       await protectedPaths([join(h.state, 'credentials', name)], env);
-      for (const [path, options] of [['/v1/status', {}], ['/v1/pairing', { method: 'POST', body: {} }]]) {
+      for (const [path, options] of [['/v1/status', {}],
+        ['/v1/pairing', { method: 'POST', body: {} }],
+        [`/v1/requests/req_${'0'.repeat(32)}/retry`, { method: 'POST', body: {} }]]) {
         await error(await h.http(path, owner, options), 403, 'FORBIDDEN');
       }
     }
@@ -183,8 +190,34 @@ test('PORT-SETUP-IPC: owner CLI handshake/catalog and control/browser separation
     for (const stream of [h.broker.child.stdout, h.broker.child.stderr]) {
       stream.on('data', (bytes) => output.push(String(bytes)));
     }
-    await error(await h.http('/v1/handles', owner,
-      { method: 'POST', body: { session_label: 'x'.repeat(65536) } }), 400, 'INVALID_ARGUMENT');
+    const journalPath = join(h.state, 'journal.log');
+    const unchanged = await readFile(journalPath);
+    const configBytes = await readFile(join(h.state, 'config.json'));
+    const callsBefore = h.fixture.calls.length;
+    for (const [path, message] of [
+      ['/v1/pairing', 'pairing is not implemented in this setup checkpoint'],
+      [`/v1/requests/req_${'0'.repeat(32)}/retry`, 'request retry is not implemented in this setup checkpoint'],
+    ]) {
+      const response = await h.http(path, h.control, { method: 'POST', body: {} });
+      assert.equal(response.status, 503, 'unavailable before unknown-request lookup');
+      assert.equal(response.headers.has('access-control-allow-origin'), false);
+      assert.deepEqual(await response.json(), { schema_version: 1, error: {
+        code: 'ENHANCEMENT_UNAVAILABLE', message, retryable: false } });
+    }
+    assert.ok(unchanged.equals(await readFile(journalPath))
+      && configBytes.equals(await readFile(join(h.state, 'config.json'))), 'no unavailable-operation mutation');
+    assert.equal(h.fixture.calls.length, callsBefore, 'no challenge or delivery transport effect');
+    // Raw owned IPC requests, not an application test API or reusable HTTP consumer.
+    const padded = `${' '.repeat(65536)}{}`;
+    assert.deepEqual(JSON.parse(padded), {}, 'otherwise valid reservation input');
+    assert.ok(Buffer.byteLength(padded, 'utf8') > 65536, 'exceeds body byte limit, not label validation');
+    for (const [label, raw] of [['oversized valid JSON', padded], ['malformed JSON', '{']]) {
+      await error(await fetch(`http://127.0.0.1:${config.broker.port}/v1/handles`, {
+        method: 'POST', headers: { authorization: `Bearer ${owner}`, 'content-type': 'application/json' },
+        body: raw, redirect: 'error', signal: AbortSignal.timeout(1000),
+      }), 400, 'INVALID_ARGUMENT');
+      assert.ok(unchanged.equals(await readFile(journalPath)), `${label} cannot reserve authority`);
+    }
     const reserved = await h.http('/v1/handles', owner, { method: 'POST', body: {} });
     assert.equal(reserved.status, 201, 'real durable owner route, not role-only stub');
     const handle = await reserved.json();
@@ -195,11 +228,24 @@ test('PORT-SETUP-IPC: owner CLI handshake/catalog and control/browser separation
     const hash = createHash('sha256').update(handle.request_capability).digest('hex');
     assert.ok(journal.includes(Buffer.from(hash)) && journal.includes(Buffer.from(handle.request_handle))
       && !journal.includes(Buffer.from(handle.request_capability)), 'persist verifier before HTTP success');
+    const sameInstance = await (await h.http('/v1/status', h.control)).json();
+    assert.deepEqual(sameInstance, status, 'started_at fixed across queries and reservation');
+    const restartAt = Date.now();
     await h.restart(); // Graceful own-lock release and actual journal replay; no stale recovery.
     assert.ok((await readFile(join(h.state, 'journal.log'))).equals(journal), 'replay preserves reservation');
     assert.ok(!output.join('').includes(handle.request_capability), 'HTTP reservation key absent from logs');
-    await h.cli('status', '--json');
+    const cliStatus = await h.cli('status', '--json');
+    assert.ok(cliStatus.endsWith('\n'), 'JSON output terminates with newline');
+    assert.deepEqual(JSON.parse(cliStatus), { schema_version: 1, requests: [] }, 'exact CLI status contract');
     const finalStatus = await (await h.http('/v1/status', h.control)).json();
+    assert.match(finalStatus.broker.started_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$/);
+    // RFC 3339 permits whole-second precision; do not require millisecond formatting.
+    assert.ok(Date.parse(finalStatus.broker.started_at) >= Math.floor(restartAt / 1000) * 1000
+      && Date.parse(finalStatus.broker.started_at) <= Date.now(), 'restart timestamp belongs to new instance');
+    assert.deepEqual(finalStatus, { schema_version: 1, broker: { pid: finalStatus.broker.pid,
+      port: config.broker.port, started_at: finalStatus.broker.started_at }, requests: [] });
+    assert.ok(Number.isInteger(finalStatus.broker.pid) && finalStatus.broker.pid !== status.broker.pid,
+      'restarted broker has a new actual process');
     assert.deepEqual(finalStatus.requests, [], 'reservation is not an actionable request');
     assert.ok([...secrets, handle.request_capability].every((secret) =>
       !JSON.stringify(finalStatus).includes(secret)), 'status never discloses credentials/capability');
