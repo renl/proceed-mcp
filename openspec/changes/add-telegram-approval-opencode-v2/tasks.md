@@ -1,5 +1,13 @@
 # Tasks
 
+## A0 pairing replay — current preparation (2026-11-01)
+
+- [x] P.A0-tests Prepare [A0 slice / Boundary Verification / exact ordered gate](slices/03a2-a0-pairing-replay.md) and `tests/portable-pairing-replay.test.mjs` against current design 4/7. Production-selected scope only `src/broker/portable.js`, forecast 120–160 gross. No production changes. Review-ready only: decomposition triggers 1/4/5 YES and test-only storage vocabulary require targeted Architect review before implementation.
+- [ ] P.A0-review Targeted test-artifact/decomposition/storage-boundary review, then bounded implementation handoff. No new PM tradeoff or external research gate; A0 does not authorize A1 creation or public pairing.
+- [ ] P.A0-impl Implement strict pairing replay/private copied getter only, then full A0 gate and existing authority regression, static/build/format/whitespace and independent affected verification. Final Windows Node 24.22.2: 1 fixture PASS / 147 expected RED (148 including parents), exit 1; no downstream pairing acceptance. Separate owned fixture cleanup PASS.
+- Lifecycle unchanged: same retained path/branch/change, baseline and test-engineering owner in the table below. Active, not cleanup-ready; next action is targeted A0 review, not waiting/Telegram implementation. Unknown artifacts and owner changes preserved; no new worktree or removal.
+- Scoped accounting versus `9f195f4`: **324 gross / 3 owned paths** (261 new test lines, 55 new slice lines, 8 task additions); supplied production forecast 120–160 separately, combined **444–484 gross**, below 600. No reused proof recounted. Node 24 syntax, project formatter and staged owned whitespace PASS; tests/OpenSpec formatter-excluded. No production/build or unchanged authority rerun claimed in preparation; those gates follow implementation. Owned scratch removed after preserving this bounded evidence.
+
 ## U2b independent verification — current disposition (2026-11-01)
 
 - [x] P.D2-U2b-wiring-verified Bounded public adapter lifecycle/fault candidate `0d94855e3a288d3439287e510495f5eaa64818b9` independently **PASS**, ENABLING ONLY. Supersedes earlier wiring-pending/expected-RED entries below, not waiting/feature acceptance. Three authorized production paths, **142 gross / 220 ceiling**. Windows project Node 24.22.2: **1 consumer calibration + 2 actual public lifecycle + 8 actual public faults + 10 binding/abort + 5 U2a + 14 affected regression PASS**, zero failed/cancelled/skipped. Syntax/build/format/candidate whitespace PASS. [Exact commands/results, source trace and proof limits](slices/03a1c-u2b2-public-lifecycle.md#independent-affected-verdict--2026-11-01), [fault mapping](slices/03a1c-u2b3-public-faults.md#independent-affected-verdict--2026-11-01).
