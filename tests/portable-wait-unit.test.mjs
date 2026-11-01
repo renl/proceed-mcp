@@ -118,6 +118,69 @@ test('WAIT-U-CONFLICT: explicit409 never reconnects, reservation released for ex
     assert.equal(f.refreshes.length, 0); assert.equal(f.waits.length, 2); assert.equal(f.calls.length, 2);
   } finally { await f.ex.close(); }
 });
+// WAIT-RESPONSE-001: design 3 common representation and exact create/wait statuses.
+// These fake replies verify executor handling only, not IPC or original-call delivery.
+async function unusable(response, stage) {
+  const f = fixture(() => stage === 'wait' ? response : reply(terminal()),
+    () => stage === 'create' ? response : reply(view(), 201));
+  try {
+    const r = await f.ex.execute('request_approval', args());
+    assert.equal(error(r, 'BROKER_UNAVAILABLE').retryable, true);
+    assert.ok(!JSON.stringify(r).includes(args().request_capability));
+  } finally {
+    await f.ex.close();
+    assert.equal(f.calls.length, 1, 'never recreate the business request');
+    assert.equal(f.waits.length, stage === 'wait' ? 1 : 0, 'never retry an unusable reply');
+    assert.equal(f.refreshes.length, 0, 'never refresh on malformed success');
+  }
+}
+test('WAIT-RESPONSE-001-STATUS: unexpected wait2xx never falls through to success', async t => {
+  for (const [status, body] of [[201, view()], [202, { injected: 'not an outcome' }], [206, terminal()]])
+    await t.test(`wait${status}`, () => unusable(reply(body, status), 'wait'));
+});
+test('WAIT-RESPONSE-001-COMMON: terminal200 requires the complete common view', async t => {
+  // Every entry is a documented public field, not private ledger timestamps/metadata.
+  for (const key of Object.keys(terminal())) await t.test(`missing ${key}`, async () => {
+    const body = terminal(); delete body[key];
+    await unusable(reply(body), 'wait');
+  });
+});
+test('WAIT-RESPONSE-001-VALIDITY: common field validity and terminal identity fail closed', async t => {
+  const cases = {
+    'foreign handle': { request_handle: id('hdl_', '2') },
+    'foreign request': { request_id: id('req_', '2') },
+    'missing decision': { decision_id: null },
+    'pending200': view(),
+    'invalid created time': { created_at: 'not a timestamp' },
+    'invalid telegram state': { telegram_state: 'invented' },
+    'invalid delivery state': { delivery_state: 'invented' },
+    'non-response text': { response_text: 'not a Respond decision' },
+    'invalid event status': { event_capability: { status: 'invented', revision: null, reason: null } },
+  };
+  for (const [label, extra] of Object.entries(cases))
+    await t.test(label, () => unusable(reply({ ...terminal(), ...extra }), 'wait'));
+});
+test('WAIT-RESPONSE-001-CREATE: same gap cannot accept unexpected create2xx or incomplete replay', async t => {
+  const incomplete = terminal(); delete incomplete.action;
+  const pendingIncomplete = view(); delete pendingIncomplete.context;
+  for (const [label, response] of [['create202 pending', reply(view(), 202)],
+    ['create206 terminal', reply(terminal(), 206)], ['create200 incomplete', reply(incomplete)],
+    ['create201 incomplete', reply(pendingIncomplete, 201)]])
+    await t.test(label, () => unusable(response, 'create'));
+});
+test('WAIT-RESPONSE-001-CONTROLS: complete create201/200 pending/terminal and wait204/200 survive', async t => {
+  for (const status of [201, 200]) for (const pending of [true, false])
+    await t.test(`create${status} ${pending ? 'pending' : 'terminal'}`, async () => {
+      let polls = 0;
+      const f = fixture(() => ++polls === 1 ? reply(null, 204) : reply(terminal()),
+        () => reply(pending ? view() : terminal(), status));
+      try {
+        success(await f.ex.execute('request_approval', args()), terminal());
+        assert.equal(f.calls.length, 1); assert.equal(f.waits.length, pending ? 2 : 0);
+        assert.equal(f.refreshes.length, 0);
+      } finally { await f.ex.close(); }
+    });
+});
 test('WAIT-U-ENVELOPE: broker failures and malformed creation do not enter transport retry', async () => {
   for (const response of [fault('NOT_FOUND', 404), fault('STORAGE_FAILURE', 500), fault('BROKER_UNAVAILABLE', 503)]) {
     const f = fixture(() => response);
