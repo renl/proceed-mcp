@@ -1,7 +1,7 @@
 // Binary framing for the append-only transaction journal (design section 4).
 //
 // File layout:
-//   header   8 bytes magic "PROCEEDJ" + uint32be file format version (1)
+//   header   8 bytes magic "PROCEEDJ" + uint32be file format version (2)
 //   records  repeated frames
 //
 // Frame layout (all integers big-endian):
@@ -14,12 +14,17 @@
 // The trailing digest covers the lengths and the sequence, so a truncated,
 // reordered or edited record cannot pass validation. A reader accepts only
 // complete frames; the incomplete final frame is discarded on recovery.
+//
+// Version 2 leaves the layout above unchanged and only raises the declared file
+// and record versions, so the bytes stay readable by this framing. Files and
+// records still declaring version 1 are refused rather than migrated or
+// rewritten in place, and a build accepts exactly one version.
 import { createHash } from 'node:crypto';
 
 export const FILE_MAGIC = Buffer.from('PROCEEDJ', 'ascii');
-export const FILE_FORMAT_VERSION = 1;
+export const FILE_FORMAT_VERSION = 2;
 export const FILE_HEADER_LENGTH = 12;
-export const RECORD_SCHEMA_VERSION = 1;
+export const RECORD_SCHEMA_VERSION = 2;
 export const FRAME_PREFIX_LENGTH = 16;
 export const DIGEST_LENGTH = 32;
 export const MIN_FRAME_LENGTH = FRAME_PREFIX_LENGTH + DIGEST_LENGTH;
