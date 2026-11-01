@@ -3,12 +3,15 @@
 // control credential and the independent per-owner credentials authorize
 // disjoint route groups, and an owner is derived from the presented credential,
 // never from a body field or session metadata. Browser origins are refused
-// before authentication, so no CORS allowance exists on any route. Only a
-// completed durable reservation is acknowledged here: pairing and retry are
-// honest temporary unavailability in this setup checkpoint (design section 3),
-// and the reserved request routes verify authority only to deny, because a
-// reservation is not yet an actionable request. Adapter registration is an
-// ephemeral reachability lease here and never touches approval state.
+// before authentication, so no CORS allowance exists on any route. Creation and
+// read act on the whole reviewed public request binding: caller fields are
+// validated before authority, the credential-derived owner, the path identity and
+// the header capability must name one committed reservation, and every failed
+// binding is the same nondisclosing denial. Pairing and retry stay honest
+// temporary unavailability (design section 3), and cancel/acknowledge verify
+// authority only to deny because their producers are not enabled here. Adapter
+// registration is an ephemeral reachability lease and never touches approval
+// state.
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import {
@@ -33,10 +36,19 @@ const REGISTRATION_HEADER = 'x-proceed-registration';
 // One denial for every rejected registration authentication: missing, malformed,
 // wrong, foreign, unknown and expired all stay indistinguishable here.
 const REGISTRATION_DENIAL = 'registration authentication required';
-// One denial for every reserved outcome: an unknown request, a reservation with
-// no committed approval, and a missing, malformed, foreign or mismatched
-// capability must be indistinguishable here.
+// One denial for every owner-bound request outcome that cannot be served: an
+// unused reservation, an unknown request, and a missing, malformed, foreign or
+// mismatched handle/capability must be indistinguishable here.
 const RESERVED_DENIAL = 'no such request';
+// Creation accepts exactly the reviewed caller fields; any other key is an
+// argument error rather than a silently ignored private permission.
+const CREATION_FIELDS = new Set([
+  'request_handle',
+  'client_request_id',
+  'action',
+  'context',
+  'expires_in_seconds',
+]);
 
 const STORAGE_ENVELOPE = Object.freeze({
   schema_version: 1,
@@ -47,14 +59,12 @@ const STORAGE_ENVELOPE = Object.freeze({
   },
 });
 
-// Recognized reserved routes only. A different method, an extra segment or any
+// Recognized management routes only. A different method, an extra segment or any
 // other suffix stays an unknown route, so route recognition itself never passes
 // for an authorized lookup.
 function reservedRoute(method, segments) {
-  if (segments.length === 3 && method === 'GET') return 'read';
-  if (segments.length !== 4 || method !== 'POST') return null;
-  if (segments[3] === 'cancel' || segments[3] === 'acknowledge') return segments[3];
-  return null;
+  if (segments.length !== 4 || method !== 'POST') return false;
+  return segments[3] === 'cancel' || segments[3] === 'acknowledge';
 }
 
 function constantTimeEquals(left, right) {
@@ -213,17 +223,54 @@ export function createPortableServer({
     sendNoContent(response);
   };
 
-  // A reserved handle has no committed approval, so nothing is readable yet and
-  // every owner outcome below is the same nondisclosing denial. The lookup still
-  // runs, binding the credential-derived owner, the exact path request ID and the
-  // header capability together; an absent route can never produce this denial.
-  const reserved = async (request, response, principal, segments) => {
-    if (!requireRole(response, principal, 'owner')) return;
+  // Creation binds the credential-derived owner, the caller-supplied handle and
+  // the header capability to one committed reservation (design section 3). Caller
+  // fields are validated by the creator before that binding, so a malformed value
+  // stays a caller error even when its handle could never be used, and every
+  // failed binding is the same denial rather than an existence disclosure.
+  const createApproval = async (request, response, principal) => {
+    const body = await readJsonBody(request);
+    const unexpected = Object.keys(body).find((key) => !CREATION_FIELDS.has(key));
+    if (unexpected !== undefined) {
+      throw invalidRequest(`request body must not contain ${unexpected}`);
+    }
+    const created = await broker.createRequest({
+      ownerId: principal.ownerId,
+      capability: requestCapability(request),
+      requestHandle: body.request_handle,
+      clientRequestId: body.client_request_id,
+      action: body.action,
+      context: body.context,
+      expiresInSeconds: body.expires_in_seconds,
+    });
+    // A usable reservation without a committed creation is never a success: it
+    // maps to the same denial as unknown or foreign authority.
+    if (created === null) throw notFound(RESERVED_DENIAL);
+    send(response, created.created === true ? 201 : 200, created.request);
+  };
+
+  // Read is the one observation this cut enables. Only an authorized actual
+  // request enters target expiry, and a denial returns before the queue, so a
+  // rejected read cannot expire or append anything.
+  const readApproval = async (request, response, principal, segments) => {
+    const value = await broker.readRequest({
+      ownerId: principal.ownerId,
+      capability: requestCapability(request),
+      requestId: segments[2],
+    });
+    if (value === null) throw notFound(RESERVED_DENIAL);
+    send(response, 200, value);
+  };
+
+  // Cancellation and acknowledgement gain no success path here: the lookup still
+  // binds the credential-derived owner, the exact path request ID and the header
+  // capability together, and an absent route can never produce this denial.
+  const reservedManagement = async (request, response, principal, segments) => {
     // Malformed input is reported before any lookup, so validation does not
     // depend on whether the named request exists.
-    if (request.method === 'POST') await readJsonBody(request);
-    // The result is intentionally not used: a reservation has no committed
-    // approval, so a valid capability and a wrong one deny identically here.
+    await readJsonBody(request);
+    // The result is intentionally not used: these producers are not enabled, so
+    // a valid capability and a wrong one deny identically.
     void broker.authorize({
       ownerId: principal.ownerId,
       capability: requestCapability(request),
@@ -277,8 +324,26 @@ export function createPortableServer({
       return;
     }
 
-    if (requestsPath && reservedRoute(request.method, segments) !== null) {
-      await reserved(request, response, principal, segments);
+    // Creation and read are separate shapes: the collection takes a POST and one
+    // request path takes a GET, so neither method on the other shape is admitted.
+    if (requestsPath && segments.length === 2 && request.method === 'POST') {
+      if (requireRole(response, principal, 'owner')) {
+        await createApproval(request, response, principal);
+      }
+      return;
+    }
+
+    if (requestsPath && segments.length === 3 && request.method === 'GET') {
+      if (requireRole(response, principal, 'owner')) {
+        await readApproval(request, response, principal, segments);
+      }
+      return;
+    }
+
+    if (requestsPath && reservedRoute(request.method, segments)) {
+      if (requireRole(response, principal, 'owner')) {
+        await reservedManagement(request, response, principal, segments);
+      }
       return;
     }
 

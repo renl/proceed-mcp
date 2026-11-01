@@ -31,13 +31,28 @@ const INSTRUCTIONS = [
   'Keep the request capability private and retain it with its request_handle and request_id, because it is the only authority for a later get_approval, cancel_approval or acknowledge_approval call.',
   'Never echo, print or otherwise expose the request capability in an assistant message or a Telegram message.',
   'request_approval returns ENHANCEMENT_UNAVAILABLE in this build: no question is sent and no human outcome is delivered yet.',
-  'Reserved get_approval, cancel_approval and acknowledge_approval calls return NOT_FOUND only, because a prepared reservation is not yet an actionable request and a wrong capability is indistinguishable from it.',
+  'Call get_approval with the retained request_id and request_capability to observe that exact request: an authorized read returns the committed representation of a pending request, applies expiry first and reports an expired request as expired, and NOT_FOUND covers an unused reservation, an unknown request or denied authority alike.',
+  'cancel_approval is not enabled in this build, so a reserved management call returns NOT_FOUND and a wrong capability is indistinguishable from an unused reservation.',
+  'acknowledge_approval is unavailable at this checkpoint and cannot record receipt yet, so a terminal outcome you have already seen stays unacknowledged until a later build enables it.',
   'A received terminal decision_id must be acknowledged with acknowledge_approval and reported to the operator with its request_id and outcome; deduplicate by request_id and decision_id before acting on it.',
   'A rejection forbids the requested action; a response is instructions only and never an approval; pending, expired, cancelled and failed requests grant nothing, so an action that still needs approval requires a new request.',
 ].join('\n');
 
-const RESERVED_ONLY =
-  'Available in this build for capability-authenticated calls, but a prepared reservation has no approval yet, so it returns NOT_FOUND only.';
+// Retrieval is the one observation this build enables, so its description names
+// the readable states and the single denial instead of claiming that every call
+// is a reserved-only denial.
+const GET_AVAILABLE =
+  'Available in this build for a created request: an authorized read returns the committed representation of a pending request, applies expiry first and reports an expired request as expired, and NOT_FOUND covers an unused reservation, an unknown request or denied authority.';
+
+// These two producers are not enabled here, so each description says so plainly
+// rather than implying a management success this build cannot deliver.
+const CANCELLATION_UNAVAILABLE =
+  'Cancellation is not enabled in this build: cancel_approval returns NOT_FOUND for every call, and a wrong capability is indistinguishable from an unused reservation.';
+
+// Acknowledgement availability belongs to its own later cut, not to waiting, so
+// the interim disclosure states the gap without tying it to that implementation.
+const ACKNOWLEDGEMENT_UNAVAILABLE =
+  'acknowledge_approval is unavailable at this checkpoint and cannot record receipt yet, so no delivery is reported and no outcome is marked returned.';
 
 // Design section 3 tool contracts. Argument names, required sets and bounds are
 // the reviewed public interface. Each description states what this build actually
@@ -76,7 +91,7 @@ const TOOLS = [
   },
   {
     name: 'get_approval',
-    description: `Read only the capability-authorized request, applying expiry before the read; no delivery side effect. ${RESERVED_ONLY}`,
+    description: `Read only the capability-authorized request, applying expiry before the read; no delivery side effect. ${GET_AVAILABLE}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -89,7 +104,7 @@ const TOOLS = [
   },
   {
     name: 'cancel_approval',
-    description: `Cancel only the capability-authorized pending request; a terminal outcome that already exists is returned unchanged. ${RESERVED_ONLY}`,
+    description: `Cancel only the capability-authorized pending request; a terminal outcome that already exists is returned unchanged. ${CANCELLATION_UNAVAILABLE}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -102,7 +117,7 @@ const TOOLS = [
   },
   {
     name: 'acknowledge_approval',
-    description: `Record that the capability holder received the matching terminal outcome; idempotent, never creating a second decision or a continuation. ${RESERVED_ONLY}`,
+    description: `Record that the capability holder received the matching terminal outcome; idempotent, never creating a second decision or a continuation. ${ACKNOWLEDGEMENT_UNAVAILABLE}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
