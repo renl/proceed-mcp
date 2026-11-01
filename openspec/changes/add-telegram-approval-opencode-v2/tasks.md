@@ -1,5 +1,13 @@
 # Tasks
 
+## A1b first runtime cut — executable preparation, review required (2026-11-01)
+- [x] P.A1b-runtime-tests Prepare [exact selected boundary, mapping, lifecycle, ordered commands and review questions](slices/03a3-a1b-runtime-scheduling.md); `tests/portable-runtime-scheduling.test.mjs` plus minimal test-only preload. Authoring `a06e4a3`; accepted complete internal A1a and adapter lifecycle are prerequisites, not public creation proof. No production edits.
+- [ ] P.A1b-runtime-review Architecture interface/decomposition/test-artifact review; triggers1–5 YES. Resolve callback-promise/exception and latch ordering questions before implementation; whitespace-only token remains explicitly unbound.
+- [ ] P.A1b-runtime-impl Separately authorized four-path runtime/scheduler/core-latch/CLI implementation, supplied113–143gross production forecast; full packet hard600. No route enablement/human-format/Telegram changes or incomplete failure split.
+- [ ] P.A1b-runtime-verify Independent full packet and affected assertions after implementation; no expectedRED or seeded setup relabeled as acceptance. Later public-create/read cut depends on accepted scheduling/startup/failure proof.
+- Lifecycle: same retained path/branch/change/baseline and test-engineering owner, **active/not cleanup-ready**; next action review through coordination. Run-owned cleanup and execution accounting are in the slice; preserve other owner/unknown work. One OpenSpec PR; no archive/push/promotion/publication.
+- Preparation: pinned Windows Node24.22.2 full16 entries5PASS/11expectedRED,84670.4084ms, exit1; affected-only final observer/latch strengthening2expectedRED,11212.2848ms, exit1; no cancelled/skipped/todo. Syntax2/source-format3/scoped whitespace/local links PASS. Initial observer-loop harness defect fixed and retained honestly; actual calibration versus RED barriers/downstream unexecuted assertions in slice. Cleanup separately PASS; no implementation or A1b acceptance.
+
 ## Internal A1a — independently verified and owning post-code accepted (2026-11-01)
 - [x] P.CREATE-breadth Prepare and run `tests/portable-creation-breadth.test.mjs` against immutable production `f89b76c2b70171d5da9c0790ef68b9508b712314`, authoring/evidence baseline `75b1f4a76a1d369359bfa1ab10cac9e93b0af97f`. [Bounded outline, exact assertion mapping, commands, results and limits](slices/03a2-creation-breadth.md). Test-only scope; foundational568 remains separately accepted.
 - [x] P.CREATE-foundational-owner Owning foundational post-code PASS supplied in the authorized breadth brief; supersedes prior pending disposition below, not complete A1a acceptance.
