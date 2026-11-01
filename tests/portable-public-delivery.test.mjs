@@ -108,7 +108,7 @@ for (const order of [kinds, [...kinds].reverse()]) test(`PUBLIC-LEDGER-${order.j
 for (const k of kinds) test(`PUBLIC-LEDGER-ORDER-${k}: browser/readiness/auth/role/parse/body/authority/conflict, due pending stays pending`, opts, () => native(async h => {
   const dummy = { request_id: 'bad' };
   error(await h.call(k, dummy, dec(1), null, { token: null, headers: { origin: 'https://browser.invalid' } }), 403, 'FORBIDDEN');
-  error(await h.call(k, dummy, dec(1), null, { token: null }), 503, 'BROKER_NOT_READY'); h.ready();
+  error(await h.call(k, dummy, dec(1), null, { token: null, headers: {} }), 503, 'BROKER_NOT_READY'); h.ready();
   const { p } = await setup(h, false), r = await h.register(), before = await h.bytes(), snapshot = h.b.snapshot(), samples = h.counts();
   for (const [token, status, code] of [[null, 401, 'AUTH_REQUIRED'], ['bad', 401, 'AUTH_REQUIRED'], [h.control, 403, 'FORBIDDEN']])
     error(await h.call(k, p, dec(1), r, { token }), status, code);
