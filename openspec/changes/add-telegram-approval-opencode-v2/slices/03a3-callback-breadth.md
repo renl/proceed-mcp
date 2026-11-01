@@ -2,6 +2,11 @@
 
 Parent: [tasks](../tasks.md). Authority: [design 4/7](../design.md), [proposal](../proposal.md), [Durable decisions and single resolution / Expiry and cancellation are non-approval outcomes](../specs/telegram-approval/spec.md), [accepted foundation](03a3-a1b-runtime-scheduling.md).
 
+## Final disposition — 2026-11-01
+- Owning callback test-artifact/decomposition/interface review **PASS**, supplied by the authorized reconciliation brief, accepts evidence `9225c97` on unchanged production `74b4c0e`. Review read actual source/tests/TAP and ran no commands. Together with accepted foundational post-code review and independent `1a3c770`18 scheduling/149 affected, this discharges the remaining gate for complete bounded first-A1b runtime acceptance. Historical review-pending/blocking language below is superseded, not a new preimplementation approval.
+- No tests rerun or files of runnable evidence invented here. Reuse breadth31/31 and separately reported run-owned cleanup PASS below. Foundation600 exact remains separate from breadth296/3; current evidence-only docs do not remeasure/repartition those historical packets. Formatter-excluded is NOT formatter-PASS.
+- Accepted callback containment/health/shutdown completes enabling runtime proof only. No one-second flush SLA, crash/media/all-OS/public-create/read/CLI-human-format/pairing/MCP-waiting/Telegram/feature/first-use/release proof. Next action is separately scoped public-route planning, not new-stage preparation here. Same worktree/branch/change/baseline/owner active/retain/not cleanup-ready; pending owner/unknown material preserved. No source/test/design/PM/index edits, network, push, PR, archive or publication.
+
 ## Bounded outline before authoring
 - Question: can callback faults or late results make a failed broker look healthy, restart scheduling, or prevent safe shutdown? This is enabling runtime proof, not the human waiting-call outcome.
 - Prerequisite on this same change branch: production `74b4c0e3d6d3967918b3f4516e68949cb217fa20`, independent evidence `1a3c7703496b2b23cf38bd96818486c6d29b5c29`, owning foundational post-code PASS supplied in the authorized brief. Authoring baseline is that evidence commit. Source must remain byte-identical; any source failure stops for correction through coordination.
