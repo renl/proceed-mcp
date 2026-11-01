@@ -189,7 +189,7 @@ function identityProblem(value) {
 
 function readChallenge(mutation) {
   exactFields(mutation, CHALLENGE_FIELDS);
-  if (!HASH_PATTERN.test(mutation.hash)) {
+  if (typeof mutation.hash !== 'string' || !HASH_PATTERN.test(mutation.hash)) {
     throw integrity('pairing.challenge has a malformed code hash');
   }
   const createdAt = readInstant(mutation.created_at);
@@ -207,7 +207,7 @@ function readChallenge(mutation) {
 
 function readConsume(mutation) {
   exactFields(mutation, CONSUME_FIELDS);
-  if (!HASH_PATTERN.test(mutation.hash)) {
+  if (typeof mutation.hash !== 'string' || !HASH_PATTERN.test(mutation.hash)) {
     throw integrity('pairing.challenge.consume has a malformed code hash');
   }
   const consumedAt = readInstant(mutation.consumed_at);
