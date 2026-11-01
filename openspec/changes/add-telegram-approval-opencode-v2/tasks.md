@@ -1,5 +1,14 @@
 # Tasks
 
+## Alpha-A portable presentation — review packet (2026-11-01)
+
+- [x] P.ALPHA-A-tests Prepare `tests/portable-render.test.mjs` and [exact candidate binding / Boundary Verification / ordered gate](slices/03a2-alpha-a-portable-render.md) against current design4/5/7, authoring HEAD `f84c03b5715cfe13454834050b785cba6975d53d`. Selected sole production path `src/telegram/portable-render.js`, forecast95–120 gross; no broker/transport integration. Candidate exact layout/labels/26-variant maximum are **proposed**, not invented normative product authority.
+- [ ] P.ALPHA-A-review Obtain Architect presentation/test-artifact/interface and decomposition fidelity review through coordination before implementation. Triggers1/4 YES; exact layout absent from normative design. Review includes plain-text UTF-16 conservative local bound, not a claim about Bot API counting. Maximum request length covers terminal presentations, not pending only.
+- [ ] P.ALPHA-A-impl After applicable review, implement only selected renderer/measurement exports; pass11 cases and affected syntax/build/format/diff, then independent affected verification. No production edits in preparation; RED does not establish implemented behavior.
+- Evidence: project Node24.22.2 Windows, syntax/format PASS; calibration arithmetic PASS, ten product cases expected RED at absent selected module, downstream assertions unexecuted. Exact final sizing/evidence in slice; unchanged181-entry A0 proof reused by revision, not replayed.
+- Limits: enabling dependency only, **not A1a-i acceptance**. Later alpha replay/snapshot, beta actual serialized expiry with close/reopen/flush faults and awaited truthful status, then creation remain separate unprepared cuts. No temporary status outcome, real expiry/creation/HTTP/pairing/Telegram/waiting/host/Events/feature/release proof.
+- Lifecycle: same path/branch/change/baseline/owner below; active and retained, not cleanup-ready. Next action is applicable Architect review of this bounded packet before implementation. Owned cleanup: no scratch/process/state directory created; all other owner edits, unknown scratch/artifacts preserved. One eventual OpenSpec PR; no archive/push/publication/promotion.
+
 ## A0 pairing replay — correction accepted, ENABLING ONLY (2026-11-01)
 
 - [x] P.A0-hash-verified **PAIRING-HASH-TYPE-001 CLOSED, attempt 1**. Independent candidate `1541c321822d18ba78509836921bec52ca900a47`: full unfiltered A0 **181/181 runner entries (176 leaves + 5 parents)** and authority **8/8 PASS**, no failed/cancelled/skipped; syntax/build/format/scoped whitespace PASS. Both string guards precede regex/lookup; 32 JSON-type leaves assert normal `JOURNAL_STATE_INVALID/4`, immutable journal and installed state, no raw coercion TypeError. [Exact evidence, revision-scoped reuse, accounting and limits](slices/03a2-a0-pairing-replay.md#pairing-hash-type-001--independent-correction-verdict-attempt-1).
@@ -130,7 +139,7 @@ Direct proof is real Telegram interaction followed by that exact session's ackno
 | baseline | `main` and fetched `origin/main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba` |
 | owner | Test engineering (lifecycle); implementation engineering (implementation custody) |
 | status | active / retained, not cleanup-ready; U1/U2a/U2b accepted ENABLING ONLY; public lifecycle/fault candidate `0d94855` PASS; waiting incomplete; live/Events BLOCKED |
-| next action | A0 accepted ENABLING ONLY at `1541c32`; prepare A1a implementation-owned test bindings and exact-path/gross forecast, then applicable review before code; A1b follows passing A1a. Retain worktree/unknown artifacts; no promotion or first-use claim. |
+| next action | Alpha-A presentation packet prepared against accepted A0; obtain Architect binding/interface/decomposition fidelity review before bounded renderer implementation. Later replay/beta/creation remain unprepared; A1b follows passing complete A1a. Retain unknown artifacts; no promotion or first-use claim. |
 | cleanup evidence | Initial registry contained only repository root on `chore/project-workflow`; no pre-existing dangling worktree. No removal authorized now. After verified landing return to current `main`, verify registry/directory removal; retain unknown work. |
 
 Root bootstrap originals remain untouched. Worktree copies are the delivery artifacts; do not implement in the root or silently overwrite newer owner edits there. No publication, archive, license selection, or PR operation is authorized by this setup.
