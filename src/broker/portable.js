@@ -35,6 +35,13 @@
 // outcome, repeats never append, and a returned report never downgrades a
 // confirmation. Both are ledger assertions, never proof of a written response.
 //
+// A wait is an attached, non-durable observation of one request: admission,
+// duplicate refusal and the deadline check share the serialized turn, but the
+// turn is released before a future outcome is awaited. Every terminal writer
+// selects its initial delivery state from live waiters inside that turn, installs
+// the committed closure before waking, and never treats a wake, a turnover or a
+// detached transport as receipt.
+//
 // The journal stays caller-owned. This module never opens, replaces or closes
 // it, and no reservation result becomes visible before its serialized append
 // has completed the journal's own file flush.
@@ -63,6 +70,7 @@ import {
   sha256Hex,
   utcTimestamp,
 } from '../util/values.js';
+import { WAIT_CONFLICT, WAIT_DETACHED, createWaiterRegistry } from './waiters.js';
 
 export const PORTABLE_REPRESENTATION_SCHEMA_VERSION = 1;
 
@@ -129,8 +137,9 @@ const EVIDENCE_TIME = Object.freeze({
 // `confirmed` acknowledgement; a returned report on already confirmed state
 // retains confirmation.
 const EVIDENCE_STATES = new Set(['confirmed', 'returned']);
-// Initial delivery for a terminal closure: the vocabulary admits the live-waiter
-// value, but no path establishes a waiter yet, so an expiry persists `unavailable`.
+// Initial delivery for a terminal closure: an attached admitted waiter whose
+// captured registration is still valid selects `pending`, anything else
+// `unavailable`. Neither value is receipt evidence.
 const DELIVERY_STATES = new Set(['pending', 'unavailable']);
 const EVENT_CAPABILITY = Object.freeze({
   status: 'unverified',
@@ -847,13 +856,16 @@ class PortableBroker {
   #fence = null;
 
   #deadlineFailure = null;
+
   #closing = false;
 
   #closed = false;
 
   #closingPromise = null;
 
-  constructor({ journal, owners, port, clock, logger, generateDecisionId }) {
+  #waiters;
+
+  constructor({ journal, owners, port, clock, logger, generateDecisionId, waitTurnoverMs }) {
     this.#journal = journal;
     this.#owners = new Map();
     for (const owner of owners) {
@@ -872,6 +884,8 @@ class PortableBroker {
     this.#logger = logger;
     this.#generateDecisionId = generateDecisionId;
     this.#startedAt = utcTimestamp(clock());
+    // The turnover is a private observation window, never public configuration.
+    this.#waiters = createWaiterRegistry({ timeoutMs: waitTurnoverMs });
   }
 
   // Rebuilds reservations, pairing and requests from committed transactions.
@@ -1042,6 +1056,35 @@ class PortableBroker {
     return this.#enqueue(() => this.#cancel(target.request_id));
   }
 
+  // Attached wait for one committed request's outcome (design sections 3, 4 and 7,
+  // G1/G3). Authority, the unused-reservation denial and the request lookup are
+  // settled before the queue, so a denial samples no clock and appends nothing. The
+  // admitted turn returns a plain envelope holding the future observation, so the
+  // serialized transaction is released long before that observation settles.
+  waitRequest(input = {}) {
+    return Promise.resolve()
+      .then(() => {
+        if (!isPlainObject(input)) throw invalidArgument('waitRequest expects an argument object');
+        const signal = input.signal;
+        if (signal !== undefined && typeof signal?.addEventListener !== 'function') {
+          throw invalidArgument('waitRequest needs an AbortSignal');
+        }
+        const target = this.#waitBinding(input);
+        if (target === null) return null;
+        if (signal?.aborted === true) return WAIT_DETACHED;
+        const refusal = this.#admissionRefusal();
+        if (refusal !== null) throw refusal;
+        if (!this.#recovered) {
+          throw storageFailure(
+            'the portable broker has not recovered the journal',
+            'STORAGE_FAILURE',
+          );
+        }
+        return this.#enqueue(() => this.#admitWait(target.request_id, input));
+      })
+      .then((result) => (result?.wait === undefined ? result : result.wait));
+  }
+
   // Capability-authorized acknowledgement (design sections 4 and 6, A2b): the
   // first evidence that the request-capability holder received the matching
   // terminal outcome. It resolves nothing, allocates no decision and schedules no
@@ -1110,11 +1153,14 @@ class PortableBroker {
     });
   }
 
-  // Drains accepted commits, then refuses further mutation. The caller's
-  // journal is deliberately left open for its owner to close.
+  // Drains accepted commits, then refuses further mutation. Admitted waits are
+  // transport-bound observations, so close detaches them and removes their timers
+  // and listeners before the drain; the caller's journal is deliberately left open
+  // for its owner to close.
   close() {
     if (this.#closingPromise !== null) return this.#closingPromise;
     this.#closing = true;
+    this.#waiters.close();
     this.#closingPromise = (async () => {
       await this.#queue;
       this.#closed = true;
@@ -1190,6 +1236,14 @@ class PortableBroker {
       return null;
     if (typeof capability !== 'string' || !REQUEST_CAPABILITY_PATTERN.test(capability)) return null;
     return this.authorize({ ownerId, capability, requestHandle });
+  }
+
+  // Wait authority: the read binding plus one actual committed request, so an
+  // unused reservation stays the same non-disclosing denial as an unknown one.
+  #waitBinding(input) {
+    const target = this.#readBinding(input);
+    if (target === null || !this.#requests.has(target.request_id)) return null;
+    return target;
   }
 
   // Ledger admission in design order: the argument object and the raw decision
@@ -1343,12 +1397,59 @@ class PortableBroker {
       request_id: request.request_id,
       decision_id: this.#nextDecisionId(new Set()),
       resolved_at: sampled.text,
-      delivery_state: 'unavailable',
+      delivery_state: this.#waiters.live(request.request_id) ? 'pending' : 'unavailable',
     };
-    await this.#append([mutation]);
+    await this.#commitFor([mutation], [request.request_id]);
     this.#installClosure(mutation, 'cancelled');
+    this.#waiters.wake(request.request_id, { state: 'terminal', request: requestView(request) });
     this.#logger('portable.request.cancelled', { request_id: request.request_id });
     return requestView(request);
+  }
+
+  // One serialized wait admission (design section 3, G3). A queued call whose
+  // transport is already gone performs no deadline work; an existing waiter or a
+  // terminal target is settled without sampling. Otherwise this waiter's
+  // observation is installed before the deadline is applied, so an expiry this
+  // same turn commits selects the live-waiter delivery state, and the turn returns
+  // the envelope before the future outcome arrives.
+  async #admitWait(requestId, { signal, registration }) {
+    if (this.#closing || signal?.aborted === true) return WAIT_DETACHED;
+    const request = this.#requests.get(requestId);
+    if (request === undefined) return null;
+    if (this.#waiters.has(requestId)) return WAIT_CONFLICT;
+    if (request.resolution !== 'pending')
+      return { state: 'terminal', request: requestView(request) };
+    const entry = this.#waiters.enter({
+      requestId,
+      signal,
+      registration,
+      turnover: () => this.#enqueue(() => this.#checkDeadline(requestId)),
+    });
+    try {
+      const { milliseconds } = turnTime(this.#clock, 'checking a wait deadline', 'wait');
+      if (!isDue(request, milliseconds)) return { wait: entry.wait };
+      await this.#commitExpiry(milliseconds, [request]);
+      return { state: 'terminal', request: requestView(request) };
+    } catch (error) {
+      // A refused admission releases its slot, timer and listener without fencing.
+      entry.release();
+      throw error;
+    }
+  }
+
+  // Turnover re-inspects the target inside the serialized turn, so a wait that
+  // outlives its poll never returns a stale pending view for a due request. A wait
+  // detached in the meantime settles nothing and commits nothing.
+  async #checkDeadline(requestId) {
+    if (this.#closing || !this.#waiters.has(requestId)) return WAIT_DETACHED;
+    const request = this.#requests.get(requestId);
+    if (request === undefined) return WAIT_DETACHED;
+    if (request.resolution !== 'pending')
+      return { state: 'terminal', request: requestView(request) };
+    const { milliseconds } = turnTime(this.#clock, 'checking a wait deadline', 'wait');
+    if (isDue(request, milliseconds)) await this.#commitExpiry(milliseconds, [request]);
+    if (request.resolution === 'pending') return { state: 'pending' };
+    return { state: 'terminal', request: requestView(request) };
   }
 
   // One serialized first-evidence turn (design sections 4 and 6, A2b). A pending
@@ -1416,7 +1517,10 @@ class PortableBroker {
 
   // One transaction of closures: every identity is generated and checked first, so
   // a malformed, throwing or colliding generator refuses the whole group before a
-  // byte is written, and the closures become visible only after the flush.
+  // byte is written, and the closures become visible only after the flush. Each
+  // initial delivery state is selected from live reachability before the append, so
+  // a later registration loss changes no committed mutation, and every matching
+  // waiter is woken only after the whole group is installed.
   async #commitExpiry(now, due) {
     const resolvedAt = utcTimestamp(now);
     const issued = new Set();
@@ -1425,11 +1529,30 @@ class PortableBroker {
       request_id: request.request_id,
       decision_id: this.#nextDecisionId(issued),
       resolved_at: resolvedAt,
-      delivery_state: 'unavailable',
+      delivery_state: this.#waiters.live(request.request_id) ? 'pending' : 'unavailable',
     }));
-    await this.#append(mutations);
+    await this.#commitFor(
+      mutations,
+      due.map((request) => request.request_id),
+    );
     for (const mutation of mutations) this.#installClosure(mutation, 'expired');
+    for (const mutation of mutations) {
+      const request = this.#requests.get(mutation.request_id);
+      this.#waiters.wake(mutation.request_id, { state: 'terminal', request: requestView(request) });
+    }
     this.#logger('portable.request.expired', { count: mutations.length });
+  }
+
+  // An uncertain append is not an outcome: the affected waits settle as that
+  // storage failure instead of a synthesized terminal result, and the existing
+  // journal-wide fence is what refuses every later turn.
+  async #commitFor(mutations, requestIds) {
+    try {
+      await this.#append(mutations);
+    } catch (error) {
+      this.#waiters.fail(requestIds, error);
+      throw error;
+    }
   }
 
   // A decision identity is spent once across recovered history and the pending
@@ -1524,6 +1647,7 @@ export function createPortableBroker({
   clock = () => Date.now(),
   logger = () => {},
   generateDecisionId = randomDecisionId,
+  waitTurnoverMs,
 } = {}) {
   if (typeof journal?.append !== 'function' || typeof journal?.recover !== 'function') {
     throw invalidArgument('a portable broker needs a caller-owned journal');
@@ -1534,5 +1658,13 @@ export function createPortableBroker({
   }
   if (typeof clock !== 'function') throw invalidArgument('clock must be a function');
   if (typeof logger !== 'function') throw invalidArgument('logger must be a function');
-  return new PortableBroker({ journal, owners, port, clock, logger, generateDecisionId });
+  return new PortableBroker({
+    journal,
+    owners,
+    port,
+    clock,
+    logger,
+    generateDecisionId,
+    waitTurnoverMs,
+  });
 }

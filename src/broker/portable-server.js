@@ -12,7 +12,9 @@
 // returned records an authenticated adapter's report of its own successful
 // terminal-result write; both are ledger evidence that resolves nothing, and
 // returned additionally requires the live registration it renews only after the
-// whole operation succeeds. Pairing and retry stay honest temporary
+// whole operation succeeds. A wait holds one request's attachment across a bounded
+// turnover without holding the serialized turn, and only an attached settlement of
+// the still-current registration renews it. Pairing and retry stay honest temporary
 // unavailability (design section 3). Adapter registration is an ephemeral
 // reachability lease and never touches approval state.
 import { createServer } from 'node:http';
@@ -22,6 +24,7 @@ import {
   CliError,
   EXIT_CODE,
   authRequired,
+  conflict,
   forbidden,
   invalidRequest,
   notFound,
@@ -57,6 +60,9 @@ const CREATION_FIELDS = new Set([
 // than a coerced lookup, and a capability in the body is never admitted.
 const ACKNOWLEDGEMENT_FIELDS = new Set(['decision_id']);
 const RETURNED_FIELDS = new Set(['registration_id', 'decision_id']);
+// The wait body is exactly the captured incarnation; the request target stays in
+// the path identity and the capability header.
+const WAIT_FIELDS = new Set(['registration_id']);
 
 const STORAGE_ENVELOPE = Object.freeze({
   schema_version: 1,
@@ -135,10 +141,14 @@ export function createPortableServer({
   logger = () => {},
 } = {}) {
   let ready = false;
+  let closing = false;
   let server = null;
   // Registrations belong to this process, so the listener that admits them also
   // owns closing them.
   const registrations = createRegistrationRegistry({ clock, logger });
+  // One entry per open wait exchange: shutdown detaches exactly these, never an
+  // admitted ordinary request whose committed result is still being written.
+  const waitExchanges = new Set();
 
   const authorize = (request) => {
     const header = request.headers.authorization;
@@ -342,6 +352,52 @@ export function createPortableServer({
     send(response, 200, value);
   };
 
+  // The wait is the one exchange that stays open (design sections 3 and 7, G1-G3).
+  // The captured incarnation is authenticated before the remaining fields, its
+  // current validity guides the terminal writer's delivery selection and the
+  // settlement recheck, and a gone transport or closing listener leaves no reply:
+  // no fabricated `200`/`204`, no renewal, no business cancellation.
+  const waitApproval = async (request, response, principal, segments) => {
+    const body = await readJsonBody(request);
+    const identity = {
+      ownerId: principal.ownerId,
+      registrationId: body.registration_id,
+      secret: registrationSecret(request),
+    };
+    if (!registrations.authenticate(identity)) throw authRequired(REGISTRATION_DENIAL);
+    rejectUnlistedFields(body, WAIT_FIELDS);
+    const exchange = { controller: new AbortController() };
+    const detached = () => exchange.controller.abort();
+    waitExchanges.add(exchange);
+    response.once('close', detached);
+    try {
+      const value = await broker.waitRequest({
+        ownerId: principal.ownerId,
+        capability: requestCapability(request),
+        requestId: segments[2],
+        signal: exchange.controller.signal,
+        registration: { valid: () => registrations.authenticate(identity) },
+      });
+      if (value === null) throw notFound(RESERVED_DENIAL);
+      if (value.state === 'detached' || exchange.controller.signal.aborted) {
+        response.destroy();
+        return;
+      }
+      // Only an attached settlement of a still-current incarnation renews, and a
+      // lapsed or replaced one keeps the existing denial instead of reviving.
+      if (!registrations.authenticate(identity)) throw authRequired(REGISTRATION_DENIAL);
+      if (value.state === 'conflict') {
+        throw conflict('this request already has an active waiter', 'WAIT_ALREADY_ACTIVE');
+      }
+      registrations.heartbeat(identity);
+      if (value.state === 'pending') sendNoContent(response);
+      else send(response, 200, value.request);
+    } finally {
+      waitExchanges.delete(exchange);
+      response.off('close', detached);
+    }
+  };
+
   const route = async (request, response, principal, url) => {
     const { pathname } = url;
     const segments = pathname.split('/').filter((segment) => segment !== '');
@@ -424,6 +480,12 @@ export function createPortableServer({
         }
         return;
       }
+      if (segments[3] === 'wait') {
+        if (requireRole(response, principal, 'owner')) {
+          await waitApproval(request, response, principal, segments);
+        }
+        return;
+      }
     }
 
     if (request.method === 'POST' && pathname === '/v1/pairing') {
@@ -468,6 +530,12 @@ export function createPortableServer({
     // automatic port selection is attempted, and a busy port is a refusal.
     async listen() {
       server = createServer((request, response) => {
+        // A completed ordinary exchange must not keep its now-idle keep-alive
+        // socket open once the listener is closing: only idle transports are
+        // released, so an in-flight request is still drained by its own response.
+        response.on('finish', () => {
+          if (closing) setImmediate(() => server?.closeIdleConnections());
+        });
         handler(request, response);
       });
       await new Promise((resolve, reject) => {
@@ -481,9 +549,14 @@ export function createPortableServer({
     },
     async close() {
       ready = false;
+      closing = true;
       // Closing the registry is terminal: no late completion may re-admit,
       // renew or release a registration once the listener stops.
       registrations.close();
+      // Detach only live wait exchanges: their transports are destroyed to settle
+      // them without waiting for a poll turnover, while every already-admitted
+      // ordinary operation keeps its flush and committed-result response.
+      for (const exchange of [...waitExchanges]) exchange.controller.abort();
       if (server === null) return;
       server.closeIdleConnections();
       await new Promise((resolve) => server.close(() => resolve()));
