@@ -34,9 +34,7 @@ const MAX_EXPIRY_SECONDS = 86400;
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const WAIT_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 
-// Only these resolutions are a decision, and an overlapping invocation of one prepared
-// handle is this adapter's own conflict.
-const TERMINAL_RESOLUTIONS = new Set(['approved', 'rejected', 'responded', 'expired', 'cancelled']);
+// An overlapping invocation of one prepared handle is this adapter's own conflict.
 const CONFLICT = envelope(
   'WAIT_ALREADY_ACTIVE',
   'this request already has an active waiter',
@@ -179,18 +177,98 @@ function outcomeOf(response) {
   return complete(closedEnvelope(error.code, error.message, error.retryable), true);
 }
 
-// A request representation is this outcome only when it names the prepared handle and
-// the committed request; a pending or invented shape is never promoted.
+// Design section 3's common representation is the only usable request body: every
+// documented field carrying a public value, with its resolution and the values that
+// resolution allows. A missing, invented or nullable-in-the-wrong-place field is not
+// a smaller representation, so it is never promoted and never enters a transport retry.
+const RESOLUTIONS = new Set([
+  'pending',
+  'approved',
+  'rejected',
+  'responded',
+  'expired',
+  'cancelled',
+]);
+const TELEGRAM_STATES = new Set(['pending', 'sent', 'failed']);
+const DELIVERY_STATES = new Set([
+  'not_applicable',
+  'pending',
+  'returned',
+  'confirmed',
+  'unavailable',
+  'blocked',
+]);
+const EVENT_STATES = new Set(['unverified', 'unsupported', 'verified']);
+// A request instant is UTC RFC 3339: `-00:00` states that the offset is unknown, so
+// only `Z` and `+00:00` carry UTC, and the calendar must be its own round-trip.
+const UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$/;
+
+function instant(value) {
+  if (typeof value !== 'string' || !UTC_INSTANT.test(value)) return false;
+  const parsed = Date.parse(value);
+  return (
+    Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 19) === value.slice(0, 19)
+  );
+}
+
+// The nested delivery diagnostic and Events handshake are the documented shapes:
+// absent evidence is null, and neither is invented by this adapter.
+function diagnostic(value) {
+  if (value === null) return true;
+  return (
+    isPlainObject(value) &&
+    typeof value.code === 'string' &&
+    typeof value.message === 'string' &&
+    typeof value.retryable === 'boolean'
+  );
+}
+
+function events(value) {
+  if (!isPlainObject(value) || !EVENT_STATES.has(value.status)) return false;
+  const pinned = (field) => value[field] === null || typeof value[field] === 'string';
+  return pinned('revision') && pinned('reason');
+}
+
+// A request representation is this outcome only when it names the prepared handle,
+// the committed request and its complete common view; a pending or invented shape is
+// never promoted, and a terminal one names exactly one decision.
 function requestView(body, handle, requestId) {
   if (!isPlainObject(body) || body.schema_version !== 1) return null;
   if (body.request_handle !== handle) return null;
   if (typeof body.request_id !== 'string' || !REQUEST_ID_PATTERN.test(body.request_id)) return null;
   if (requestId !== null && body.request_id !== requestId) return null;
-  if (body.resolution === 'pending') return body.decision_id === null ? body : null;
-  if (!TERMINAL_RESOLUTIONS.has(body.resolution)) return null;
-  const decided =
-    typeof body.decision_id === 'string' && DECISION_ID_PATTERN.test(body.decision_id);
-  return decided ? body : null;
+  if (
+    typeof body.client_request_id !== 'string' ||
+    !CLIENT_REQUEST_ID_PATTERN.test(body.client_request_id) ||
+    typeof body.owner_id !== 'string' ||
+    body.owner_id.length === 0 ||
+    textProblem(body.session_label, 'session_label', 1, MAX_LABEL_SCALARS) !== null ||
+    textProblem(body.action, 'action', 1, MAX_ACTION_SCALARS) !== null ||
+    textProblem(body.context, 'context', 0, MAX_CONTEXT_SCALARS) !== null ||
+    !instant(body.created_at) ||
+    !instant(body.expires_at) ||
+    !TELEGRAM_STATES.has(body.telegram_state) ||
+    !DELIVERY_STATES.has(body.delivery_state) ||
+    !diagnostic(body.delivery_error) ||
+    !events(body.event_capability)
+  ) {
+    return null;
+  }
+  // A live request carries no outcome yet, and its nullable outcome fields are present.
+  if (body.resolution === 'pending') {
+    return body.resolved_at === null && body.response_text === null && body.decision_id === null
+      ? body
+      : null;
+  }
+  if (!RESOLUTIONS.has(body.resolution) || !instant(body.resolved_at)) return null;
+  // Only a live request has no delivery standing at all.
+  if (body.delivery_state === 'not_applicable') return null;
+  if (typeof body.decision_id !== 'string' || !DECISION_ID_PATTERN.test(body.decision_id)) {
+    return null;
+  }
+  // Respond is the one outcome that carries text; every other closure keeps it null.
+  if (body.resolution !== 'responded') return body.response_text === null ? body : null;
+  return typeof body.response_text === 'string' && body.response_text.length > 0 ? body : null;
 }
 
 function creationBody(args) {
@@ -202,12 +280,15 @@ function creationBody(args) {
 
 // A cancelled invocation is a transport decision, not a business outcome: it
 // stops waiting, closes only its own exchange and reports the same redacted
-// unavailable prerequisite, which the adapter then suppresses for that call.
+// unavailable prerequisite, which the adapter then suppresses for that call. An
+// unusable success reply proves no outcome either, so it reports exactly that.
 const ABANDONED = Symbol('cancelled invocation');
 
-function abandoned() {
+function unusable() {
   return complete(closedEnvelope('BROKER_UNAVAILABLE', UNAVAILABLE_MESSAGE, true), true);
 }
+
+const abandoned = unusable;
 
 // Registration is shared work: a cancelled awaiter stops waiting on it, while the
 // single-flight ensure still completes for every other invocation that needs it.
@@ -317,11 +398,27 @@ export function createToolExecutor({ client, waitClient, registration }) {
     try {
       const authority = await untilCancelled(registration.ensure(), signal);
       const capability = { [CAPABILITY_HEADER]: args.request_capability };
-      const created = await send('POST', '/v1/requests', creationBody(args), capability, signal);
-      if (created.isError) return created;
-      // Only the committed request identity can be waited on; a terminal one replays now.
-      const receipt = requestView(created.structuredContent, args.request_handle, null);
-      if (receipt === null) return abandoned();
+      const created = await transmit(
+        client,
+        'POST',
+        '/v1/requests',
+        creationBody(args),
+        capability,
+        signal,
+      );
+      if (created.error !== undefined) return localFailure(created);
+      // Only the documented creation statuses carry a request, and only its complete
+      // common view may be waited on. Any other success is unusable, never a generic
+      // object result, and it neither waits nor repeats this creation.
+      const { status } = created.response;
+      const receipt =
+        status === 201 || status === 200
+          ? requestView(created.response.body, args.request_handle, null)
+          : null;
+      if (receipt === null) {
+        return status >= 200 && status < 300 ? unusable() : outcomeOf(created.response);
+      }
+      // A terminal replay is this invocation's result now; a pending receipt is not.
       if (receipt.resolution !== 'pending') return complete(receipt, false);
       return await waitForDecision(args, receipt.request_id, authority, capability, signal);
     } catch (error) {
@@ -361,10 +458,17 @@ export function createToolExecutor({ client, waitClient, registration }) {
         continue;
       }
       const { status } = sent.response;
-      const terminal =
-        status === 200 ? requestView(sent.response.body, args.request_handle, requestId) : null;
-      if (terminal !== null && terminal.resolution !== 'pending') return complete(terminal, false);
-      if (status === 200) return abandoned();
+      // This poll is a result only as the complete terminal representation bound to the
+      // originating handle and committed request. A pending or invented 200, and every
+      // other success status, is unusable rather than a generic object result.
+      if (status === 200) {
+        const terminal = requestView(sent.response.body, args.request_handle, requestId);
+        if (terminal !== null && terminal.resolution !== 'pending') {
+          return complete(terminal, false);
+        }
+        return unusable();
+      }
+      if (status >= 200 && status < 300) return unusable();
       // A recognized conflict or failure ends this invocation: no re-creation, no
       // reconnected or transferred waiter.
       return outcomeOf(sent.response);
