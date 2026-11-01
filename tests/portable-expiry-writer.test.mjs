@@ -6,6 +6,9 @@ import { resolve, join } from 'node:path';
 import { Journal } from '../src/journal/journal.js';
 import { createPortableBroker } from '../src/broker/portable.js';
 import { sha256Hex, DECISION_ID_PATTERN } from '../src/util/values.js';
+import { createPortableServer } from '../src/broker/portable-server.js';
+import { createServer, request } from 'node:http';
+import { freePort } from './support/startup-guards.mjs';
 
 const id = (p, n) => p + n.toString(16).padStart(32, '0');
 const cap = n => 'cap_' + n.toString(16).padStart(64, '0');
@@ -65,7 +68,7 @@ async function fixture(records, work, options = {}) {
     } };
     const generateDecisionId = () => { generated++; return options.generate ? options.generate(generated) : id('dec_', generated); };
     broker = createPortableBroker({ journal: delegate, owners: options.owners ?? [{ owner_id: 'a', label: 'A' }],
-      port: 43189, clock: () => { calls++; return h.now; },
+      port: options.port ?? 43189, clock: () => { calls++; return h.now; },
       ...(options.defaultGenerator ? {} : { generateDecisionId }) });
     const before = calls; await broker.recover(); assert.equal(calls, before);
     await work(h);
@@ -123,7 +126,7 @@ test('BETA-READ: denied authority before clock or writes; authorized target only
     const before = h.broker.snapshot(), calls = h.calls, bytes = await readFile(h.path), sequence = h.journal.sequence;
     for (const input of [undefined, {}, { ...auth(1), ownerId: 'b' }, { ...auth(1), capability: cap(2) },
       { ...auth(1), capability: [cap(1)] }, { ...auth(1), requestId: id('req_', 9) },
-      { ...auth(1), requestId: undefined }, { ...auth(1), requestId: [id('req_', 1)] },
+      { ownerId: 'a', capability: cap(1) }, { ...auth(1), requestId: undefined }, { ...auth(1), requestId: [id('req_', 1)] },
       { ...auth(1), capability: undefined }, { ...auth(1), capability: 'cap_bad' }]) {
       const read = h.broker.readRequest(input); assert.equal(typeof read?.then, 'function'); assert.equal(await read, null);
       assert.deepEqual(h.broker.snapshot(), before); assert.equal(h.calls, calls);
@@ -174,6 +177,14 @@ test('BETA-ORDER: append admission then actual sync gate; queued status samples 
     try {
       await bounded(admission.promise); assert.deepEqual(await readFile(h.path), bytes);
       assert.equal(h.journal.sequence, sequence); assert.deepEqual(h.broker.snapshot(), before); assert.equal(settled, false);
+      const callsBeforeDenial = h.calls, idsBeforeDenial = h.generated;
+      for (const input of [{ ownerId: 'a', capability: cap(1) }, { ...auth(1), requestId: undefined },
+        { ...auth(1), ownerId: 'b' }, { ...auth(1), capability: cap(2) }]) {
+        assert.equal(await bounded(Promise.resolve().then(() => h.broker.readRequest(input))), null,
+          'denial must settle while authorized append is held, before queue admission');
+      }
+      assert.equal(h.calls, callsBeforeDenial); assert.equal(h.generated, idsBeforeDenial);
+      assert.equal(appends, 1); assert.deepEqual(h.broker.snapshot(), before);
       status = Promise.resolve().then(() => h.broker.status()); status.then(() => { statusSettled = true; }, () => {});
       const calls = h.calls; await new Promise(r => setImmediate(r)); assert.equal(h.calls, calls);
       admit.resolve(); await bounded(syncing.promise);
@@ -288,3 +299,61 @@ test('BETA-HTTP-SOURCE: existing control consumer must await status (structural 
   const source = await readFile(new URL('../src/broker/portable-server.js', import.meta.url), 'utf8');
   assert.ok(/send\(response, 200, await broker\.status\(\)\)/.test(source), 'existing HTTP consumer awaits expiry-aware status');
 });
+test('BETA-HTTP: production loopback status, precedence/no denied expiry, durable success or redacted refusal',
+  { timeout: 20000 }, async t => {
+    for (const mode of ['empty-calibration', 'expiry', 'storage-refusal']) await t.test(mode,
+      async () => { const port = await bounded(freePort());
+      await fixture(history(mode === 'empty-calibration' ? 0 : 1), async h => {
+        const control = 'c'.repeat(64), owner = 'd'.repeat(64), logs = [];
+        const server = createPortableServer({ broker: h.broker, port,
+          credentials: { control, owners: new Map([['a', owner]]) }, logger: line => logs.push(line) });
+        const get = (headers = {}) => new Promise((done, reject) => {
+          const client = request({ host: '127.0.0.1', port, path: '/v1/status', agent: false, headers,
+            signal: AbortSignal.timeout(1500) }, response => {
+            const chunks = []; response.on('data', b => chunks.push(b)); response.on('error', reject);
+            response.on('end', () => { try { done({ status: response.statusCode, headers: response.headers,
+              body: JSON.parse(Buffer.concat(chunks).toString()) }); } catch (error) { reject(error); } });
+          }); client.on('error', reject); client.end();
+        });
+        const before = h.broker.snapshot(), calls = h.calls, bytes = await readFile(h.path), sequence = h.journal.sequence;
+        let appends = 0; h.hook = async () => { appends++; }; // Armed before any request.
+        const denial = async (headers, status, code) => {
+          const r = await get(headers); assert.equal(r.status, status); assert.equal(r.body.error.code, code);
+          assert.equal(r.headers['access-control-allow-origin'], undefined);
+          assert.equal(h.calls, calls); assert.equal(appends, 0); assert.equal(h.generated, 0);
+          assert.equal(h.journal.sequence, sequence); assert.deepEqual(h.broker.snapshot(), before);
+          assert.deepEqual(await readFile(h.path), bytes);
+        };
+        try {
+          await bounded(server.listen());
+          await denial({ origin: 'https://example.invalid' }, 403, 'FORBIDDEN');
+          await denial({}, 503, 'BROKER_NOT_READY');
+          await denial({ authorization: `Bearer ${owner}` }, 503, 'BROKER_NOT_READY'); server.markReady();
+          await denial({ origin: 'https://example.invalid', authorization: `Bearer ${control}` }, 403, 'FORBIDDEN');
+          for (const authorization of ['', 'Bearer invalid']) await denial({ authorization }, 401, 'AUTH_REQUIRED');
+          await denial({ authorization: `Bearer ${owner}` }, 403, 'FORBIDDEN');
+          if (mode === 'storage-refusal') await h.journal.close();
+          const r = await get({ authorization: `Bearer ${control}` });
+          if (mode === 'storage-refusal') {
+            assert.equal(r.status, 500); assert.deepEqual(r.body, { schema_version: 1, error: {
+              code: 'STORAGE_FAILURE', message: 'the broker could not complete the request', retryable: false } });
+            assert.deepEqual(h.broker.snapshot(), before); assert.deepEqual(await readFile(h.path), bytes);
+          } else {
+            assert.equal(r.status, 200); const requests = before.requests.map(v => ({ ...v, resolution: 'expired',
+              resolved_at: due, decision_id: id('dec_', 1), delivery_state: 'unavailable' }));
+            assert.deepEqual(r.body, { schema_version: 1, broker: { pid: process.pid, port, started_at: due }, requests });
+            assert.deepEqual(await ledger(h), mode === 'expiry' ? [closure(1, 1)] : []);
+            r.body.requests.length = 0; assert.deepEqual(h.broker.snapshot().requests, requests);
+            assert.deepEqual(await h.reopen(), requests);
+          }
+          for (const secret of [control, owner, cap(1), sha256Hex(cap(1)), h.path])
+            assert.equal(JSON.stringify([r, logs]).includes(secret), false);
+        } finally {
+          await bounded(server.close()); const probe = createServer();
+          try { await bounded(new Promise((done, reject) => {
+            probe.once('error', reject); probe.listen(port, '127.0.0.1', done);
+          })); } finally { await bounded(new Promise(done => probe.close(done))); }
+          assert.equal(probe.listening, false, 'owned listener/socket namespace released');
+        }
+      }, { port }); });
+  });
