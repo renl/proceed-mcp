@@ -82,6 +82,37 @@ async function rejected(records) {
   });
 }
 
+test('AB-B1: create-only recovery checkpoint; not full Alpha-B acceptance', { timeout: 30000 }, async () => {
+  for (const now of ['2026-11-01T00:02:30Z', '2040-01-01T00:00:00Z'])
+    await fixture(history(), async ({ broker, journal, path }) => {
+      await broker.recover(); const before = broker.snapshot(), pairing = broker.pairing(), authority = broker.authorize(auth);
+      assert.deepEqual(before.requests, [view()]); assert.deepEqual(pairing, identity); assert.ok(authority);
+      const copy = broker.snapshot(), original = await readFile(path), seq = journal.sequence;
+      copy.requests[0].event_capability.reason = 'changed'; copy.prepared[0].session_label = 'changed'; assert.deepEqual(broker.snapshot(), before);
+      assert.throws(() => broker.status(), { exitCode: 3, code: 'PREREQUISITE_UNAVAILABLE',
+        message: 'request-bearing status requires the serialized expiry checkpoint' });
+      assert.deepEqual(broker.snapshot(), before); assert.deepEqual(await readFile(path), original); assert.equal(journal.sequence, seq);
+      await journal.append([reserve(2)]); await journal.append([create()]);
+      const bytes = await readFile(path), sequence = journal.sequence;
+      await assert.rejects(broker.recover(), invalid); assert.deepEqual(broker.snapshot(), before);
+      assert.deepEqual(broker.pairing(), pairing); assert.deepEqual(broker.authorize(auth), authority);
+      assert.deepEqual(await readFile(path), bytes); assert.equal(journal.sequence, sequence);
+    }, now);
+  const c = create({ action: '😀'.repeat(1000), context: '😀'.repeat(830) + 'x', expires_at: '2026-11-01T00:03:00.000Z' });
+  assert.equal(measurePortablePresentation(view(c)).worst.length, 4096); await accepted(history(c), [view(c)]);
+  for (const records of [history(create({ request_handle: [id('hdl_', 1)] })), history(create({ extra: true })),
+    history(create({ pairing_snapshot: { ...identity, chat_id: '71' } })), history(create({ expires_at: '2026-11-01T00:03:00.000000001Z' })),
+    history(create({ ...c, context: '😀'.repeat(831) })), [[challenge()], [consume(), set()], [reserve(), create()]],
+    [[reserve(), challenge()], [consume(), set(), create()]], history(create(), [[create()]])]) {
+    await accepted(history(), [view()]); // Create-only companion: rejected() requires expiry and cannot discriminate B1.
+    await fixture(records, async ({ broker, journal, path }) => {
+      const bytes = await readFile(path), sequence = journal.sequence; await assert.rejects(broker.recover(), invalid);
+      assert.deepEqual(broker.snapshot(), { prepared: [], requests: [] }); assert.equal(broker.pairing(), null); assert.equal(broker.authorize(auth), null);
+      await assert.rejects(broker.reserveHandle({ ownerId: owner }), { exitCode: 4 });
+      assert.deepEqual(await readFile(path), bytes); assert.equal(journal.sequence, sequence);
+    });
+  }
+});
 test('AB-CALIBRATE: normal journal2 vocabulary roundtrip; no product acceptance', { timeout: 10000 },
   () => fixture(history(), async ({ journal }) => {
     assert.deepEqual((await journal.recover()).transactions.map(t => t.mutations), history());
