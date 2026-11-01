@@ -244,7 +244,7 @@ test('CANCEL-MCP: real created pending request resolves through original cancel 
   const bytes = await h.journal(); toolError(await a.call('acknowledge_approval', { ...args(p), decision_id: decision(999) }), 'DECISION_MISMATCH');
   toolError(await a.call('request_approval', { request_handle: p.request_handle, request_capability: p.request_capability,
     client_request_id: 'same', action: 'Question?', context: '' }), 'ENHANCEMENT_UNAVAILABLE');
-  for (const [suffix, status] of [['wait', 404], ['returned', 401], ['acknowledge', 400]]) assert.equal((await http(h, p, { suffix })).status, status);
+  for (const [suffix, status] of [['wait', 401], ['returned', 401], ['acknowledge', 400]]) assert.equal((await http(h, p, { suffix })).status, status);
   assert.deepEqual(await h.journal(), bytes); await h.eof(a);
 }));
 test('CANCEL-AUTH: public browser/Bearer/role/body precedence and uniform request denial without mutation', publicOptions, () => fixture(async h => {

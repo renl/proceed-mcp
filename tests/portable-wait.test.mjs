@@ -90,6 +90,10 @@ async function run(work, { wire = false, defaultTurn = false, ready = true } = {
     }, { totalMs: total }); assert.ifError(result.cleanupError); assert.ifError(result.assertionError);
   }, total + 2500, 'aggregate wait setup/assertion/teardown');
 }
+test('WAIT-CAL: actual public creation/cancel/expiry and recovery prerequisites', opts, () => run(async h => {
+  const p = h.ps[0], v = await h.b.cancelRequest(bind(p)); assert.equal(v.resolution, 'cancelled'); assert.equal(v.delivery_state, 'unavailable');
+  h.now += 60000; assert.equal((await h.b.readRequest(bind(h.ps[1]))).resolution, 'expired'); await h.reopen(); assert.deepEqual(await h.b.readRequest(bind(p)), v);
+}, { wire: true }));
 test('WAIT-CORE: no missed wake or queue hold; duplicate, denial, copied terminal and clock-free reentry', opts, () => run(async h => {
   const [p, q, unused] = h.ps, controller = new AbortController(); let cancel;
   h.clockHook = () => { h.clockHook = () => {}; cancel = h.b.cancelRequest(bind(p)); };
@@ -145,3 +149,99 @@ test('WAIT-CORE-TURNOVER: before/at deadline, later closure and core close detac
    assert.deepEqual(await active, { state: 'detached' }); assert.equal(getEventListeners(c.signal, 'abort').length, 0); assert.deepEqual(await h.bytes(), bytes);
    await h.reopen(); assert.deepEqual(await h.b.waitRequest(bind(future)), { state: 'pending' }); assert.deepEqual(await h.bytes(), bytes);
 }));
+test('WAIT-HTTP-ORDER: actual wire validation/auth precedence, denial has no deadline effects', opts, () => run(async h => {
+  const p = h.ps[0], path = `/v1/requests/${p.request_id}/wait`, r = await h.reg(), before = await h.bytes(), samples = h.counts(); h.regNow += 44000; h.now += 60000;
+  for (const [options, status, name] of [[{ token: null, headers: { origin: 'https://browser.invalid' } }, 403, 'FORBIDDEN'], [{ token: null }, 401, 'AUTH_REQUIRED'], [{ token: h.control }, 403, 'FORBIDDEN']]) code(await h.wait(p, r, options).p, status, name);
+  for (const body of ['{', '[]', 'null', ' '.repeat(65536) + '{}']) code(await h.raw(path, body).p, 400, 'INVALID_ARGUMENT');
+  const denial = await h.wait(p, r, {}, { registration_id: 'bad', extra: true }).p; code(denial, 401, 'AUTH_REQUIRED'); assert.equal(denial.body.error.message, 'registration authentication required');
+  for (const body of [{}, { registration_id: null }, { registration_id: [r.registration_id] }]) assert.deepEqual(await h.wait(p, r, {}, body).p, denial);
+  code(await h.wait(p, r, {}, { registration_id: r.registration_id, extra: true }).p, 400, 'INVALID_ARGUMENT');
+  for (const headers of [{ ...h.rh(r) }, { ...h.rh(r), 'X-Proceed-Request-Capability': 'bad' }, { ...cap(h.ps[1]), ...h.rh(r) }]) { const d = await h.wait(p, r, { headers }).p; code(d, 404, 'NOT_FOUND'); assert.equal(d.body.error.message, 'no such request'); }
+  code(await h.wait(h.ps[2], r).p, 404, 'NOT_FOUND'); code(await h.wait(p, r, { token: h.foreign }).p, 401, 'AUTH_REQUIRED');
+  assert.deepEqual(h.counts(), samples); assert.deepEqual(await h.bytes(), before); h.regNow += 1000; assert.notEqual((await h.reg()).registration_id, r.registration_id);
+}, { wire: true }));
+test('WAIT-HTTP-DUPLICATE: conflict is clock-free and nonrenewing, heartbeat/unrelated request progress', opts, () => run(async h => {
+  const p = h.ps[0], r = await h.reg(); h.regNow += 44000; const x = await h.admit(p, r), before = h.counts(), bytes = await h.bytes();
+  code(await h.wait(p, r).p, 409, 'WAIT_ALREADY_ACTIVE'); assert.deepEqual(h.counts(), before); assert.deepEqual(await h.bytes(), bytes);
+  assert.equal((await h.call(`/v1/adapter/${r.registration_id}/heartbeat`, {}, { headers: h.rh(r) })).status, 204);
+  assert.equal((await h.call(`/v1/requests/${h.ps[1].request_id}/cancel`, {}, { headers: cap(h.ps[1]) })).status, 200);
+  assert.equal((await h.call(`/v1/requests/${p.request_id}/cancel`, {}, { headers: cap(p) })).body.delivery_state, 'pending'); assert.equal((await x.p).status, 200);
+}, { wire: true }));
+for (const outcome of ['clock', 'append', 'duplicate', 'abort', 'immediate', 'wake']) test(`WAIT-HTTP-LEASE-${outcome}: only attached settled success renews, fault slots reusable`, opts, () => run(async h => {
+  const p = h.ps[0], r = await h.reg(); h.regNow += 44000; let x;
+  if (outcome === 'clock') { h.clockFault = new Error('synthetic admission clock fault'); code(await h.wait(p, r).p, 500, 'STORAGE_FAILURE'); h.clockFault = null; }
+  else if (outcome === 'immediate') { const v = await h.b.cancelRequest(bind(p)); assert.deepEqual(await h.wait(p, r).p, { status: 200, body: v }); }
+  else {
+    x = await h.admit(p, r);
+     if (outcome === 'duplicate') { code(await h.wait(p, r).p, 409, 'WAIT_ALREADY_ACTIVE'); h.regNow += 1000; code(await x.p, 401, 'AUTH_REQUIRED'); }
+    else if (outcome === 'abort') { const detached = gate(); h.waitSignal.addEventListener('abort', detached.release, { once: true }); x.abort(); await assert.rejects(x.p); await bounded(() => detached.promise, 800, 'abort cleanup'); }
+    else { if (outcome === 'append') h.sync = async () => { throw storageFailure('synthetic wake append failure'); };
+      const closing = h.call(`/v1/requests/${p.request_id}/cancel`, {}, { headers: cap(p) });
+      if (outcome === 'append') { code(await closing, 500, 'STORAGE_FAILURE'); code(await x.p, 500, 'STORAGE_FAILURE'); }
+      else { assert.equal((await closing).status, 200); assert.equal((await x.p).status, 200); }
+    }
+  }
+   if (outcome !== 'duplicate') h.regNow += 1000;
+  if (['immediate', 'wake'].includes(outcome)) { code(await h.call('/v1/adapter'), 409, 'OWNER_IN_USE'); h.regNow += 44000; }
+  const replacement = await h.reg(); code(await h.wait(p, r).p, 401, 'AUTH_REQUIRED');
+  if (outcome !== 'append') { const retry = await h.wait(p, replacement).p; assert.ok([200, 204].includes(retry.status), 'no leaked conflict after prior settlement/fault'); }
+}, { wire: true }));
+for (const loss of ['silent-expiry', 'released-during-sync']) test(`WAIT-HTTP-VALIDITY-${loss}: reachability at mutation selection and settlement, no replacement renewal`, opts, () => run(async h => {
+  const p = h.ps[0], r = await h.reg(), x = await h.admit(p, r);
+  if (loss === 'silent-expiry') h.regNow += 45000; // No registry activity: terminal writer must still reject stale reachability.
+  const g = h.hold(), writing = h.raw(`/v1/requests/${p.request_id}/cancel`, {}, { headers: cap(p) });
+  try { await bounded(() => g.entered.promise, 800, 'validity closure sync');
+    if (loss === 'released-during-sync') assert.equal((await h.call(`/v1/adapter/${r.registration_id}`, {}, { method: 'DELETE', headers: h.rh(r) })).status, 204);
+    const replacement = await h.reg(); g.release.release(); const v = await writing.p; assert.equal(v.status, 200);
+    assert.equal(v.body.delivery_state, loss === 'silent-expiry' ? 'unavailable' : 'pending'); code(await x.p, 401, 'AUTH_REQUIRED');
+    h.regNow += 45000; assert.notEqual((await h.reg()).registration_id, replacement.registration_id);
+    assert.equal(rows(await h.bytes()).filter(m => m.op === 'request.cancel').length, 1, 'loss never rewrites selected ledger');
+  } finally { g.release.release(); }
+}, { wire: true }));
+for (const producer of ['cancel', 'sweep', 'admission']) test(`WAIT-HTTP-WAKE-${producer}: real terminal response follows actual flush, no receipt evidence`, opts, () => run(async h => {
+  const p = h.ps[0], r = await h.reg(); let x;
+  if (producer !== 'admission') x = await h.admit(p, r);
+  if (producer !== 'cancel') h.now += 60000;
+  const g = h.hold(); if (producer === 'admission') x = h.wait(p, r); let done = false; x.p.then(() => { done = true; }, () => {});
+  const writing = producer === 'cancel' ? h.call(`/v1/requests/${p.request_id}/cancel`, {}, { headers: cap(p) }) : producer === 'sweep' ? h.b.sweepExpired() : x.p;
+  try { await bounded(() => g.entered.promise, 800, 'public closure reaches actual sync'); assert.equal(done, false); g.release.release();
+    const v = await x.p; assert.equal(v.status, 200); assert.equal(v.body.resolution, producer === 'cancel' ? 'cancelled' : 'expired'); assert.equal(v.body.delivery_state, 'pending'); await writing;
+    assert.equal(rows(await h.bytes()).some(m => ['request.returned', 'request.acknowledge'].includes(m.op)), false);
+  } finally { g.release.release(); }
+}, { wire: true }));
+test('WAIT-HTTP-DEFAULT: real production 25s pending204, reentry and attached success lease renewal', { timeout: 45000 }, () => run(async h => {
+  const p = h.ps[0], r = await h.reg(); h.regNow += 20000; const started = performance.now(), x = await h.admit(p, r);
+  h.regNow += 20000; const response = await x.p; assert.deepEqual(response, { status: 204, body: null });
+  assert.ok(performance.now() - started >= 24500, 'production turnover is not a shortened private seam'); assert.ok(performance.now() - started < 32000);
+  h.regNow += 5000; code(await h.call('/v1/adapter'), 409, 'OWNER_IN_USE');
+  const terminal = await h.b.cancelRequest(bind(p)); assert.deepEqual(await h.wait(p, r).p, { status: 200, body: terminal });
+}, { wire: true, defaultTurn: true }));
+for (const loss of ['abort', 'release', 'expiry', 'replacement']) test(`WAIT-HTTP-LOSS-${loss}: detach only, no renewal/business closure, reusable slot`, opts, () => run(async h => {
+  const p = h.ps[0], r = await h.reg(), bytes = await h.bytes(), x = await h.admit(p, r);
+  if (loss === 'abort') { const detached = gate(); h.waitSignal.addEventListener('abort', detached.release, { once: true }); x.abort(); await assert.rejects(x.p); await bounded(() => detached.promise, 800, 'actual server disconnect signal'); }
+  else if (loss === 'release') assert.equal((await h.call(`/v1/adapter/${r.registration_id}`, {}, { method: 'DELETE', headers: h.rh(r) })).status, 204);
+  else { h.regNow += 45000; if (loss === 'replacement') await h.reg(); else code(await h.call(`/v1/adapter/${r.registration_id}/heartbeat`, {}, { headers: h.rh(r) }), 401, 'AUTH_REQUIRED'); }
+  if (loss !== 'abort') code(await x.p, 401, 'AUTH_REQUIRED'); assert.deepEqual(await h.bytes(), bytes);
+  if (loss === 'abort') { const v = await h.b.cancelRequest(bind(p)); assert.equal(v.delivery_state, 'unavailable'); }
+  else assert.equal((await h.b.waitRequest(bind(p))).state, 'pending');
+}, { wire: true }));
+test('WAIT-HTTP-SHUTDOWN: detach waits promptly but preserve admitted ordinary sync/result drain', opts, () => run(async h => {
+  const p = h.ps[0], r = await h.reg(), x = await h.admit(p, r), g = h.hold();
+  const ordinary = h.raw('/v1/handles'); await bounded(() => g.entered.promise, 800, 'ordinary writer sync'); let closed = false, ordinaryDone = false;
+  ordinary.p.then(() => { ordinaryDone = true; }); const closing = h.close(); closing.then(() => { closed = true; });
+  try { await bounded(() => assert.rejects(x.p), 800, 'wait transport detached before poll turnover'); assert.equal(closed, false); assert.equal(ordinaryDone, false);
+    g.release.release(); assert.equal((await ordinary.p).status, 201); await closing; assert.equal(h.b.snapshot().requests[0].resolution, 'pending');
+  } finally { g.release.release(); await closing; }
+}, { wire: true, defaultTurn: true }));
+for (const phase of ['queued', 'expiry-sync']) test(`WAIT-HTTP-ABORT-${phase}: real disconnect cannot mutate queued deadline or roll back admitted closure`, opts, () => run(async h => {
+  const p = h.ps[0], r = await h.reg(), g = h.hold(); let ordinary, x;
+  if (phase === 'queued') { ordinary = h.raw('/v1/handles'); await bounded(() => g.entered.promise, 800, 'ordinary sync'); x = await h.enter(p, r); h.now += 60000; }
+  else { h.now += 60000; x = await h.enter(p, r); await bounded(() => g.entered.promise, 800, 'expiry sync'); }
+  const detached = gate(); h.waitSignal.addEventListener('abort', detached.release, { once: true });
+  try { x.abort(); await assert.rejects(x.p); await bounded(() => detached.promise, 800, 'server sees disconnect'); g.release.release(); if (ordinary) assert.equal((await ordinary.p).status, 201);
+    await h.b.readRequest(bind(h.ps[2])); const state = h.b.snapshot().requests[0];
+    assert.equal(state.resolution, phase === 'queued' ? 'pending' : 'expired'); assert.equal(state.delivery_state, phase === 'queued' ? 'not_applicable' : 'pending');
+    const v = await h.wait(p, r).p; assert.equal(v.status, 200); assert.equal(v.body.delivery_state, 'pending');
+    assert.equal(rows(await h.bytes()).filter(m => m.op === 'request.expire' && m.request_id === p.request_id).length, 1);
+  } finally { g.release.release(); }
+}, { wire: true }));

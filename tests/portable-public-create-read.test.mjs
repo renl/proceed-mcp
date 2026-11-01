@@ -105,13 +105,13 @@ test('PUB-MCP: actual get success, lazy registration, cross-principal denial, EO
   for (const [name, args] of [['acknowledge_approval', { ...auth(p), decision_id: `dec_${'1'.repeat(32)}` }]])
     toolError(await replacement.call(name, args), 'DECISION_MISMATCH');
   const registration = h.calls.filter(c => c.path === '/v1/adapter').at(-1).reply;
-  for (const suffix of ['wait', 'returned', 'acknowledge']) {
-    const body = suffix === 'wait' ? { registration_id: registration.registration_id }
-      : suffix === 'returned' ? { registration_id: registration.registration_id, decision_id: `dec_${'1'.repeat(32)}` }
+  // Real pending wait/turnover/abort coverage lives in portable-wait; this client's deadline is shorter than 25s.
+  for (const suffix of ['returned', 'acknowledge']) {
+    const body = suffix === 'returned' ? { registration_id: registration.registration_id, decision_id: `dec_${'1'.repeat(32)}` }
       : suffix === 'acknowledge' ? { decision_id: `dec_${'1'.repeat(32)}` } : {};
     const r = await response(h, `/v1/requests/${p.request_id}/${suffix}`, h.owner,
       { method: 'POST', headers: { ...header(p), 'X-Proceed-Registration': registration.registration_secret }, body: JSON.stringify(body) });
-    assert.equal(r.status, suffix === 'wait' ? 404 : 409, 'pending evidence cannot resolve or expire'); noAuthority(r.body, p, h);
+    assert.equal(r.status, 409, 'pending evidence cannot resolve or expire'); noAuthority(r.body, p, h);
   }
   assert.equal(h.calls.filter(c => c.method === 'POST' && c.path === '/v1/requests').length, 0, 'MCP never creates via unavailable request tool');
   assert.deepEqual(await h.journal(), bytes, 'observation/denials/EOF never record returned or confirmed');
