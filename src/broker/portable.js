@@ -226,13 +226,16 @@ class PortableBroker {
 
   // Authenticates a reservation with its capability. Missing, malformed,
   // foreign or mismatched keys return null without disclosing whether the
-  // handle or request exists.
+  // handle or request exists. A recovered historical reservation keeps its
+  // immutable owner and grants authority only while that principal is still
+  // present in the current configuration; removing it revokes new authority
+  // without rewriting history.
   authorize({ ownerId, capability, requestHandle, requestId } = {}) {
     if (typeof capability !== 'string' || !REQUEST_CAPABILITY_PATTERN.test(capability)) return null;
     const verifier = sha256Hex(capability);
     const record = this.#byVerifier.get(verifier);
     if (record === undefined || !sameVerifier(record.capability_hash, verifier)) return null;
-    if (record.owner_id !== ownerId) return null;
+    if (record.owner_id !== ownerId || !this.#owners.has(record.owner_id)) return null;
     if (requestHandle !== undefined && record.request_handle !== requestHandle) return null;
     if (requestId !== undefined && record.request_id !== requestId) return null;
     return reservationView(record);
