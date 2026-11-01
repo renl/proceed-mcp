@@ -2,6 +2,7 @@
 // PORT-SETUP is enabling acceptance, NOT PORT-A/B or live Telegram/host proof.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readFile, writeFile, readdir, stat } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
@@ -121,27 +122,87 @@ test('PORT-SETUP-SCHEMA: journal format 2; version 1 refusal preserves bytes',
         'journal-specific refusal, never a configuration-schema false positive');
       assert.ok(old.equals(await readFile(journalPath)) && configBytes.equals(await readFile(configPath)),
         'no migration, truncation or reset');
+      // Existing ownership must refuse BEFORE unsupported-journal recovery.
+      assert.equal((await readdir(state)).includes('broker.lock'), false, 'failed startup releases own lock');
+      const lockPath = join(state, 'broker.lock'), lock = Buffer.from('uncertain owner\n');
+      await writeFile(lockPath, lock);
+      const refused = await context.start([process.execPath, '--import', preload.href,
+        resolve('bin/proceed-mcp.js'), 'serve', '--state-dir', state]);
+      await until(() => refused.closed, 'ownership refusal before recovery', context.signal);
+      assert.equal(refused.child.exitCode, 3);
+      assert.ok(lock.equals(await readFile(lockPath)) && old.equals(await readFile(journalPath))
+        && configBytes.equals(await readFile(configPath)), 'foreign ownership/state preserved');
     } finally { await fixture.close(); }
   }));
 
 test('PORT-SETUP-IPC: owner CLI handshake/catalog and control/browser separation',
   { timeout: 65000 }, () => portable(async (h) => {
     // connect() asserts the MCP handshake and all five catalog entries before this body.
+    const status = await (await h.http('/v1/status', h.control)).json();
+    assert.equal(status.schema_version, 1);
+    assert.equal(status.broker.pid, h.broker.pid, 'status describes actual managed broker');
+    const config = JSON.parse(await readFile(join(h.state, 'config.json'), 'utf8'));
+    assert.equal(status.broker.port, config.broker.port, 'no automatic port selection');
+    const env = Object.fromEntries(['PATH', 'SystemRoot', 'WINDIR', 'COMSPEC']
+      .filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
+    const secrets = [h.control, 'offline-synthetic-token'];
+    const error = async (response, expected, code) => {
+      assert.equal(response.status, expected);
+      assert.equal(response.headers.has('access-control-allow-origin'), false);
+      const body = await response.json();
+      assert.ok(body.schema_version === 1 && body.error?.code === code
+        && typeof body.error.message === 'string' && typeof body.error.retryable === 'boolean',
+      'versioned redacted error envelope');
+      assert.ok(secrets.every((secret) => !JSON.stringify(body).includes(secret)), 'no secret in error');
+    };
     const names = await readdir(join(h.state, 'credentials'));
     const ownerFiles = names.filter((name) => name !== 'control.token');
     assert.ok(ownerFiles.length >= 2, 'owner credentials exist');
     for (const name of ownerFiles) {
       const owner = (await readFile(join(h.state, 'credentials', name), 'utf8')).trim();
+      secrets.push(owner);
+      await protectedPaths([join(h.state, 'credentials', name)], env);
       for (const [path, options] of [['/v1/status', {}], ['/v1/pairing', { method: 'POST', body: {} }]]) {
-        assert.equal((await h.http(path, owner, options)).status, 403, 'owner cannot use control routes');
+        await error(await h.http(path, owner, options), 403, 'FORBIDDEN');
       }
     }
-    assert.equal((await h.http('/v1/handles', h.control, { method: 'POST', body: {} })).status,
-      403, 'control cannot substitute for owner authority');
+    await error(await h.http('/v1/handles', h.control, { method: 'POST', body: {} }), 403, 'FORBIDDEN');
     const browser = await h.http('/v1/status', h.control, { headers: { Origin: 'https://example.invalid' } });
     assert.equal(browser.status, 403, 'even authenticated browser Origin forbidden');
     assert.equal(browser.headers.has('access-control-allow-origin'), false);
     assert.equal((await h.http('/v1/status', 'invalid')).status, 401);
+    await error(await h.http('/v1/status', 'invalid'), 401, 'AUTH_REQUIRED');
+    await error(await h.http('/v1/status', '', { headers: { authorization: '' } }), 401, 'AUTH_REQUIRED');
+    await error(await h.http('/v1/status', h.control,
+      { headers: { Origin: 'https://example.invalid' } }), 403, 'FORBIDDEN');
+    const owner = secrets[2];
+    for (const body of [{ session_label: '' }, { owner_id: 'foreign' }]) {
+      await error(await h.http('/v1/handles', owner, { method: 'POST', body }), 400, 'INVALID_ARGUMENT');
+    }
+    const output = [];
+    for (const stream of [h.broker.child.stdout, h.broker.child.stderr]) {
+      stream.on('data', (bytes) => output.push(String(bytes)));
+    }
+    await error(await h.http('/v1/handles', owner,
+      { method: 'POST', body: { session_label: 'x'.repeat(65536) } }), 400, 'INVALID_ARGUMENT');
+    const reserved = await h.http('/v1/handles', owner, { method: 'POST', body: {} });
+    assert.equal(reserved.status, 201, 'real durable owner route, not role-only stub');
+    const handle = await reserved.json();
+    assert.ok(handle.schema_version === 1 && /^hdl_[a-f0-9]{32}$/.test(handle.request_handle)
+      && /^req_[a-f0-9]{32}$/.test(handle.request_id) && /^cap_[a-f0-9]{64}$/.test(handle.request_capability),
+    'contract reservation response');
+    const journal = await readFile(join(h.state, 'journal.log'));
+    const hash = createHash('sha256').update(handle.request_capability).digest('hex');
+    assert.ok(journal.includes(Buffer.from(hash)) && journal.includes(Buffer.from(handle.request_handle))
+      && !journal.includes(Buffer.from(handle.request_capability)), 'persist verifier before HTTP success');
+    await h.restart(); // Graceful own-lock release and actual journal replay; no stale recovery.
+    assert.ok((await readFile(join(h.state, 'journal.log'))).equals(journal), 'replay preserves reservation');
+    assert.ok(!output.join('').includes(handle.request_capability), 'HTTP reservation key absent from logs');
+    await h.cli('status', '--json');
+    const finalStatus = await (await h.http('/v1/status', h.control)).json();
+    assert.deepEqual(finalStatus.requests, [], 'reservation is not an actionable request');
+    assert.ok([...secrets, handle.request_capability].every((secret) =>
+      !JSON.stringify(finalStatus).includes(secret)), 'status never discloses credentials/capability');
     assert.equal(h.fixture.messages.length, 0, 'setup/catalog produce no Telegram question');
   }, { pair: false }));
 
