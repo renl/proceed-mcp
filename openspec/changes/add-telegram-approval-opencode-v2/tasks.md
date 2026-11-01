@@ -1,5 +1,14 @@
 # Tasks
 
+## Alpha-B request replay — preparation / review input (2026-11-01)
+
+- [x] P.ALPHA-B-tests Prepare `tests/portable-request-replay.test.mjs` and [bounded slice / Boundary Verification / decomposition inputs](slices/03a2-alpha-b-request-replay.md) at authoring HEAD `9ca4b3132572fafd633b4ccc30e12fed1ef8309b`; existing A0/Alpha-A prerequisites present. Sole selected production path `src/broker/portable.js`, forecast240–290 gross; exports unchanged, no actual writers/read/sweep/server/CLI changes.
+- [x] P.ALPHA-B-status-binding **ALPHA-STATUS-001 cycle1 resolved for executable binding**: direct corrected design7 read; future/due pending, terminal-only and mixed status refusal, exact exit3/code/message/no clock/append/mutation; reservation-only status unchanged. Correction owns no design edit. Next owner: Architect via coordination for affected boundary/decomposition/test-artifact review, not another contract rewrite absent findings.
+- [ ] P.ALPHA-B-review Approve storage vocabulary/complete-renderer consumption/temporary status binding and decomposition triggers1/4/5 before implementation. Preparation is review-ready only, not implementation-ready or A1a-i acceptance.
+- [ ] P.ALPHA-B-impl Implement bounded strict create/expire replay, whole-history staged installation and nested copied redacted snapshots/status refusal only. Pass full new file plus required source/discriminator review; independent affected verification follows. Beta real expiry/authorized reads/grouped sweeps/flush-reopen/awaited truthful status and A1a-ii actual creation remain mandatory separately.
+- Preparation Windows Node24.22.2: **160 runner entries, 4 PASS / 156 expected RED**, exit1,1850ms, zero cancelled/skipped. Calibration and two empty-state leaves plus parent pass; request-bearing checks stop at unknown `request.create`, including negative valid-companion barriers. No downstream request-bearing decoder/snapshot/refusal/expiry assertion passed. Separate fixture cleanup PASS; static/size finalization in slice. Unaffected A0/Alpha-A evidence reused by original revision/scope, not replayed.
+- Lifecycle unchanged: active retained worktree/branch/change below, test-engineering owner, not cleanup-ready; next action affected review then bounded implementation. Unknown artifacts and dirty owner docs preserved. One eventual OpenSpec PR; no publication/archive/promotion/first-use claim.
+
 ## Alpha-A portable presentation — independently accepted, ENABLING ONLY (2026-11-01)
 
 - [x] P.ALPHA-A-tests Prepare `tests/portable-render.test.mjs` and [exact candidate binding / Boundary Verification / ordered gate](slices/03a2-alpha-a-portable-render.md) against current design4/5/7, authoring HEAD `f84c03b5715cfe13454834050b785cba6975d53d`. Selected sole production path `src/telegram/portable-render.js`, forecast95–120 gross; no broker/transport integration. Candidate exact layout/labels/26-variant maximum are **proposed**, not invented normative product authority.
@@ -139,7 +148,7 @@ Direct proof is real Telegram interaction followed by that exact session's ackno
 | baseline | `main` and fetched `origin/main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba` |
 | owner | Test engineering (lifecycle); implementation engineering (implementation custody) |
 | status | active / retained, not cleanup-ready; U1/U2a/U2b accepted ENABLING ONLY; public lifecycle/fault candidate `0d94855` PASS; waiting incomplete; live/Events BLOCKED |
-| next action | Alpha-A independently PASS at `5f1846f`, enabling only; obtain exact bounded replay/snapshot/status-guard binding and forecast before separate test setup/review. Later beta/creation remain unprepared; A1b follows passing complete A1a. Retain unknown artifacts; no promotion or first-use claim. |
+| next action | Alpha-B expected-RED packet prepared; affected architecture boundary/decomposition/test-artifact review before bounded replay implementation. Beta/creation remain unprepared; A1b follows passing complete A1a. Retain unknown artifacts; no promotion or first-use claim. |
 | cleanup evidence | Initial registry contained only repository root on `chore/project-workflow`; no pre-existing dangling worktree. No removal authorized now. After verified landing return to current `main`, verify registry/directory removal; retain unknown work. |
 
 Root bootstrap originals remain untouched. Worktree copies are the delivery artifacts; do not implement in the root or silently overwrite newer owner edits there. No publication, archive, license selection, or PR operation is authorized by this setup.
