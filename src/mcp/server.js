@@ -3,10 +3,12 @@
 // newline-delimited JSON-RPC: no harness API, password, host version admission or
 // proprietary session metadata. Tool execution forwards to the authenticated
 // loopback broker, so preparation reserves real durable authority, cancellation
-// closes only the authorized pending request, and acknowledgement still reports
-// the broker's denial; the waiting tool is a later authorized unit and still
-// answers ENHANCEMENT_UNAVAILABLE rather than pretending to wait for or deliver a
-// decision. Closing stdin starts cleanup immediately: submitted work that has not
+// closes only the authorized pending request, and acknowledgement records the
+// capability holder's receipt of the matching terminal outcome through the same
+// authority. The waiting tool is a later authorized unit and still answers
+// ENHANCEMENT_UNAVAILABLE rather than pretending to wait for or deliver a
+// decision; no tool result claims the adapter wrote an original waiting
+// response. Closing stdin starts cleanup immediately: submitted work that has not
 // begun never reaches the broker.
 import { createInterface } from 'node:readline';
 import {
@@ -34,7 +36,7 @@ const INSTRUCTIONS = [
   'request_approval returns ENHANCEMENT_UNAVAILABLE in this build: no question is sent and no human outcome is delivered yet.',
   'Call get_approval with the retained request_id and request_capability to observe that exact request: an authorized read returns the committed representation of a pending request, applies expiry first and reports an expired request as expired, and NOT_FOUND covers an unused reservation, an unknown request or denied authority alike.',
   'Call cancel_approval with the retained request_id and request_capability to close only that pending request before its deadline: an authorized cancellation returns the committed cancelled representation, repeating it on an already resolved request returns the same outcome unchanged, expiry wins at the deadline, and NOT_FOUND covers an unused reservation, an unknown request or denied authority alike.',
-  'acknowledge_approval is unavailable at this checkpoint and cannot record receipt yet, so a terminal outcome you have already seen stays unacknowledged until a later build enables it.',
+  'acknowledge_approval records receipt of a terminal decision you already retrieved: call it with the retained request_id, request_capability and that exact decision_id, and it returns the same request marked confirmed.',
   'A received terminal decision_id must be acknowledged with acknowledge_approval and reported to the operator with its request_id and outcome; deduplicate by request_id and decision_id before acting on it.',
   'A rejection forbids the requested action; a response is instructions only and never an approval; pending, expired, cancelled and failed requests grant nothing, so an action that still needs approval requires a new request.',
 ].join('\n');
@@ -51,10 +53,11 @@ const GET_AVAILABLE =
 const CANCELLATION_AVAILABLE =
   'Available in this build for a created request: an authorized cancellation closes only that pending request and returns the committed cancelled representation, while repeating it on an already resolved request returns the same outcome unchanged; an unused reservation or denied authority is NOT_FOUND.';
 
-// Acknowledgement availability belongs to its own later cut, not to waiting, so
-// the interim disclosure states the gap without tying it to that implementation.
-const ACKNOWLEDGEMENT_UNAVAILABLE =
-  'acknowledge_approval is unavailable at this checkpoint and cannot record receipt yet, so no delivery is reported and no outcome is marked returned.';
+// Acknowledgement is a real producer in this build: it records the capability
+// holder's receipt of the matching terminal outcome, and returning that request
+// as confirmed is evidence of acknowledgement, not of an adapter's result write.
+const ACKNOWLEDGEMENT_AVAILABLE =
+  'Available in this build for a request whose capability the caller holds: an authorized acknowledgement records receipt of the matching terminal decision_id and returns the committed representation marked confirmed, a repeat returns that same representation unchanged, a pending request or a different decision_id is DECISION_MISMATCH, and NOT_FOUND covers an unused reservation or denied authority.';
 
 // Design section 3 tool contracts. Argument names, required sets and bounds are
 // the reviewed public interface. Each description states what this build actually
@@ -119,7 +122,7 @@ const TOOLS = [
   },
   {
     name: 'acknowledge_approval',
-    description: `Record that the capability holder received the matching terminal outcome; idempotent, never creating a second decision or a continuation. ${ACKNOWLEDGEMENT_UNAVAILABLE}`,
+    description: `Record that the capability holder received the matching terminal outcome; idempotent, never creating a second decision or a continuation. ${ACKNOWLEDGEMENT_AVAILABLE}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,

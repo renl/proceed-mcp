@@ -8,10 +8,13 @@
 // validated before authority, the credential-derived owner, the path identity and
 // the header capability must name one committed reservation, and every failed
 // binding is the same nondisclosing denial. Cancellation resolves the same
-// authorized request, while acknowledgement still verifies authority only to
-// deny because its producer is not enabled here. Pairing and retry stay honest
-// temporary unavailability (design section 3). Adapter registration is an
-// ephemeral reachability lease and never touches approval state.
+// authorized request. Acknowledgement records capability-holder receipt, and
+// returned records an authenticated adapter's report of its own successful
+// terminal-result write; both are ledger evidence that resolves nothing, and
+// returned additionally requires the live registration it renews only after the
+// whole operation succeeds. Pairing and retry stay honest temporary
+// unavailability (design section 3). Adapter registration is an ephemeral
+// reachability lease and never touches approval state.
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import {
@@ -24,7 +27,7 @@ import {
   notFound,
   unavailable,
 } from '../errors.js';
-import { isPlainObject } from '../util/values.js';
+import { DECISION_ID_PATTERN, isPlainObject } from '../util/values.js';
 import { createRegistrationRegistry } from './registration.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -49,6 +52,11 @@ const CREATION_FIELDS = new Set([
   'context',
   'expires_in_seconds',
 ]);
+// The two evidence routes accept exactly their reviewed caller fields. The
+// decision identity stays a raw string, so a near-miss is a caller error rather
+// than a coerced lookup, and a capability in the body is never admitted.
+const ACKNOWLEDGEMENT_FIELDS = new Set(['decision_id']);
+const RETURNED_FIELDS = new Set(['registration_id', 'decision_id']);
 
 const STORAGE_ENVELOPE = Object.freeze({
   schema_version: 1,
@@ -270,21 +278,68 @@ export function createPortableServer({
     send(response, 200, value);
   };
 
-  // Acknowledgement gains no success path here: the lookup still binds the
-  // credential-derived owner, the exact path request ID and the header capability
-  // together, and an absent route can never produce this denial.
-  const reservedManagement = async (request, response, principal, segments) => {
-    // Malformed input is reported before any lookup, so validation does not
-    // depend on whether the named request exists.
-    await readJsonBody(request);
-    // The result is intentionally not used: these producers are not enabled, so
-    // a valid capability and a wrong one deny identically.
-    void broker.authorize({
+  // An evidence body is exactly the reviewed caller fields; anything else is a
+  // caller error rather than an ignored private permission.
+  const rejectUnlistedFields = (body, fields) => {
+    const unexpected = Object.keys(body).find((key) => !fields.has(key));
+    if (unexpected !== undefined) {
+      throw invalidRequest(`request body must not contain ${unexpected}`);
+    }
+  };
+
+  // The decision identity is the raw documented encoding; a number, an array or
+  // any other near-miss is invalid arguments, never a coerced comparison.
+  const requireDecisionId = (value) => {
+    if (typeof value !== 'string' || !DECISION_ID_PATTERN.test(value)) {
+      throw invalidRequest('decision_id must be dec_ plus 32 lowercase hexadecimal characters');
+    }
+  };
+
+  // Acknowledgement needs no registration: it binds the same credential-derived
+  // owner, path identity and header capability as a read, and an irrelevant
+  // registration header grants no authority here. The body is settled before
+  // that lookup, so malformed input never depends on whether the target exists,
+  // and the broker answers a pending or mismatched decision without sampling
+  // time, expiring, allocating an identity or appending.
+  const acknowledgeApproval = async (request, response, principal, segments) => {
+    const body = await readJsonBody(request);
+    rejectUnlistedFields(body, ACKNOWLEDGEMENT_FIELDS);
+    requireDecisionId(body.decision_id);
+    const value = await broker.acknowledgeRequest({
       ownerId: principal.ownerId,
       capability: requestCapability(request),
       requestId: segments[2],
+      decisionId: body.decision_id,
     });
-    throw notFound(RESERVED_DENIAL);
+    if (value === null) throw notFound(RESERVED_DENIAL);
+    send(response, 200, value);
+  };
+
+  // Returned is the one registration-bound evidence route, so the authenticated
+  // incarnation is admitted before the remaining fields and a rejected
+  // registration keeps its own denial even when those fields are also invalid.
+  // Renewal is the last step and never conditions committed evidence: an expired
+  // or replaced incarnation stays denied instead of reviving, and a false
+  // renewal cannot undo or fail a report whose write already completed.
+  const returnedApproval = async (request, response, principal, segments) => {
+    const body = await readJsonBody(request);
+    const identity = {
+      ownerId: principal.ownerId,
+      registrationId: body.registration_id,
+      secret: registrationSecret(request),
+    };
+    if (!registrations.authenticate(identity)) throw authRequired(REGISTRATION_DENIAL);
+    rejectUnlistedFields(body, RETURNED_FIELDS);
+    requireDecisionId(body.decision_id);
+    const value = await broker.returnedRequest({
+      ownerId: principal.ownerId,
+      capability: requestCapability(request),
+      requestId: segments[2],
+      decisionId: body.decision_id,
+    });
+    if (value === null) throw notFound(RESERVED_DENIAL);
+    registrations.heartbeat(identity);
+    send(response, 200, value);
   };
 
   const route = async (request, response, principal, url) => {
@@ -348,8 +403,8 @@ export function createPortableServer({
       return;
     }
 
-    // The two recognized management shapes on one request path: any other method
-    // or suffix falls through to the unknown-route refusal.
+    // The three recognized management shapes on one request path: any other
+    // method or suffix falls through to the unknown-route refusal.
     if (requestsPath && segments.length === 4 && request.method === 'POST') {
       if (segments[3] === 'cancel') {
         if (requireRole(response, principal, 'owner')) {
@@ -359,7 +414,13 @@ export function createPortableServer({
       }
       if (segments[3] === 'acknowledge') {
         if (requireRole(response, principal, 'owner')) {
-          await reservedManagement(request, response, principal, segments);
+          await acknowledgeApproval(request, response, principal, segments);
+        }
+        return;
+      }
+      if (segments[3] === 'returned') {
+        if (requireRole(response, principal, 'owner')) {
+          await returnedApproval(request, response, principal, segments);
         }
         return;
       }
