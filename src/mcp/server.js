@@ -1,257 +1,139 @@
-// Stdio MCP adapter (design section 3). It keeps no Telegram credential, makes
-// no human decisions and talks only to its own configured origin binding. The
-// requesting session is taken solely from trusted `_meta` metadata.
+// Stdio MCP adapter (design sections 2 and 3). It serves one protected transport
+// principal chosen by the operator and speaks only standard MCP over
+// newline-delimited JSON-RPC: no harness API, password, host version admission or
+// proprietary session metadata. Tool execution needs the broker and is a later
+// authorized unit, so every tools/call answers ENHANCEMENT_UNAVAILABLE instead of
+// pretending to prepare, wait for or deliver a decision.
 import { createInterface } from 'node:readline';
-import { LocalRequestError } from '../http/local-client.js';
-import { CLIENT_REQUEST_ID_PATTERN, REQUEST_ID_PATTERN, scalarLength } from '../util/values.js';
+import {
+  CLIENT_REQUEST_ID_PATTERN,
+  DECISION_ID_PATTERN,
+  REQUEST_CAPABILITY_PATTERN,
+  REQUEST_HANDLE_PATTERN,
+  REQUEST_ID_PATTERN,
+} from '../util/values.js';
 
 export const MCP_PROTOCOL_VERSION = '2025-11-25';
-export const SESSION_META_KEY = 'ai.opencode/sessionID';
 export const SERVER_NAME = 'proceed-mcp';
 export const SERVER_VERSION = '0.0.0';
 
-const INSTRUCTIONS = [
-  'proceed-mcp routes approval requests to the human operator of this machine.',
-  'request_approval durably records one request and returns its receipt promptly; it does not wait for the human.',
-  'Do not perform the requested action while a request is pending. Wait for the decision input that the',
-  'operator sends into this session. A rejection forbids the requested action. A response is instructions only:',
-  'it is not approval, and any action that still needs approval requires a new request.',
-  'After receiving a decision, state its request ID and outcome so the operator can confirm delivery.',
-].join(' ');
+// JSON Schema patterns reuse the format identifiers the broker validates, so the
+// catalog cannot advertise a shape the product would not accept.
+const pattern = (expression) => ({ type: 'string', pattern: expression.source });
 
+const INSTRUCTIONS = [
+  'proceed-mcp asks the paired human operator to approve, reject or respond to one stated action, and returns their decision to the waiting MCP call.',
+  'Call prepare_approval first: it reserves durable request identity and a private request capability, and sends no question to the human.',
+  'Then call request_approval with the returned request_handle and request_capability; that call waits for the human resolution, expiry or cancellation and returns the outcome itself.',
+  'Keep the request capability private and retain it with its request_handle and request_id, because it is the only authority for a later get_approval, cancel_approval or acknowledge_approval call.',
+  'Never echo, print or otherwise expose the request capability in an assistant message or a Telegram message.',
+  'A received terminal decision_id must be acknowledged with acknowledge_approval and reported to the operator with its request_id and outcome; deduplicate by request_id and decision_id before acting on it.',
+  'A rejection forbids the requested action; a response is instructions only and never an approval; pending, expired, cancelled and failed requests grant nothing, so an action that still needs approval requires a new request.',
+  'Tool execution is not implemented in this build: every tools/call returns ENHANCEMENT_UNAVAILABLE, so this catalog advertises the workflow without preparing, waiting for or delivering any decision.',
+].join('\n');
+
+const NOT_EXECUTED = 'This build returns ENHANCEMENT_UNAVAILABLE instead of executing the call.';
+
+// Design section 3 tool contracts. Argument names, required sets and bounds are
+// the reviewed public interface; the effects are the target behavior of the later
+// execution unit, and each description says so rather than implying it exists.
 const TOOLS = [
   {
-    name: 'request_approval',
-    description:
-      'Durably create one approval request for this session and return its receipt immediately. Does not wait for the human.',
+    name: 'prepare_approval',
+    description: `Reserve durable request identity and a private request capability for one later approval; no Telegram question is sent. ${NOT_EXECUTED}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      required: ['client_request_id', 'action'],
+      required: [],
       properties: {
-        client_request_id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,128}$' },
+        session_label: { type: 'string', minLength: 1, maxLength: 128 },
+      },
+    },
+  },
+  {
+    name: 'request_approval',
+    description: `Create or reuse the request of an authorized prepared handle and keep this call waiting for the human resolution, expiry or cancellation; the actual outcome is this call's result. ${NOT_EXECUTED}`,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['request_handle', 'request_capability', 'client_request_id', 'action', 'context'],
+      properties: {
+        request_handle: pattern(REQUEST_HANDLE_PATTERN),
+        request_capability: pattern(REQUEST_CAPABILITY_PATTERN),
+        client_request_id: pattern(CLIENT_REQUEST_ID_PATTERN),
         action: { type: 'string', minLength: 1, maxLength: 1000 },
         context: { type: 'string', maxLength: 1000 },
-        expires_in_seconds: { type: 'integer', minimum: 60, maximum: 86400 },
+        expires_in_seconds: { type: 'integer', minimum: 60, maximum: 86400, default: 3600 },
       },
     },
   },
   {
     name: 'get_approval',
-    description:
-      'Read this session own request, applying expiry first. Has no delivery side effect.',
+    description: `Read only the capability-authorized request, applying expiry before the read; no delivery side effect. ${NOT_EXECUTED}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      required: ['request_id'],
-      properties: { request_id: { type: 'string', pattern: '^req_[a-f0-9]{32}$' } },
+      required: ['request_id', 'request_capability'],
+      properties: {
+        request_id: pattern(REQUEST_ID_PATTERN),
+        request_capability: pattern(REQUEST_CAPABILITY_PATTERN),
+      },
     },
   },
   {
     name: 'cancel_approval',
-    description:
-      'Cancel this session own pending request. An existing terminal outcome is returned unchanged.',
+    description: `Cancel only the capability-authorized pending request; a terminal outcome that already exists is returned unchanged. ${NOT_EXECUTED}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      required: ['request_id'],
-      properties: { request_id: { type: 'string', pattern: '^req_[a-f0-9]{32}$' } },
+      required: ['request_id', 'request_capability'],
+      properties: {
+        request_id: pattern(REQUEST_ID_PATTERN),
+        request_capability: pattern(REQUEST_CAPABILITY_PATTERN),
+      },
+    },
+  },
+  {
+    name: 'acknowledge_approval',
+    description: `Record that the capability holder received the matching terminal outcome; idempotent, never creating a second decision or a continuation. ${NOT_EXECUTED}`,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['request_id', 'request_capability', 'decision_id'],
+      properties: {
+        request_id: pattern(REQUEST_ID_PATTERN),
+        request_capability: pattern(REQUEST_CAPABILITY_PATTERN),
+        decision_id: pattern(DECISION_ID_PATTERN),
+      },
     },
   },
 ];
 
-class ToolError extends Error {
-  constructor(code, message, retryable = false) {
-    super(message);
-    this.name = 'ToolError';
-    this.code = code;
-    this.retryable = retryable;
-  }
-}
+// Tool error envelope (design section 3). Nothing in this build may stand in for
+// a prepared handle, a waiting outcome or a recorded decision, so a known tool
+// reports the missing execution unit and claims no effect.
+const EXECUTION_UNAVAILABLE = Object.freeze({
+  schema_version: 1,
+  error: {
+    code: 'ENHANCEMENT_UNAVAILABLE',
+    message: 'MCP tool execution is not implemented in this build; only catalog discovery runs',
+    retryable: false,
+  },
+});
 
-function errorResult(code, message, retryable = false) {
-  const envelope = { schema_version: 1, error: { code, message, retryable } };
+function unavailableResult() {
   return {
-    content: [{ type: 'text', text: JSON.stringify(envelope) }],
-    structuredContent: envelope,
+    content: [{ type: 'text', text: JSON.stringify(EXECUTION_UNAVAILABLE) }],
+    structuredContent: EXECUTION_UNAVAILABLE,
     isError: true,
   };
 }
 
-function successResult(view) {
-  return {
-    content: [{ type: 'text', text: JSON.stringify(view) }],
-    structuredContent: view,
-    isError: false,
-  };
-}
-
-function validateArguments(name, args) {
-  if (typeof args !== 'object' || args === null || Array.isArray(args)) {
-    throw new ToolError('INVALID_ARGUMENT', 'tool arguments must be an object');
-  }
-  const allowed = {
-    request_approval: ['client_request_id', 'action', 'context', 'expires_in_seconds'],
-    get_approval: ['request_id'],
-    cancel_approval: ['request_id'],
-  }[name];
-  for (const key of Object.keys(args)) {
-    if (!allowed.includes(key))
-      throw new ToolError('INVALID_ARGUMENT', `unexpected argument ${key}`);
-  }
-
-  if (name === 'request_approval') {
-    if (
-      typeof args.client_request_id !== 'string' ||
-      !CLIENT_REQUEST_ID_PATTERN.test(args.client_request_id)
-    ) {
-      throw new ToolError(
-        'INVALID_ARGUMENT',
-        'client_request_id must be 1-128 ASCII letters, digits, "_" or "-"',
-      );
-    }
-    if (
-      typeof args.action !== 'string' ||
-      scalarLength(args.action) < 1 ||
-      scalarLength(args.action) > 1000
-    ) {
-      throw new ToolError('INVALID_ARGUMENT', 'action must be 1-1000 characters');
-    }
-    if (
-      args.context !== undefined &&
-      (typeof args.context !== 'string' || scalarLength(args.context) > 1000)
-    ) {
-      throw new ToolError('INVALID_ARGUMENT', 'context must be at most 1000 characters');
-    }
-    if (
-      args.expires_in_seconds !== undefined &&
-      (!Number.isInteger(args.expires_in_seconds) ||
-        args.expires_in_seconds < 60 ||
-        args.expires_in_seconds > 86400)
-    ) {
-      throw new ToolError(
-        'INVALID_ARGUMENT',
-        'expires_in_seconds must be an integer between 60 and 86400',
-      );
-    }
-    return {
-      client_request_id: args.client_request_id,
-      action: args.action,
-      context: args.context ?? '',
-      ...(args.expires_in_seconds === undefined
-        ? {}
-        : { expires_in_seconds: args.expires_in_seconds }),
-    };
-  }
-
-  if (typeof args.request_id !== 'string' || !REQUEST_ID_PATTERN.test(args.request_id)) {
-    throw new ToolError('NOT_FOUND', 'request not found');
-  }
-  return { request_id: args.request_id };
-}
-
-export function createMcpAdapter({ client, originId }) {
-  const exchange = async (method, path, body) => {
-    try {
-      return await client.request(method, path, body);
-    } catch (error) {
-      if (error instanceof LocalRequestError) {
-        throw new ToolError('ORIGIN_UNAVAILABLE', 'the local broker is not reachable', true);
-      }
-      throw error;
-    }
-  };
-
-  const unwrap = (response) => {
-    if (response.status >= 200 && response.status < 300) return response.body;
-    const code = response.body?.error?.code ?? 'ORIGIN_UNAVAILABLE';
-    const message = response.body?.error?.message ?? 'the broker rejected the request';
-    const retryable = response.body?.error?.retryable === true;
-    throw new ToolError(code, message, retryable);
-  };
-
-  return {
-    async requestApproval(sessionId, args) {
-      const response = await exchange('POST', '/v1/requests', { session_id: sessionId, ...args });
-      const view = unwrap(response);
-      if (view?.origin_id !== originId) {
-        throw new ToolError(
-          'ORIGIN_UNAVAILABLE',
-          'the broker returned another origin binding',
-          false,
-        );
-      }
-      return view;
-    },
-    async getApproval(sessionId, args) {
-      const response = await exchange(
-        'GET',
-        `/v1/requests/${encodeURIComponent(args.request_id)}?session_id=${encodeURIComponent(sessionId)}`,
-      );
-      return unwrap(response);
-    },
-    async cancelApproval(sessionId, args) {
-      const response = await exchange(
-        'POST',
-        `/v1/requests/${encodeURIComponent(args.request_id)}/cancel`,
-        { session_id: sessionId },
-      );
-      return unwrap(response);
-    },
-  };
-}
-
-export async function runMcpServer({ adapter, stdin = process.stdin, stdout = process.stdout }) {
+export async function runMcpServer({ stdin = process.stdin, stdout = process.stdout } = {}) {
   const write = (message) =>
     new Promise((resolve) => {
       stdout.write(`${JSON.stringify(message)}\n`, () => resolve());
     });
-
-  const handleCall = async (message) => {
-    const name = message.params?.name;
-    const args = message.params?.arguments ?? {};
-    if (!TOOLS.some((tool) => tool.name === name)) {
-      throw Object.assign(new Error(`unknown tool ${name}`), { jsonRpcCode: -32601 });
-    }
-    const sessionId = message.params?._meta?.[SESSION_META_KEY];
-    if (typeof sessionId !== 'string' || sessionId === '') {
-      return {
-        jsonrpc: '2.0',
-        id: message.id,
-        result: errorResult('MISSING_SESSION_CONTEXT', 'no trusted session metadata was supplied'),
-      };
-    }
-
-    let validated;
-    try {
-      validated = validateArguments(name, args);
-    } catch (error) {
-      return { jsonrpc: '2.0', id: message.id, result: errorResult(error.code, error.message) };
-    }
-
-    try {
-      const view =
-        name === 'request_approval'
-          ? await adapter.requestApproval(sessionId, validated)
-          : name === 'get_approval'
-            ? await adapter.getApproval(sessionId, validated)
-            : await adapter.cancelApproval(sessionId, validated);
-      return { jsonrpc: '2.0', id: message.id, result: successResult(view) };
-    } catch (error) {
-      if (error instanceof ToolError) {
-        return {
-          jsonrpc: '2.0',
-          id: message.id,
-          result: errorResult(error.code, error.message, error.retryable),
-        };
-      }
-      return {
-        jsonrpc: '2.0',
-        id: message.id,
-        result: errorResult('ORIGIN_UNAVAILABLE', 'the request could not be completed', true),
-      };
-    }
-  };
 
   const handle = async (message) => {
     if (typeof message !== 'object' || message === null || typeof message.method !== 'string') {
@@ -287,15 +169,15 @@ export async function runMcpServer({ adapter, stdin = process.stdin, stdout = pr
       return { jsonrpc: '2.0', id: message.id, result: { tools: TOOLS } };
     }
     if (message.method === 'tools/call') {
-      try {
-        return await handleCall(message);
-      } catch (error) {
+      const name = message.params?.name;
+      if (!TOOLS.some((tool) => tool.name === name)) {
         return {
           jsonrpc: '2.0',
           id: message.id,
-          error: { code: -32601, message: error.message },
+          error: { code: -32601, message: `unknown tool ${String(name)}` },
         };
       }
+      return { jsonrpc: '2.0', id: message.id, result: unavailableResult() };
     }
     if (typeof message.id === 'undefined') return null;
     return { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'method not found' } };

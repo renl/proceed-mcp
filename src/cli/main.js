@@ -4,11 +4,18 @@
 import { TELEGRAM_TOKEN_ENV } from '../config/portable-config.js';
 import { CliError, EXIT_CODE, blockedPrerequisite, invalidArgument } from '../errors.js';
 import { createLocalClient, LocalRequestError } from '../http/local-client.js';
-import { createMcpAdapter, runMcpServer } from '../mcp/server.js';
+import { runMcpServer } from '../mcp/server.js';
 import { startBrokerRuntime } from '../broker/runtime.js';
 import { readLocalCredential } from '../state/credentials.js';
+import { readOwnerCredential } from '../state/owner-credentials.js';
 import { resolveStateDir, statePaths } from '../state/paths.js';
-import { addOrigin, addOwner, initializeState, loadConfiguration } from '../state/store.js';
+import {
+  addOrigin,
+  addOwner,
+  initializeState,
+  loadConfiguration,
+  loadPortableConfiguration,
+} from '../state/store.js';
 import { parseArguments, requireOptions } from './args.js';
 
 const USAGE = [
@@ -19,7 +26,7 @@ const USAGE = [
   '  proceed-mcp owner add <owner_id> --label <label> [--state-dir <directory>]',
   '  proceed-mcp serve [--state-dir <directory>]',
   '  proceed-mcp pair [--state-dir <directory>]',
-  '  proceed-mcp mcp --origin <origin_id> [--state-dir <directory>]',
+  '  proceed-mcp mcp --owner <owner_id> [--state-dir <directory>]',
   '  proceed-mcp status [--request <request_id>] [--json] [--state-dir <directory>]',
   '  proceed-mcp retry <request_id> [--state-dir <directory>]',
   '  proceed-mcp origin add <origin_id> --url <url> --password-env <name> [--state-dir <directory>]',
@@ -91,8 +98,11 @@ async function runInit(argv, { stdout, env }) {
       'Remaining setup - this command verified none of it:',
       '  1. proceed-mcp owner add <owner_id> --label <label>   (with the broker stopped)',
       `  2. Set ${TELEGRAM_TOKEN_ENV} in the broker environment; the Telegram token is never stored in state.`,
-      '  3. Broker startup, pairing and MCP wiring are later checkpoints: "serve", "pair",',
-      '     "status" and "mcp" in this build still read the previous configuration schema',
+      '  3. proceed-mcp mcp --owner <owner_id>   (stdio MCP for that transport principal;',
+      '     this build advertises the tool catalog and answers every tools/call with',
+      '     ENHANCEMENT_UNAVAILABLE, so no approval can be prepared or resolved yet)',
+      '  4. Broker startup, pairing and request delivery are later checkpoints: "serve", "pair",',
+      '     "status" and "retry" in this build still read the previous configuration schema',
       '     and refuse this schema 2 state until their own switch lands.',
       '',
     ].join('\n'),
@@ -229,25 +239,31 @@ async function runPair(argv, { stdout, env }) {
   return EXIT_CODE.OK;
 }
 
+// Design section 2: one stdio MCP server for the operator-selected transport
+// principal. Only schema-2 owner state is read, and only that owner's protected
+// credential; no harness URL, password, host admission or broker port is needed to
+// serve the catalog, and stdout is left to protocol messages alone.
 async function runMcp(argv, { env }) {
-  const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir', 'origin'] });
+  const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir', 'owner'] });
   noPositionals(positionals, 'mcp');
-  requireOptions(options, ['origin']);
+  requireOptions(options, ['owner']);
 
   const paths = commandStatePaths(options, env);
-  const config = await loadConfiguration(paths);
-  const originId = options.get('origin');
-  const binding = config.origins.find((entry) => entry.origin_id === originId);
-  if (binding === undefined) {
-    throw invalidArgument(`origin ${originId} is not configured; run "proceed-mcp origin add"`);
+  const config = await loadPortableConfiguration(paths);
+  const ownerId = options.get('owner');
+  const owner = config.owners.find((entry) => entry.owner_id === ownerId);
+  if (owner === undefined) {
+    throw invalidArgument(
+      `owner ${ownerId} is not configured; run "proceed-mcp owner add ${ownerId} --label <label>"`,
+    );
   }
 
-  const credential = await readLocalCredential(
-    paths.originCredentialFile(originId),
-    `the MCP credential for origin ${originId}`,
-  );
-  const client = createLocalClient({ port: config.broker.port, token: credential });
-  await runMcpServer({ adapter: createMcpAdapter({ client, originId }) });
+  // Fail closed when the principal has no usable authority: a missing or damaged
+  // owner credential is a startup blocker. The later execution unit is the only
+  // consumer of the value, so it is never logged, returned or written anywhere.
+  await readOwnerCredential(paths.ownerCredentialFile(owner.owner_id), owner.owner_id);
+
+  await runMcpServer();
   return EXIT_CODE.OK;
 }
 
