@@ -236,6 +236,47 @@ test('A0-INVALID: exact schemas, encodings and transition matrix', { timeout: 20
   for (const [name, history] of cases) await t.test(name, () => fixture(h => rejected(h, history)));
 });
 
+test('PAIRING-HASH-TYPE-001: JSON hash types fail before coercion or challenge lookup',
+  { timeout: 20000 }, async t => {
+    for (const installed of [false, true]) for (const op of ['challenge', 'consume']) {
+      const target = installed ? other : hash;
+      for (const value of [[target], [[target]], null, false, 1, {}, [],
+        { toString: null, valueOf: null }]) {
+        await t.test(`${installed ? 'installed' : 'fresh'}-${op}-${JSON.stringify(value)}`,
+          () => fixture(async h => {
+            await h.seed(installed ? valid() : []);
+            const { broker, journal } = await h.open();
+            if (installed) await broker.recover();
+            const r = installed ? await broker.reserveHandle({ ownerId: 'a' }) : null;
+            const auth = r && { ownerId: 'a', capability: r.request_capability, requestId: r.request_id };
+            const before = broker.snapshot(), paired = broker.pairing();
+            const authorized = auth && broker.authorize(auth);
+            // Valid times/fields; consume has a fresh string-keyed companion challenge.
+            if (op === 'consume') await journal.append([challenge({ hash: target })]);
+            await journal.append(op === 'challenge' ? [challenge({ hash: value })]
+              : [consume({ hash: value }), ...(installed ? [] : [set()])]);
+            const bytes = await readFile(h.path), sequence = journal.sequence;
+            let failure;
+            try { await broker.recover(); } catch (error) { failure = error; }
+            assert.deepEqual(await readFile(h.path), bytes);
+            assert.equal(journal.sequence, sequence);
+            assert.deepEqual(broker.pairing(), paired);
+            assert.deepEqual(broker.snapshot(), before);
+            if (auth) assert.deepEqual(broker.authorize(auth), authorized);
+            if (!installed && failure) {
+              await assert.rejects(broker.reserveHandle({ ownerId: 'a' }), { exitCode: 4 });
+              assert.deepEqual(await readFile(h.path), bytes);
+            }
+            assert.ok(failure && invalid(failure), `expected JOURNAL_STATE_INVALID/4; got ${failure ? `${failure.name}: ${failure.message}` : 'successful recovery'}`);
+            // Source-backed discriminator, not a new public diagnostic contract:
+            // decoded array identities cannot match string map keys; unknown-hash refusal is masked.
+            assert.equal(failure.message.endsWith(`pairing.challenge${op === 'consume' ? '.consume' : ''} has a malformed code hash`), true,
+              'reject at the hash schema guard, not unknown-challenge lookup');
+          }));
+      }
+    }
+  });
+
 test('A0-ISOLATION: failed whole-history replay retains installed pairing AND reservations',
   { timeout: 10000 }, async t => {
     for (const tail of [[{ op: 'pairing.reset' }], [challenge({ hash: 'bad' })],
