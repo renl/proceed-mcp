@@ -39,19 +39,20 @@ async function setup(work) {
     const env = Object.fromEntries(['PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC']
       .filter(key => process.env[key]).map(key => [key, process.env[key]]));
     Object.assign(env, { TEMP: context.directory, TMP: context.directory, TMPDIR: context.directory });
-    const invoke = (...args) => {
-      const child = spawnSync(process.execPath, [resolve('bin/proceed-mcp.js'), ...args,
+    const run = (nodeArgs, args) => {
+      const child = spawnSync(process.execPath, [...nodeArgs, resolve('bin/proceed-mcp.js'), ...args,
         '--state-dir', state], { cwd: context.directory, env, timeout: 10000,
           maxBuffer: 65536, windowsHide: true, encoding: 'utf8' });
       assert.ifError(child.error);
       assert.equal(child.signal, null, 'finite public command');
       return { code: child.status, output: `${child.stdout}${child.stderr}` };
     };
+    const invoke = (...args) => run([], args);
     assert.equal(invoke('init').code, 0);
     const configFile = join(state, 'config.json');
     const config = JSON.parse(await readFile(configFile, 'utf8'));
     assert.equal(config.schema_version, 2, 'portable CLI consumer switched');
-    await work({ state, configFile, config, invoke, env });
+    await work({ state, configFile, config, invoke, run, env });
   }, { totalMs: 85000 });
   assert.ifError(result.cleanupError);
   assert.ifError(result.assertionError);
@@ -101,18 +102,72 @@ test('PORT-CLI-I: schema-2 init, bound owner files, protection and immutable fai
       firstFile, secondFile], env);
   }));
 
-test('PORT-CLI-I: live ownership record blocks owner add without modifying stopped-state inputs',
-  { timeout: 95000 }, () => setup(async ({ state, configFile, invoke }) => {
-    // Known live PID only. This fixture does not claim a broker was started or a lock acquired.
-    const lock = join(state, 'broker.lock');
-    const lockBytes = Buffer.from(JSON.stringify({ pid: process.pid }));
-    await writeFile(lock, lockBytes);
-    const configBytes = await readFile(configFile);
-    const journal = await readFile(join(state, 'journal.log'));
-    const names = await readdir(join(state, 'credentials'));
-    assert.equal(invoke('owner', 'add', 'blocked', '--label', 'Blocked').code, 3);
-    assert.ok(lockBytes.equals(await readFile(lock)), 'ownership record unchanged');
-    assert.ok(configBytes.equals(await readFile(configFile)), 'config unchanged');
-    assert.ok(journal.equals(await readFile(join(state, 'journal.log'))), 'journal unchanged');
-    assert.deepEqual(await readdir(join(state, 'credentials')), names, 'no credential created');
-  }));
+// Test-owned OS-boundary fault only; no private application import/API. Cover
+// promise/callback/sync spellings without prescribing which stat/access is used.
+function faultPreload(lock, operations, code) {
+  const source = `import fs from 'node:fs';
+    import promises from 'node:fs/promises';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { fileURLToPath } from 'node:url';
+    import { resolve } from 'node:path';
+    const target = ${JSON.stringify(lock)}, ops = ${JSON.stringify(operations)};
+    function fault(path) {
+      const value = path instanceof URL ? fileURLToPath(path) : String(path);
+      if (resolve(value) !== target) return;
+      process.stderr.write('PORT-CLI-I-INJECTED\\n');
+      return Object.assign(new Error('test-owned filesystem refusal'), { code: ${JSON.stringify(code)} });
+    }
+    for (const name of ops) {
+      const asyncOriginal = promises[name], original = fs[name], syncOriginal = fs[name + 'Sync'];
+      promises[name] = async function(path, ...args) {
+        const error = fault(path); if (error) throw error;
+        return asyncOriginal.call(this, path, ...args);
+      };
+      fs[name] = function(path, ...args) {
+        const error = fault(path);
+        if (error) { const cb = args.at(-1); if (typeof cb === 'function') { cb(error); return; } throw error; }
+        return original.call(this, path, ...args);
+      };
+      fs[name + 'Sync'] = function(path, ...args) {
+        const error = fault(path); if (error) throw error;
+        return syncOriginal.call(this, path, ...args);
+      };
+    }
+    syncBuiltinESMExports();`;
+  return ['--import', `data:text/javascript,${encodeURIComponent(source)}`];
+}
+
+async function snapshot(state) {
+  const files = ['config.json', 'journal.log'];
+  for (const name of (await readdir(join(state, 'credentials'))).sort()) files.push(`credentials/${name}`);
+  try { await stat(join(state, 'broker.lock')); files.push('broker.lock'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return Promise.all(files.map(async file => [file, await readFile(join(state, file))]));
+}
+
+for (const [label, contents, operations, errorCode, expected] of [
+  ['live', JSON.stringify({ pid: process.pid }), [], '', 3],
+  ['stale', JSON.stringify({ pid: 2147483647 }), [], '', 3],
+  ['malformed', '{not-json', [], '', 3],
+  ['empty', '', [], '', 3],
+  ['unreadable', '{}', ['readFile', 'open'], 'EACCES', 3],
+  ['stat-access-denied', null, ['stat', 'lstat', 'access'], 'EACCES', 4],
+  ['stat-storage-failure', '{}', ['stat', 'lstat', 'access'], 'EIO', 4],
+]) {
+  test(`PORT-CLI-I: ${label} ownership prerequisite refuses immutable owner add`,
+    { timeout: 95000 }, () => setup(async ({ state, invoke, run }) => {
+      // Synthetic records only: no broker, PID probe, stale stealing or recovery.
+      assert.equal(invoke('owner', 'add', 'existing', '--label', 'Existing').code, 0);
+      const lock = join(state, 'broker.lock');
+      if (contents !== null) await writeFile(lock, contents);
+      const before = await snapshot(state);
+      const args = ['owner', 'add', 'blocked', '--label', 'Blocked'];
+      const refused = operations.length ? run(faultPreload(lock, operations, errorCode), args) : invoke(...args);
+      assert.equal(refused.code, expected, 'design 2 ownership refusal exit');
+      // An unreadable record can be refused by existence alone, without reading.
+      if (expected === 4) assert.ok(refused.output.includes('PORT-CLI-I-INJECTED'), 'fault actually reached');
+      assert.deepEqual(await snapshot(state), before, 'all state/credential/record bytes and inventory unchanged');
+      const tokens = before.filter(([file]) => file.startsWith('credentials/'));
+      assert.ok(!tokens.some(([, bytes]) => refused.output.includes(bytes.toString().trim())), 'no secret output');
+    }));
+}
