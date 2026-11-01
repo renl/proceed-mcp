@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { managed, bounded } from './support/managed-spike.mjs';
-import { rpcPeer } from './support/spike-rpc.mjs';
+import { catalogPeer, initializeResult, allTools, workflowInstructions } from './support/catalog-consumer.mjs';
 
 async function protection(paths, env) {
   if (process.platform !== 'win32') {
@@ -46,6 +46,7 @@ test('PORT-CATALOG: schema-2 owner CLI exposes exactly five standard MCP tools w
           { cwd: context.directory, env, timeout: 10000, maxBuffer: 65536,
             windowsHide: true, encoding: 'utf8' });
         assert.ifError(child.error);
+        assert.ok(Buffer.byteLength(child.stdout + child.stderr) <= 65536, 'bounded CLI output');
         logs.push(`${child.stdout}${child.stderr}`);
         assert.equal(child.status, 0, `public ${args[0]} succeeds`);
       };
@@ -58,6 +59,9 @@ test('PORT-CATALOG: schema-2 owner CLI exposes exactly five standard MCP tools w
       const secrets = await Promise.all(files.map(async file => (await readFile(file, 'utf8')).trim()));
       assert.ok(secrets.every(value => /^[a-f0-9]{64}$/.test(value)), 'fixture credential shape');
       assert.equal(new Set(secrets).size, 2, 'independent control/owner credentials');
+      assert.ok(secrets.every(secret => !logs.some(text => text.includes(secret))),
+        'no owner/control credential in setup output');
+      logs.length = 0;
       await protection([state, configPath, credentialDir, ...files], env);
       const child = spawn(process.execPath, [executable, 'mcp', '--owner', 'shared', '--state-dir', state],
         { cwd: context.directory, env, detached: process.platform !== 'win32', windowsHide: true,
@@ -65,24 +69,13 @@ test('PORT-CATALOG: schema-2 owner CLI exposes exactly five standard MCP tools w
       const resource = { child, pid: child.pid, knownPids: [] };
       context.resources.push(resource);
       child.on('close', () => { resource.closed = true; });
-      let bytes = 0;
-      for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => {
-        bytes += chunk.length;
-        if (bytes <= 65536) logs.push(String(chunk));
-      });
-      const peer = rpcPeer(child);
+      const peer = catalogPeer(child, { secrets });
       try {
         const init = await peer.call('initialize', { protocolVersion: '2025-11-25', capabilities: {},
           clientInfo: { name: 'generic-catalog-test', version: '0' } }, { ms: 8000 }).outcome;
-        assert.equal(init.kind, 'response', 'owner CLI must reach initialize without broker');
-        assert.equal(init.frame.jsonrpc, '2.0');
-        assert.equal(init.frame.result?.protocolVersion, '2025-11-25');
-        assert.ok(init.frame.result?.capabilities?.tools, 'tools capability advertised');
+        const initialized = initializeResult(init);
         child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
-        const listing = await peer.call('tools/list', {}, { ms: 8000 }).outcome;
-        assert.equal(listing.kind, 'response');
-        assert.equal(listing.frame.jsonrpc, '2.0');
-        const tools = listing.frame.result?.tools;
+        const tools = await allTools(peer);
         const expected = {
           prepare_approval: [[], ['session_label']],
           request_approval: [['request_handle', 'request_capability', 'client_request_id', 'action', 'context'],
@@ -94,6 +87,7 @@ test('PORT-CATALOG: schema-2 owner CLI exposes exactly five standard MCP tools w
         };
         assert.ok(Array.isArray(tools), 'catalog response');
         assert.deepEqual(tools.map(tool => tool.name).sort(), Object.keys(expected).sort());
+        workflowInstructions(initialized, tools);
         for (const { name, inputSchema: schema } of tools) {
           assert.equal(schema.type, 'object');
           assert.equal(schema.additionalProperties, false);
@@ -115,17 +109,13 @@ test('PORT-CATALOG: schema-2 owner CLI exposes exactly five standard MCP tools w
         assert.equal(request.expires_in_seconds.minimum, 60);
         assert.equal(request.expires_in_seconds.maximum, 86400);
         assert.equal(request.expires_in_seconds.default, 3600);
-        assert.ok(bytes <= 65536, 'bounded protocol output');
-        assert.equal(peer.unmatched.length, 0, 'no unsolicited or non-protocol stdout');
+      } finally {
         child.stdin.end();
         await bounded(() => new Promise(done => resource.closed ? done() : child.once('close', done)),
           5000, 'adapter must close after EOF');
-        assert.equal(child.exitCode, 0, 'clean catalog adapter exit');
-      } finally {
-        peer.close();
-        assert.ok(secrets.every(secret => !logs.some(text => text.includes(secret))),
-          'no owner/control credential in CLI, MCP or diagnostics');
+        peer.assertComplete(); // Includes shutdown bytes and malformed stdout with no pending RPC.
       }
+      assert.equal(child.exitCode, 0, 'clean catalog adapter exit');
     }, { totalMs: 55000 });
     assert.ifError(result.cleanupError);
     assert.ifError(result.assertionError);
