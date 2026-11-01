@@ -7,8 +7,24 @@ export const CLIENT_REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 export const CALLBACK_TOKEN_PATTERN = /^[a-f0-9]{32}$/;
 export const PAIRING_CODE_PATTERN = /^[a-f0-9]{32}$/;
 
+// Request authority (design section 3): a handle is stable correlation, the
+// capability is the private key and a decision ID names one resolution.
+export const REQUEST_HANDLE_PATTERN = /^hdl_[a-f0-9]{32}$/;
+export const REQUEST_CAPABILITY_PATTERN = /^cap_[a-f0-9]{64}$/;
+export const DECISION_ID_PATTERN = /^dec_[a-f0-9]{32}$/;
+
 export function randomRequestId() {
   return `req_${randomBytes(16).toString('hex')}`;
+}
+
+// 128-bit handle and 256-bit capability, allocated independently on every
+// preparation; only the capability's SHA-256 verifier is ever persisted.
+export function randomRequestHandle() {
+  return `hdl_${randomBytes(16).toString('hex')}`;
+}
+
+export function randomRequestCapability() {
+  return `cap_${randomBytes(32).toString('hex')}`;
 }
 
 export function randomCallbackToken() {
