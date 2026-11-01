@@ -14,12 +14,21 @@
 // alone, so no transport owner, token or recovery clock can grant, remove or
 // invalidate it, and the private getter below never exposes challenges.
 //
+// Request replay decodes creation and expiry from committed history: creation
+// binds to an already committed reservation and pairing, expiry closes one
+// pending request, and the whole history is staged before anything is installed.
+// Observations are fresh copies of the committed representation. The incomplete
+// alpha checkpoint refuses request-bearing status instead of presenting it.
+//
 // The journal stays caller-owned. This module never opens, replaces or closes
 // it, and no reservation result becomes visible before its serialized append
 // has completed the journal's own file flush.
 import { timingSafeEqual } from 'node:crypto';
-import { invalidArgument, storageFailure } from '../errors.js';
+import { blockedPrerequisite, invalidArgument, storageFailure } from '../errors.js';
+import { MAX_TELEGRAM_TEXT, measurePortablePresentation } from '../telegram/portable-render.js';
 import {
+  CLIENT_REQUEST_ID_PATTERN,
+  DECISION_ID_PATTERN,
   REQUEST_CAPABILITY_PATTERN,
   REQUEST_HANDLE_PATTERN,
   REQUEST_ID_PATTERN,
@@ -38,8 +47,14 @@ const RESERVE_OP = 'handle.reserve';
 const CHALLENGE_OP = 'pairing.challenge';
 const CONSUME_OP = 'pairing.challenge.consume';
 const SET_OP = 'pairing.set';
+const CREATE_OP = 'request.create';
+const EXPIRE_OP = 'request.expire';
 const PAIRING_TTL_SECONDS = 300n;
 const MAX_LABEL_SCALARS = 128;
+const MIN_DURATION_SECONDS = 60;
+const MAX_DURATION_SECONDS = 86400;
+const MAX_ACTION_SCALARS = 1000;
+const MAX_CONTEXT_SCALARS = 1000;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const RESERVATION_FIELDS = [
   'capability_hash',
@@ -54,6 +69,29 @@ const CHALLENGE_FIELDS = ['created_at', 'expires_at', 'hash', 'op'];
 const CONSUME_FIELDS = ['consumed_at', 'hash', 'op'];
 const SET_FIELDS = ['op', 'pairing'];
 const PAIRING_FIELDS = ['chat_id', 'paired_at', 'user_id'];
+const CREATE_FIELDS = [
+  'action',
+  'client_request_id',
+  'context',
+  'created_at',
+  'expires_at',
+  'expires_in_seconds',
+  'op',
+  'pairing_snapshot',
+  'request_handle',
+];
+const EXPIRE_FIELDS = ['decision_id', 'delivery_state', 'op', 'request_id', 'resolved_at'];
+// Initial delivery for a terminal closure: the vocabulary admits the live-waiter
+// value, but no alpha path establishes a waiter, so alpha persists `unavailable`.
+const DELIVERY_STATES = new Set(['pending', 'unavailable']);
+const EVENT_CAPABILITY = Object.freeze({
+  status: 'unverified',
+  revision: null,
+  reason: 'No verified Events contract or host support',
+});
+// Temporary incomplete-checkpoint refusal (design section 7): request-bearing
+// status needs the serialized expiry writer that alpha does not have yet.
+const STATUS_REFUSAL = 'request-bearing status requires the serialized expiry checkpoint';
 // Pairing timestamps are UTC RFC 3339 instants. The offset is `Z` or `+00:00`
 // only: `-00:00` states that the offset is unknown, so it is not UTC here.
 const UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|\+00:00)$/;
@@ -81,6 +119,42 @@ function reservationView(record) {
     request_id: record.request_id,
     session_label: record.session_label,
     prepared_at: record.prepared_at,
+  };
+}
+
+// Caller-supplied text is type-, well-formedness- and length-checked before any
+// rendering measurement or comparison can consume it.
+function textProblem(value, name, min, max) {
+  if (typeof value !== 'string') return `${name} must be text`;
+  if (LONE_SURROGATE.test(value)) return `${name} must be well-formed text`;
+  const length = scalarLength(value);
+  if (length < min || length > max) return `${name} must be ${min}-${max} Unicode scalar values`;
+  return null;
+}
+
+// The common request representation of design section 3, rebuilt as a fresh
+// copy on every observation: the nested event capability is included and the
+// pairing snapshot, capability verifier and requested duration are not.
+function requestView(request) {
+  return {
+    schema_version: PORTABLE_REPRESENTATION_SCHEMA_VERSION,
+    request_handle: request.request_handle,
+    request_id: request.request_id,
+    client_request_id: request.client_request_id,
+    owner_id: request.owner_id,
+    session_label: request.session_label,
+    action: request.action,
+    context: request.context,
+    created_at: request.created_at,
+    expires_at: request.expires_at,
+    resolution: request.resolution,
+    resolved_at: request.resolved_at,
+    response_text: request.response_text,
+    decision_id: request.decision_id,
+    telegram_state: request.telegram_state,
+    delivery_state: request.delivery_state,
+    delivery_error: request.delivery_error,
+    event_capability: { ...EVENT_CAPABILITY },
   };
 }
 
@@ -233,6 +307,90 @@ function readSet(mutation) {
   };
 }
 
+// Every request field is type-guarded before a pattern, comparison or lookup sees
+// it, so an array- or object-shaped value can never be coerced into a valid one.
+function readCreate(mutation) {
+  exactFields(mutation, CREATE_FIELDS);
+  const handle = mutation.request_handle;
+  if (typeof handle !== 'string') throw integrity(`${CREATE_OP} needs a text handle`);
+  if (!REQUEST_HANDLE_PATTERN.test(handle)) throw integrity(`${CREATE_OP} has a malformed handle`);
+  const key = mutation.client_request_id;
+  if (typeof key !== 'string') throw integrity(`${CREATE_OP} needs a text idempotency key`);
+  if (!CLIENT_REQUEST_ID_PATTERN.test(key)) throw integrity(`${CREATE_OP} has a malformed key`);
+  const actionProblem = textProblem(mutation.action, 'action', 1, MAX_ACTION_SCALARS);
+  if (actionProblem !== null) throw integrity(`${CREATE_OP} ${actionProblem}`);
+  const contextProblem = textProblem(mutation.context, 'context', 0, MAX_CONTEXT_SCALARS);
+  if (contextProblem !== null) throw integrity(`${CREATE_OP} ${contextProblem}`);
+  const duration = mutation.expires_in_seconds;
+  if (!Number.isInteger(duration)) throw integrity(`${CREATE_OP} needs whole seconds`);
+  if (duration < MIN_DURATION_SECONDS || duration > MAX_DURATION_SECONDS) {
+    throw integrity(`${CREATE_OP} duration is outside the admitted range`);
+  }
+  const createdAt = readInstant(mutation.created_at);
+  if (createdAt === null) throw integrity(`${CREATE_OP} has a malformed creation time`);
+  const expiresAt = readInstant(mutation.expires_at);
+  if (expiresAt === null) throw integrity(`${CREATE_OP} has a malformed expiry`);
+  // The deadline is exactly one duration after creation, compared as represented
+  // instants so an arbitrary fractional spelling cannot start a rounding drift.
+  const deadline = { seconds: createdAt.seconds + BigInt(duration), fraction: createdAt.fraction };
+  if (compareInstants(expiresAt, deadline) !== 0) {
+    throw integrity(`${CREATE_OP} expiry is not its duration after creation`);
+  }
+  // The snapshot repeats the three stored pairing values, so it is compared with
+  // them exactly and supplies the pairing instant for the creation lower bound.
+  const snapshot = mutation.pairing_snapshot;
+  if (!isPlainObject(snapshot)) throw integrity(`${CREATE_OP} needs a pairing snapshot`);
+  exactFields(snapshot, PAIRING_FIELDS);
+  const problem = identityProblem(snapshot.user_id) ?? identityProblem(snapshot.chat_id);
+  if (problem !== null) throw integrity(`${CREATE_OP} snapshot: ${problem}`);
+  const pairedAt = readInstant(snapshot.paired_at);
+  if (pairedAt === null) throw integrity(`${CREATE_OP} snapshot time is malformed`);
+  return {
+    kind: 'create',
+    record: {
+      request_handle: handle,
+      client_request_id: key,
+      action: mutation.action,
+      context: mutation.context,
+      created_at: mutation.created_at,
+      expires_at: mutation.expires_at,
+      createdAt,
+      expiresAt,
+      pairedAt,
+      snapshot,
+    },
+  };
+}
+
+function readExpire(mutation) {
+  exactFields(mutation, EXPIRE_FIELDS);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string') throw integrity(`${EXPIRE_OP} needs a text request id`);
+  if (!REQUEST_ID_PATTERN.test(requestId))
+    throw integrity(`${EXPIRE_OP} has a malformed request id`);
+  const decisionId = mutation.decision_id;
+  if (typeof decisionId !== 'string') throw integrity(`${EXPIRE_OP} needs a text decision id`);
+  if (!DECISION_ID_PATTERN.test(decisionId)) {
+    throw integrity(`${EXPIRE_OP} has a malformed decision id`);
+  }
+  const resolvedAt = readInstant(mutation.resolved_at);
+  if (resolvedAt === null) throw integrity(`${EXPIRE_OP} has a malformed resolution time`);
+  const delivery = mutation.delivery_state;
+  if (typeof delivery !== 'string' || !DELIVERY_STATES.has(delivery)) {
+    throw integrity(`${EXPIRE_OP} has an unsupported initial delivery state`);
+  }
+  return {
+    kind: 'expire',
+    record: {
+      request_id: requestId,
+      decision_id: decisionId,
+      resolved_at: mutation.resolved_at,
+      delivery_state: delivery,
+      resolvedAt,
+    },
+  };
+}
+
 // Pairing joins the reservation vocabulary of committed history. An unfamiliar
 // operation stays fatal rather than skipped.
 function readMutation(mutation) {
@@ -248,6 +406,10 @@ function readMutation(mutation) {
       return readConsume(mutation);
     case SET_OP:
       return readSet(mutation);
+    case CREATE_OP:
+      return readCreate(mutation);
+    case EXPIRE_OP:
+      return readExpire(mutation);
     default:
       throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
   }
@@ -287,6 +449,102 @@ function applyPairing(records, challenges, pairing) {
   return sets[0].record;
 }
 
+// A reservation is installed immediately for uniqueness, but a creation naming
+// one reserved in its own transaction still fails in every array order.
+function stageReservation(record, staged, reservedNow) {
+  if (staged.byHandle.has(record.request_handle)) {
+    throw integrity(`request handle ${record.request_handle} is reserved twice`);
+  }
+  if (staged.byRequestId.has(record.request_id)) {
+    throw integrity(`reserved request id ${record.request_id} is used twice`);
+  }
+  if (staged.byVerifier.has(record.capability_hash)) {
+    throw integrity(`capability verifier for ${record.request_handle} is reused`);
+  }
+  staged.byHandle.set(record.request_handle, record);
+  staged.byRequestId.set(record.request_id, record);
+  staged.byVerifier.set(record.capability_hash, record);
+  reservedNow.add(record.request_handle);
+}
+
+// Creation inherits the committed reservation and copies the committed pairing
+// without normalization; the complete presentation is measured before install.
+function stageCreate(record, staged, pairing, reservedNow) {
+  if (reservedNow.has(record.request_handle)) {
+    throw integrity(`${CREATE_OP} cannot bind a reservation of its own transaction`);
+  }
+  const reservation = staged.byHandle.get(record.request_handle);
+  if (reservation === undefined) {
+    throw integrity(`${CREATE_OP} names no committed reservation`);
+  }
+  if (staged.created.has(record.request_handle)) {
+    throw integrity(`request handle ${record.request_handle} is created twice`);
+  }
+  if (pairing === null) throw integrity(`${CREATE_OP} requires a committed pairing`);
+  if (
+    record.snapshot.user_id !== pairing.user_id ||
+    record.snapshot.chat_id !== pairing.chat_id ||
+    record.snapshot.paired_at !== pairing.paired_at
+  ) {
+    throw integrity(`${CREATE_OP} snapshot does not match the committed pairing`);
+  }
+  const preparedAt = readInstant(reservation.prepared_at);
+  if (preparedAt === null) {
+    throw integrity(`${CREATE_OP} cannot compare the reservation preparation time`);
+  }
+  if (compareInstants(record.createdAt, preparedAt) < 0) {
+    throw integrity(`${CREATE_OP} precedes its reservation`);
+  }
+  if (compareInstants(record.createdAt, record.pairedAt) < 0) {
+    throw integrity(`${CREATE_OP} precedes the committed pairing`);
+  }
+  const request = {
+    request_handle: reservation.request_handle,
+    request_id: reservation.request_id,
+    client_request_id: record.client_request_id,
+    owner_id: reservation.owner_id,
+    session_label: reservation.session_label,
+    action: record.action,
+    context: record.context,
+    created_at: record.created_at,
+    expires_at: record.expires_at,
+    expiresAt: record.expiresAt,
+    resolution: 'pending',
+    resolved_at: null,
+    response_text: null,
+    decision_id: null,
+    telegram_state: 'pending',
+    delivery_state: 'not_applicable',
+    delivery_error: null,
+  };
+  if (measurePortablePresentation(requestView(request)).worst.length > MAX_TELEGRAM_TEXT) {
+    throw integrity(`${CREATE_OP} cannot be presented within ${MAX_TELEGRAM_TEXT} characters`);
+  }
+  staged.created.add(request.request_handle);
+  staged.requests.set(request.request_id, request);
+}
+
+// Expiry closes one pending request at or after its recorded deadline and spends
+// its decision identity once across the whole journal.
+function stageExpire(record, staged) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${EXPIRE_OP} names no committed request`);
+  if (request.resolution !== 'pending') {
+    throw integrity(`${EXPIRE_OP} targets an already resolved request`);
+  }
+  if (compareInstants(record.resolvedAt, request.expiresAt) < 0) {
+    throw integrity(`${EXPIRE_OP} precedes the request deadline`);
+  }
+  if (staged.decisions.has(record.decision_id)) {
+    throw integrity(`decision id ${record.decision_id} is used twice`);
+  }
+  staged.decisions.add(record.decision_id);
+  request.resolution = 'expired';
+  request.resolved_at = record.resolved_at;
+  request.decision_id = record.decision_id;
+  request.delivery_state = record.delivery_state;
+}
+
 class PortableBroker {
   #journal;
 
@@ -307,6 +565,8 @@ class PortableBroker {
   #byVerifier = new Map();
 
   #pairing = null;
+
+  #requests = new Map();
 
   #queue = Promise.resolve();
 
@@ -338,39 +598,40 @@ class PortableBroker {
     this.#startedAt = utcTimestamp(clock());
   }
 
-  // Rebuilds reservations and pairing from committed transactions. The whole
-  // history is staged first: a replay failure installs nothing and leaves the
-  // previous state untouched, and the journal is never written here.
+  // Rebuilds reservations, pairing and requests from committed transactions.
+  // The whole history is staged first: a replay failure installs nothing and
+  // leaves the previous state untouched, and the journal is never written here.
   async recover() {
     if (this.#closed) throw storageFailure('the portable broker is closed', 'STORAGE_FAILURE');
     const { transactions } = await this.#journal.recover();
-    const byHandle = new Map();
-    const byRequestId = new Map();
-    const byVerifier = new Map();
+    const staged = {
+      byHandle: new Map(),
+      byRequestId: new Map(),
+      byVerifier: new Map(),
+      requests: new Map(),
+      created: new Set(),
+      decisions: new Set(),
+    };
     const challenges = new Map();
     let pairing = null;
     for (const transaction of transactions) {
       const records = (transaction?.mutations ?? []).map(readMutation);
-      for (const { kind, record } of records) {
-        if (kind !== 'reservation') continue;
-        if (byHandle.has(record.request_handle)) {
-          throw integrity(`request handle ${record.request_handle} is reserved twice`);
-        }
-        if (byRequestId.has(record.request_id)) {
-          throw integrity(`reserved request id ${record.request_id} is used twice`);
-        }
-        if (byVerifier.has(record.capability_hash)) {
-          throw integrity(`capability verifier for ${record.request_handle} is reused`);
-        }
-        byHandle.set(record.request_handle, record);
-        byRequestId.set(record.request_id, record);
-        byVerifier.set(record.capability_hash, record);
+      // Committed authority only: this transaction's own reservations and
+      // pairing mutations are deliberately not visible to its creations.
+      const reservedNow = new Set();
+      const pairingRecords = [];
+      for (const record of records) {
+        if (record.kind === 'reservation') stageReservation(record.record, staged, reservedNow);
+        else if (record.kind === 'create') stageCreate(record.record, staged, pairing, reservedNow);
+        else if (record.kind === 'expire') stageExpire(record.record, staged);
+        else pairingRecords.push(record);
       }
-      pairing = applyPairing(records, challenges, pairing);
+      pairing = applyPairing(pairingRecords, challenges, pairing);
     }
-    this.#byHandle = byHandle;
-    this.#byRequestId = byRequestId;
-    this.#byVerifier = byVerifier;
+    this.#byHandle = staged.byHandle;
+    this.#byRequestId = staged.byRequestId;
+    this.#byVerifier = staged.byVerifier;
+    this.#requests = staged.requests;
     this.#pairing = pairing;
     this.#recovered = true;
     return { records: transactions.length };
@@ -419,12 +680,20 @@ class PortableBroker {
     return reservationView(record);
   }
 
-  // Redacted view: the capability verifier stays journal-internal.
+  // Redacted view: the capability verifier and pairing snapshot stay
+  // journal-internal, and every request is copied fresh, nested state included.
   snapshot() {
-    return { prepared: [...this.#byHandle.values()].map(reservationView), requests: [] };
+    return {
+      prepared: [...this.#byHandle.values()].map(reservationView),
+      requests: [...this.#requests.values()].map(requestView),
+    };
   }
 
+  // Temporary incomplete-checkpoint gate (design section 7). Request-bearing
+  // status needs the serialized expiry writer, so it refuses synchronously
+  // without sampling time, appending or changing committed state.
   status() {
+    if (this.#requests.size > 0) throw blockedPrerequisite(STATUS_REFUSAL);
     return {
       schema_version: PORTABLE_REPRESENTATION_SCHEMA_VERSION,
       broker: { pid: process.pid, port: this.#port, started_at: this.#startedAt },
