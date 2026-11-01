@@ -242,7 +242,7 @@ test('B-RESTART: real public creation crosses unchanged60s deadline stopped; flu
       toolError(await replacement.call('request_approval', { ...input(p), request_capability: p.request_capability }), 'ENHANCEMENT_UNAVAILABLE');
        toolError(await replacement.call('acknowledge_approval', { ...auth(p), decision_id: `dec_${'1'.repeat(32)}` }), 'DECISION_MISMATCH');
       await eof(replacement);
-       // After EOF/release: wrong decisions cannot append; immediate wait observes unchanged terminal state.
+       // After EOF/release: wrong decisions cannot append; wait remains unavailable.
       const registrationResponse = await wire('POST', '/v1/adapter', {});
       assert.equal(registrationResponse.status, 201); const registration = JSON.parse(registrationResponse.text);
       assert.equal(typeof registration.registration_secret, 'string'); secrets.push(registration.registration_secret);
@@ -252,8 +252,7 @@ test('B-RESTART: real public creation crosses unchanged60s deadline stopped; flu
             : suffix === 'returned' ? { registration_id: registration.registration_id, decision_id: `dec_${'1'.repeat(32)}` }
             : suffix === 'acknowledge' ? { decision_id: `dec_${'1'.repeat(32)}` } : {};
           const r = await http('POST', `/v1/requests/${p.request_id}/${suffix}`, body, owner,
-            { ...headers(p), 'X-Proceed-Registration': registration.registration_secret }); assert.equal(r.status, suffix === 'wait' ? 200 : 409);
-          if (suffix === 'wait') assert.deepEqual(r.body, terminal);
+            { ...headers(p), 'X-Proceed-Registration': registration.registration_secret }); assert.equal(r.status, suffix === 'wait' ? 404 : 409);
         }
       } finally {
         const released = await wire('DELETE', `/v1/adapter/${registration.registration_id}`, undefined, owner,
