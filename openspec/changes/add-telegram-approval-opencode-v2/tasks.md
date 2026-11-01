@@ -1,5 +1,14 @@
 # Tasks
 
+## Human CLI status — bounded executable preparation (2026-11-01)
+- [x] P.CLI-status-tests Prepare [implementation brief, authority/mapping, boundary, commands and evidence](slices/03a5-cli-human-status.md) and `tests/cli-human-status.test.mjs`; authoring baseline `e3806ed918ea9d163482354169c819fe3e44b6ba`. No production/shared-helper edits.
+- [x] P.CLI-status-prerequisites Supplied owning PASS for public foundation `303ccf30`/`f32905ca`, packet A `296baac` and B `e3806ed` discharges the prerequisite reviews, superseding historical pending wording below. Not full feature/release acceptance.
+- [ ] P.CLI-status-impl Implement portable human identity/display labels, truthful states/redacted error/next action in **only `src/cli/main.js`**. Preserve exact JSON/filter/empty/error contracts; no helper exports or other source scope.
+- [ ] P.CLI-status-verify Independent sole-source candidate verification: full new packet, source/test syntax, scoped source format/whitespace/links and separate cleanup. Decomposition1–5 NO; unchanged accepted boundary, no test schema/new contract, no automatic repeat architecture gate.
+- Preparation Windows Node24.22.2 unfiltered5:3PASS/2expectedRED, exit1,17524.3875ms, zero cancelled/skipped/todo; `.scratch/cli-status/red.tap`. Missing owner label/legacy undefined barrier blocks downstream human guidance assertions. Real public requests/expiry, exact JSON/filter and storage exit4 execute; run cleanup PASS separately. No synthetic terminal/delivery-success proof.
+- Scoped syntax2/source-format1/whitespace/local links PASS; tests/OpenSpec formatter-excluded. Actual **211 gross/3 owned paths =159 test +43 slice +9 tasks**, versus authoring baseline; no staged/unstaged/untracked double count. Supplied approximately40 production forecast yields **251/600 across4 paths**,349 headroom. Source unchanged; all docs/evidence charged, no waiver.
+- Lifecycle: existing worktree/branch/change/target baseline and test-engineering owner unchanged, active/retain/not cleanup-ready; next action sole-source implementation then scoped independent verification. Preserve other-owner/unknown work. One OpenSpec PR; no publication/archive/merge/push.
+
 ## Public breadth — bounded test-only packets (2026-11-01)
 - [x] P.PUBLIC-breadth-A Execute [packet A outline, boundary, mapping and evidence](slices/03a4a-public-breadth.md): cadence-free production listener due ordering/target-only/denied expiry, full public validation/precedence, actual append/sync response gates and storage-fence followers. Production pinned `303ccf3`, authoring `f32905c`; no shared helper edits.
 - [x] P.PUBLIC-foundation-owner Supplied owning post-code PASS for production `303ccf3` and independent foundation `f32905c` discharges the foundation-only owner gate; historical pending wording below is superseded, not complete public-cut acceptance.
