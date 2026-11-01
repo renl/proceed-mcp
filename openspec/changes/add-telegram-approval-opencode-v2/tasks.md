@@ -1,5 +1,12 @@
 # Tasks
 
+## Mandatory actual creation breadth — executable PASS; owning review pending (2026-11-01)
+- [x] P.CREATE-breadth Prepare and run `tests/portable-creation-breadth.test.mjs` against immutable production `f89b76c2b70171d5da9c0790ef68b9508b712314`, authoring/evidence baseline `75b1f4a76a1d369359bfa1ab10cac9e93b0af97f`. [Bounded outline, exact assertion mapping, commands, results and limits](slices/03a2-creation-breadth.md). Test-only scope; foundational568 remains separately accepted.
+- [x] P.CREATE-foundational-owner Owning foundational post-code PASS supplied in the authorized breadth brief; supersedes prior pending disposition below, not complete A1a acceptance.
+- [x] P.CREATE-breadth-execution Windows project Node24.22.2 unfiltered new file35/35, zero failed/cancelled/skipped/todo, exit0,911.8717ms; syntax/scoped whitespace/link checks PASS. No shared helper changed or affected consumers to rerun. Formatter excludes tests/OpenSpec; no formatter-validation claim for them.
+- [ ] P.CREATE-breadth-owner Owning test-artifact/decomposition/boundary review through coordination must confirm mandatory fidelity before complete internal A1a acceptance. Green tests do not authorize public routes/scheduling/restart readiness/pairing/waiting/Telegram/feature/release acceptance.
+- Lifecycle: same retained worktree/branch/change/target baseline and test-engineering owner; active/not cleanup-ready. Owned fixture handles/directories removed with absence assertions; TAP and two honest harness-calibration failures retained ignored under `.scratch/creation-breadth/`. Other owner/unknown work preserved. Production/dependencies/configuration unchanged; no network/push/PR/merge/archive/publication.
+
 ## Foundational actual creation/idempotency — independently PASS; post-code review pending (2026-11-01)
 - [x] P.CREATE-tests Prepare [exact ordinary binding, scope, boundary/test mapping, decomposition triggers and ordered commands](slices/03a2-creation-writer.md) with `tests/portable-creation-writer.test.mjs`; authoring baseline `ea1003808d41c2ba6685b5dcbffe31add404e43c`, accepted P0 `6078d4f` / independent `b3dc7d3` and supplied owning PASS. No production changes or complete A1a acceptance.
 - [x] P.CREATE-review Supplied preimplementation architecture boundary/decomposition/test-artifact approval covers the foundational cut (triggers1–5 YES), sole `src/broker/portable.js`, forecast185 gross and combined hard600; no temporary existing-request guard/new source path. Approval is distinct from mandatory post-code review.
