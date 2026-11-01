@@ -57,6 +57,17 @@ export function notFound(message = 'request not found') {
   return new BrokerError('NOT_FOUND', 404, message);
 }
 
+// Authentication and role separation for the local API: a missing or unknown
+// Bearer credential discloses nothing, and a valid credential aimed at another
+// route group is a plain refusal.
+export function authRequired(message = 'a protected local credential is required') {
+  return new BrokerError('AUTH_REQUIRED', 401, message);
+}
+
+export function forbidden(message = 'this credential cannot use that route') {
+  return new BrokerError('FORBIDDEN', 403, message);
+}
+
 // Design section 6: a host without a reviewed support entry is never a
 // supported product session, so admission fails closed and is not retryable.
 export function unsupportedHost(

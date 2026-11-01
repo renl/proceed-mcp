@@ -5,17 +5,11 @@ import { TELEGRAM_TOKEN_ENV } from '../config/portable-config.js';
 import { CliError, EXIT_CODE, blockedPrerequisite, invalidArgument } from '../errors.js';
 import { createLocalClient, LocalRequestError } from '../http/local-client.js';
 import { runMcpServer } from '../mcp/server.js';
-import { startBrokerRuntime } from '../broker/runtime.js';
+import { startPortableRuntime } from '../broker/portable-runtime.js';
 import { readLocalCredential } from '../state/credentials.js';
 import { readOwnerCredential } from '../state/owner-credentials.js';
 import { resolveStateDir, statePaths } from '../state/paths.js';
-import {
-  addOrigin,
-  addOwner,
-  initializeState,
-  loadConfiguration,
-  loadPortableConfiguration,
-} from '../state/store.js';
+import { addOrigin, addOwner, initializeState, loadPortableConfiguration } from '../state/store.js';
 import { parseArguments, requireOptions } from './args.js';
 
 const USAGE = [
@@ -37,6 +31,8 @@ const USAGE = [
   'with no path, query, fragment or credentials.',
   '',
   'The Telegram token is read from the environment, never from state or arguments.',
+  'This checkpoint runs portable schema 2 setup: init, owner add, serve, mcp and status.',
+  '`pair` and `retry` report their operation as unavailable; `origin add` refuses schema 2 state.',
   '`doctor` is a documented target that this build does not implement.',
   '',
   'Exit codes: 0 completed, 2 invalid arguments or configuration, 3 unavailable prerequisite,',
@@ -77,6 +73,17 @@ function failureFromResponse(response) {
   return blockedPrerequisite(`${message} (${code})`, code);
 }
 
+// Design section 3 temporary checkpoint: pairing and request retry are absent
+// from this build, so their broker classification is reported verbatim instead
+// of printing a challenge or a delivery state that does not exist.
+function unavailableResponse(response) {
+  const error = response.body?.error;
+  if (response.status === 503 && error?.code === 'ENHANCEMENT_UNAVAILABLE') {
+    throw blockedPrerequisite(error.message, error.code);
+  }
+  throw failureFromResponse(response);
+}
+
 function controlClient(paths, config) {
   return readLocalCredential(paths.controlCredentialFile, 'the control credential').then((token) =>
     createLocalClient({ port: config.broker.port, token }),
@@ -101,9 +108,9 @@ async function runInit(argv, { stdout, env }) {
       '  3. proceed-mcp mcp --owner <owner_id>   (stdio MCP for that transport principal;',
       '     this build advertises the tool catalog and answers every tools/call with',
       '     ENHANCEMENT_UNAVAILABLE, so no approval can be prepared or resolved yet)',
-      '  4. Broker startup, pairing and request delivery are later checkpoints: "serve", "pair",',
-      '     "status" and "retry" in this build still read the previous configuration schema',
-      '     and refuse this schema 2 state until their own switch lands.',
+      '  4. proceed-mcp serve starts the loopback broker and "status" reports it.',
+      '     Pairing, retry and request delivery are later checkpoints: "pair" and "retry"',
+      '     report that their operation is unavailable rather than pretending to succeed.',
       '',
     ].join('\n'),
   );
@@ -191,11 +198,10 @@ async function runServe(argv, { stdout, stderr, env }) {
   noPositionals(positionals, 'serve');
 
   const paths = commandStatePaths(options, env);
-  const config = await loadConfiguration(paths);
-  const runtime = await startBrokerRuntime({
+  const config = await loadPortableConfiguration(paths);
+  const runtime = await startPortableRuntime({
     paths,
     config,
-    env,
     logger: (message) => stderr.write(`proceed-mcp: ${message}\n`),
   });
 
@@ -207,12 +213,12 @@ async function runServe(argv, { stdout, stderr, env }) {
   return EXIT_CODE.OK;
 }
 
-async function runPair(argv, { stdout, env }) {
+async function runPair(argv, { env }) {
   const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir'] });
   noPositionals(positionals, 'pair');
 
   const paths = commandStatePaths(options, env);
-  const config = await loadConfiguration(paths);
+  const config = await loadPortableConfiguration(paths);
   const client = await controlClient(paths, config);
 
   let response;
@@ -221,21 +227,7 @@ async function runPair(argv, { stdout, env }) {
   } catch (error) {
     throw asCliFailure(error);
   }
-  if (response.status !== 201) throw failureFromResponse(response);
-
-  stdout.write(
-    [
-      `Pairing code: ${response.body.code}`,
-      `Valid until ${response.body.expires_at} (one use, five minutes).`,
-      '',
-      'In the paired human private chat with the bot:',
-      '  1. send /start',
-      `  2. send /pair ${response.body.code}`,
-      '',
-      'The code is shown only here; it is never logged or stored in plain text.',
-      '',
-    ].join('\n'),
-  );
+  unavailableResponse(response);
   return EXIT_CODE.OK;
 }
 
@@ -287,7 +279,7 @@ async function runStatus(argv, { stdout, env }) {
   noPositionals(positionals, 'status');
 
   const paths = commandStatePaths(options, env);
-  const config = await loadConfiguration(paths);
+  const config = await loadPortableConfiguration(paths);
   const client = await controlClient(paths, config);
 
   let response;
@@ -305,15 +297,16 @@ async function runStatus(argv, { stdout, env }) {
     if (requests.length === 0) throw invalidArgument(`no request ${wanted} in this broker`);
   }
 
+  // The versioned CLI document carries requests only: the broker details and
+  // any future pairing/delivery state stay out of this stable machine shape.
   if (flags.has('json')) {
     stdout.write(`${JSON.stringify({ schema_version: 1, requests }, null, 2)}\n`);
     return EXIT_CODE.OK;
   }
 
-  const pairing = response.body.pairing?.paired === true ? 'paired' : 'not paired';
   stdout.write(
     [
-      `Broker ${response.body.broker?.pid} on port ${response.body.broker?.port} (${pairing})`,
+      `Broker ${response.body.broker?.pid} on port ${response.body.broker?.port}`,
       requests.length === 0 ? 'No requests.' : requests.map(describeRequest).join('\n'),
       '',
     ].join('\n'),
@@ -321,14 +314,14 @@ async function runStatus(argv, { stdout, env }) {
   return EXIT_CODE.OK;
 }
 
-async function runRetry(argv, { stdout, env }) {
+async function runRetry(argv, { env }) {
   const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir'] });
   if (positionals.length !== 1) {
     throw invalidArgument('retry requires exactly one request_id');
   }
 
   const paths = commandStatePaths(options, env);
-  const config = await loadConfiguration(paths);
+  const config = await loadPortableConfiguration(paths);
   const client = await controlClient(paths, config);
 
   let response;
@@ -341,17 +334,7 @@ async function runRetry(argv, { stdout, env }) {
   } catch (error) {
     throw asCliFailure(error);
   }
-  if (response.status !== 200 && response.status !== 202) throw failureFromResponse(response);
-
-  stdout.write(
-    [
-      `${response.body.request_id}: delivery ${response.body.delivery_state}`,
-      response.status === 202
-        ? 'Delivery reconciliation is scheduled; the persisted prompt ID and text are unchanged.'
-        : 'Nothing to resume: this request has no pending delivery.',
-      '',
-    ].join('\n'),
-  );
+  unavailableResponse(response);
   return EXIT_CODE.OK;
 }
 
