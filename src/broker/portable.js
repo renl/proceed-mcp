@@ -20,6 +20,10 @@
 // Observations are fresh copies of the committed representation. Expiry is
 // written here, and awaited status captures its view in one serialized turn.
 //
+// Creation is the single writer for a pending request: an authorized handle
+// creates at most one request, an identical retry observes it through that same
+// expiry path, and changed fields are refused before any time is sampled.
+//
 // The journal stays caller-owned. This module never opens, replaces or closes
 // it, and no reservation result becomes visible before its serialized append
 // has completed the journal's own file flush.
@@ -31,7 +35,7 @@
 // place; recovery of the file is an ordinary close and reopen with a fresh
 // instance.
 import { timingSafeEqual } from 'node:crypto';
-import { invalidArgument, storageFailure } from '../errors.js';
+import { conflict, invalidArgument, storageFailure, unavailable } from '../errors.js';
 import { MAX_TELEGRAM_TEXT, measurePortablePresentation } from '../telegram/portable-render.js';
 import {
   CLIENT_REQUEST_ID_PATTERN,
@@ -61,8 +65,13 @@ const PAIRING_TTL_SECONDS = 300n;
 const MAX_LABEL_SCALARS = 128;
 const MIN_DURATION_SECONDS = 60;
 const MAX_DURATION_SECONDS = 86400;
+const DEFAULT_DURATION_SECONDS = 3600;
 const MAX_ACTION_SCALARS = 1000;
 const MAX_CONTEXT_SCALARS = 1000;
+// The one refusal that names an actionable operator step; it is disclosed only
+// after authority succeeds and is never used to hide an authority failure.
+const PAIRING_REQUIRED_MESSAGE =
+  'No human is paired; run proceed-mcp pair and complete private-chat pairing';
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const RESERVATION_FIELDS = [
   'capability_hash',
@@ -138,6 +147,48 @@ function textProblem(value, name, min, max) {
   const length = scalarLength(value);
   if (length < min || length > max) return `${name} must be ${min}-${max} Unicode scalar values`;
   return null;
+}
+
+// Caller-supplied creation fields are validated before authority is consulted:
+// a malformed value stays a caller error even when its key could never be used,
+// and only an omitted duration takes the default, so no other value is coerced.
+function creationFields(input) {
+  if (!isPlainObject(input)) {
+    throw invalidArgument('createRequest expects an argument object');
+  }
+  const { clientRequestId, action, context, expiresInSeconds } = input;
+  if (typeof clientRequestId !== 'string' || !CLIENT_REQUEST_ID_PATTERN.test(clientRequestId)) {
+    throw invalidArgument('client_request_id must be 1-128 ASCII letters, digits, "_" or "-"');
+  }
+  const actionProblem = textProblem(action, 'action', 1, MAX_ACTION_SCALARS);
+  if (actionProblem !== null) throw invalidArgument(actionProblem);
+  const contextProblem = textProblem(context, 'context', 0, MAX_CONTEXT_SCALARS);
+  if (contextProblem !== null) throw invalidArgument(contextProblem);
+  if (expiresInSeconds === undefined) {
+    return { clientRequestId, action, context, duration: DEFAULT_DURATION_SECONDS };
+  }
+  if (
+    !Number.isInteger(expiresInSeconds) ||
+    expiresInSeconds < MIN_DURATION_SECONDS ||
+    expiresInSeconds > MAX_DURATION_SECONDS
+  ) {
+    throw invalidArgument(
+      `expires_in_seconds must be whole seconds from ${MIN_DURATION_SECONDS} to ${MAX_DURATION_SECONDS}`,
+    );
+  }
+  return { clientRequestId, action, context, duration: expiresInSeconds };
+}
+
+// An existing creation is compared exactly: the committed instants supply the
+// effective duration, and the caller's key, action and context are never
+// normalized, trimmed or rounded into an accidental match.
+function sameCreation(request, fields) {
+  return (
+    request.client_request_id === fields.clientRequestId &&
+    request.action === fields.action &&
+    request.context === fields.context &&
+    request.expiresAt.seconds - request.createdAt.seconds === BigInt(fields.duration)
+  );
 }
 
 // The common request representation of design section 3, rebuilt as a fresh
@@ -265,6 +316,46 @@ function clockInstant(milliseconds) {
 
 function isDue(request, milliseconds) {
   return compareInstants(clockInstant(milliseconds), request.expiresAt) >= 0;
+}
+
+// Creation samples the clock exactly once. An unusable reading or an instant
+// that cannot be represented is a storage failure, not a caller error, and it is
+// refused before any append, so it never fences the journal.
+function creationTimes(clock, duration) {
+  let milliseconds;
+  try {
+    milliseconds = clock();
+  } catch (cause) {
+    throw storageFailure(
+      'the broker clock failed while creating a request',
+      'STORAGE_FAILURE',
+      cause,
+    );
+  }
+  if (typeof milliseconds !== 'number' || !Number.isFinite(milliseconds)) {
+    throw storageFailure('the broker clock did not return a usable instant', 'STORAGE_FAILURE');
+  }
+  let createdText;
+  let expiresText;
+  try {
+    createdText = utcTimestamp(milliseconds);
+    expiresText = utcTimestamp(milliseconds + duration * 1000);
+  } catch (cause) {
+    throw storageFailure(
+      'the creation time cannot be represented in UTC',
+      'STORAGE_FAILURE',
+      cause,
+    );
+  }
+  const createdAt = readInstant(createdText);
+  const expiresAt = readInstant(expiresText);
+  if (createdAt === null || expiresAt === null) {
+    throw storageFailure(
+      'the creation time is outside the representable UTC range',
+      'STORAGE_FAILURE',
+    );
+  }
+  return { created_at: createdText, expires_at: expiresText, createdAt, expiresAt };
 }
 
 // Telegram IDs are stored losslessly as decimal strings: no numeric conversion,
@@ -529,6 +620,7 @@ function stageCreate(record, staged, pairing, reservedNow) {
     context: record.context,
     created_at: record.created_at,
     expires_at: record.expires_at,
+    createdAt: record.createdAt,
     expiresAt: record.expiresAt,
     resolution: 'pending',
     resolved_at: null,
@@ -736,6 +828,27 @@ class PortableBroker {
     return reservationView(record);
   }
 
+  // Creates at most one durable request under an authorized reservation (design
+  // section 4, A1a-ii). Caller fields are validated before authority and
+  // authority before the queue, so a held append never delays a denial, while
+  // every decision that names stored state is taken inside the serialized turn.
+  createRequest(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = creationFields(input);
+      const reservation = this.#creationBinding(input);
+      if (reservation === null) return null;
+      const refusal = this.#admissionRefusal();
+      if (refusal !== null) throw refusal;
+      if (!this.#recovered) {
+        throw storageFailure(
+          'the portable broker has not recovered the journal',
+          'STORAGE_FAILURE',
+        );
+      }
+      return this.#enqueue(() => this.#create(reservation, fields));
+    });
+  }
+
   // Redacted view: the capability verifier and pairing snapshot stay
   // journal-internal, and every request is copied fresh, nested state included.
   snapshot() {
@@ -851,6 +964,106 @@ class PortableBroker {
     if (typeof ownerId !== 'string' || !this.#owners.has(ownerId)) return null;
     if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) return null;
     return this.authorize({ ownerId, capability, requestId });
+  }
+
+  // Authority binding for creation, resolved before the queue: the principal
+  // must still be configured, the handle must be an explicitly supplied
+  // well-formed identifier, and the capability must verify that exact
+  // reservation/principal/handle tuple. Any other outcome is a non-disclosing
+  // denial rather than an argument error.
+  #creationBinding(input) {
+    const { ownerId, capability, requestHandle } = input;
+    if (typeof ownerId !== 'string' || !this.#owners.has(ownerId)) return null;
+    if (typeof requestHandle !== 'string' || !REQUEST_HANDLE_PATTERN.test(requestHandle))
+      return null;
+    if (typeof capability !== 'string' || !REQUEST_CAPABILITY_PATTERN.test(capability)) return null;
+    return this.authorize({ ownerId, capability, requestHandle });
+  }
+
+  // One serialized creation turn: an existing creation is compared with the
+  // requested fields before any time is sampled or a deadline is derived, an
+  // identical retry returns it through the accepted target-only expiry path,
+  // and a new creation samples once, measures the complete presentation,
+  // appends and only then installs the pending state it reports.
+  async #create(reservation, fields) {
+    const existing = this.#requests.get(reservation.request_id);
+    if (existing !== undefined) {
+      if (!sameCreation(existing, fields)) {
+        throw conflict('this handle already has a request with different creation fields');
+      }
+      return { created: false, request: await this.#expireTarget(reservation.request_id) };
+    }
+    if (this.#pairing === null) {
+      throw unavailable(PAIRING_REQUIRED_MESSAGE, 'NOT_PAIRED', { retryable: false });
+    }
+    const times = creationTimes(this.#clock, fields.duration);
+    const preparedAt = readInstant(reservation.prepared_at);
+    if (preparedAt === null) {
+      throw storageFailure(
+        `${CREATE_OP} cannot compare the reservation preparation time`,
+        'JOURNAL_STATE_INVALID',
+      );
+    }
+    if (compareInstants(times.createdAt, preparedAt) < 0) {
+      throw storageFailure(
+        `${CREATE_OP} would precede its committed reservation`,
+        'STORAGE_FAILURE',
+      );
+    }
+    const pairedAt = readInstant(this.#pairing.paired_at);
+    if (pairedAt === null) {
+      throw storageFailure(
+        `${CREATE_OP} cannot compare the committed pairing time`,
+        'JOURNAL_STATE_INVALID',
+      );
+    }
+    if (compareInstants(times.createdAt, pairedAt) < 0) {
+      throw storageFailure(`${CREATE_OP} would precede the committed pairing`, 'STORAGE_FAILURE');
+    }
+    const request = {
+      request_handle: reservation.request_handle,
+      request_id: reservation.request_id,
+      client_request_id: fields.clientRequestId,
+      owner_id: reservation.owner_id,
+      session_label: reservation.session_label,
+      action: fields.action,
+      context: fields.context,
+      created_at: times.created_at,
+      expires_at: times.expires_at,
+      createdAt: times.createdAt,
+      expiresAt: times.expiresAt,
+      resolution: 'pending',
+      resolved_at: null,
+      response_text: null,
+      decision_id: null,
+      telegram_state: 'pending',
+      delivery_state: 'not_applicable',
+      delivery_error: null,
+    };
+    // The complete plain-text presentation is measured before the append, so a
+    // request that could not be shown within the platform limit is refused while
+    // journal bytes, sequence and installed state are still untouched.
+    if (measurePortablePresentation(requestView(request)).worst.length > MAX_TELEGRAM_TEXT) {
+      throw invalidArgument(
+        `the complete request presentation must fit within ${MAX_TELEGRAM_TEXT} characters`,
+      );
+    }
+    await this.#append([
+      {
+        op: CREATE_OP,
+        request_handle: request.request_handle,
+        client_request_id: request.client_request_id,
+        action: request.action,
+        context: request.context,
+        expires_in_seconds: fields.duration,
+        created_at: request.created_at,
+        expires_at: request.expires_at,
+        pairing_snapshot: { ...this.#pairing },
+      },
+    ]);
+    this.#requests.set(request.request_id, request);
+    this.#logger('portable.request.created', { request_id: request.request_id });
+    return { created: true, request: requestView(request) };
   }
 
   // Closes at most this one target and reports the committed representation: a
