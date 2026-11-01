@@ -103,7 +103,7 @@ test('PUB-MCP: actual get success, lazy registration, cross-principal denial, EO
   assert.deepEqual(observed, value); noAuthority(observed, p, h);
   toolError(await replacement.call('request_approval', { ...payload(p), request_capability: p.request_capability }), 'ENHANCEMENT_UNAVAILABLE');
   for (const [name, args] of [['acknowledge_approval', { ...auth(p), decision_id: `dec_${'1'.repeat(32)}` }]])
-    assert.equal((await replacement.call(name, args)).frame.result.isError, true, 'not enabled by observation');
+    toolError(await replacement.call(name, args), 'DECISION_MISMATCH');
   const registration = h.calls.filter(c => c.path === '/v1/adapter').at(-1).reply;
   for (const suffix of ['wait', 'returned', 'acknowledge']) {
     const body = suffix === 'wait' ? { registration_id: registration.registration_id }
@@ -111,7 +111,7 @@ test('PUB-MCP: actual get success, lazy registration, cross-principal denial, EO
       : suffix === 'acknowledge' ? { decision_id: `dec_${'1'.repeat(32)}` } : {};
     const r = await response(h, `/v1/requests/${p.request_id}/${suffix}`, h.owner,
       { method: 'POST', headers: { ...header(p), 'X-Proceed-Registration': registration.registration_secret }, body: JSON.stringify(body) });
-    assert.ok(r.status >= 400, 'A2/B routes cannot report success'); noAuthority(r.body, p, h);
+    assert.equal(r.status, suffix === 'wait' ? 404 : 409, 'pending evidence cannot resolve or expire'); noAuthority(r.body, p, h);
   }
   assert.equal(h.calls.filter(c => c.method === 'POST' && c.path === '/v1/requests').length, 0, 'MCP never creates via unavailable request tool');
   assert.deepEqual(await h.journal(), bytes, 'observation/denials/EOF never record returned or confirmed');
@@ -170,7 +170,7 @@ test('PUB-DENIAL: exact uniform404 for unused/unknown/foreign/mismatched/missing
   assert.deepEqual(await h.journal(), bytes); await h.eof(a);
 }));
 
-test('PUB-CATALOG: actual initialize/catalog disclose observation and unavailable acknowledgement without losing safety guidance', options, () => fixture(async h => {
+test('PUB-CATALOG: actual initialize/catalog disclose observation and acknowledgement without losing safety guidance', options, () => fixture(async h => {
   const a = await h.connect(); workflowInstructions(a.init, a.tools);
   const get = a.tools.find(t => t.name === 'get_approval').description;
   const retrievalInstructions = a.init.instructions.split('\n').filter(line => line.includes('get_approval')).join('\n');
@@ -179,7 +179,7 @@ test('PUB-CATALOG: actual initialize/catalog disclose observation and unavailabl
   }
   const ack = a.tools.find(t => t.name === 'acknowledge_approval').description;
   const unavailableAck = /acknowledg[^.\n]*(?:unavailable|not (?:yet )?(?:available|implemented|enabled)|cannot record)/i;
-  assert.match(a.init.instructions, unavailableAck); assert.match(ack, /unavailable|not (?:yet )?(?:available|implemented|enabled)|cannot record/i);
+  assert.doesNotMatch(a.init.instructions, unavailableAck); assert.doesNotMatch(ack, /unavailable|not (?:yet )?(?:available|implemented|enabled)|cannot record/i);
   assert.doesNotMatch(ack, /until[^.\n]*wait/i, 'A2 acknowledgement not contingent on waiting B');
   assert.match(a.init.instructions, /terminal[^\n]*acknowledg/i);
   assert.match(a.init.instructions, /(?:assistant|operator)[^\n]*(?:outcome|acknowledg)|acknowledg[^\n]*(?:assistant|operator)/i);

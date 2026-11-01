@@ -241,10 +241,10 @@ test('CANCEL-MCP: real created pending request resolves through original cancel 
   const foreign = await h.connect('foreign'); toolError(await foreign.call('cancel_approval', args(p)), 'NOT_FOUND'); await h.eof(foreign);
   for (const text of [a.init.instructions, a.tools.find(t => t.name === 'cancel_approval').description])
     assert.doesNotMatch(text, /\b(?:cancel_approval|cancellation) (?:is |remains )?(?:not enabled|unavailable|returns NOT_FOUND for every call)/i);
-  const bytes = await h.journal(); toolError(await a.call('acknowledge_approval', { ...args(p), decision_id: v.decision_id }), 'NOT_FOUND');
+  const bytes = await h.journal(); toolError(await a.call('acknowledge_approval', { ...args(p), decision_id: decision(999) }), 'DECISION_MISMATCH');
   toolError(await a.call('request_approval', { request_handle: p.request_handle, request_capability: p.request_capability,
     client_request_id: 'same', action: 'Question?', context: '' }), 'ENHANCEMENT_UNAVAILABLE');
-  for (const suffix of ['wait', 'returned', 'acknowledge']) assert.ok((await http(h, p, { suffix })).status >= 400);
+  for (const [suffix, status] of [['wait', 404], ['returned', 401], ['acknowledge', 400]]) assert.equal((await http(h, p, { suffix })).status, status);
   assert.deepEqual(await h.journal(), bytes); await h.eof(a);
 }));
 test('CANCEL-AUTH: public browser/Bearer/role/body precedence and uniform request denial without mutation', publicOptions, () => fixture(async h => {
