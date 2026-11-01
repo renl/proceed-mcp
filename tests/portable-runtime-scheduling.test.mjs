@@ -4,6 +4,7 @@ import test from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { open, readFile, writeFile, access } from 'node:fs/promises';
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -186,9 +187,11 @@ test('SCHED-RUNTIME-DRAIN: actual runtime FileHandle sync held; stop shares comp
     await bounded(() => entered.promise, 2500, 'runtime scheduled actual Journal sync');
     assert.equal(runtime.broker.snapshot().requests[0].resolution, 'pending');
     stop = runtime.stop(); pending = true; stop.then(() => { pending = false; });
+    assert.equal(runtime.ready, false, 'stop synchronously withdraws current health');
     assert.equal(runtime.stop(), stop); await delay(1100); assert.equal(pending, true); assert.deepEqual(order, []);
     await access(h.paths.brokerLockFile); release.resolve(); await stop;
     assert.deepEqual(order, ['server', 'broker', 'journal']); await assert.rejects(access(h.paths.brokerLockFile), { code: 'ENOENT' });
+    assert.equal(runtime.ready, false); assert.equal(runtime.stop(), stop, 'same promise after settlement');
   } finally { release.resolve(); await stop; fs.open = originalOpen; Server.prototype.close = originalClose; syncBuiltinESMExports(); }
 }));
 async function composition(work) {
@@ -196,11 +199,15 @@ async function composition(work) {
     const recovered = await Journal.open(h.paths.journalFile), seq = recovered.sequence; await recovered.close();
     const fh = await open(h.paths.journalFile, 'a'); let syncHook = async () => {}, writeHook = async () => {}, now = h.deadline - 1;
     const j = new Journal(h.paths.journalFile, { write: async (...args) => { await writeHook(); return fh.write(...args); }, sync: async () => { await syncHook(); await fh.sync(); }, close: () => fh.close() }, seq);
-    const b = createPortableBroker({ journal: j, owners: h.config.owners, port: h.config.broker.port, clock: () => now });
+    let clockFault = false, samples = 0, identities = 0;
+    const b = createPortableBroker({ journal: j, owners: h.config.owners, port: h.config.broker.port,
+      clock: () => { samples++; if (clockFault) throw new Error('private-clock-path'); return now; },
+      generateDecisionId: () => { identities++; return `dec_${'2'.repeat(32)}`; } });
     let schedule;
     try {
       await b.recover(); // Hooks are armed AFTER both ordinary recovery syncs.
       await work({ ...h, b, j, fh, due: () => { now = h.deadline; }, sync: fn => { syncHook = fn; }, write: fn => { writeHook = fn; },
+        faultClock: () => { clockFault = true; }, counts: () => ({ samples, identities }),
         schedule: async options => { const m = await import('../src/broker/expiry-schedule.js'); assert.equal(m.SWEEP_INTERVAL_MS, 1000);
           schedule = m.startExpirySchedule({ broker: b, ...options }); return schedule; } });
     } finally { await schedule?.stop(); await b.close(); await j.close(); await fh.close().catch(() => {}); }
@@ -238,7 +245,7 @@ test('SCHED-SINGLEFLIGHT: sweep queued behind held writer >2ticks, shared stop d
   const entered = deferred(), release = deferred(); let writes = 0, sweeps = 0, stopped = false;
   h.write(async () => { if (++writes === 1) { entered.resolve(); await release.promise; } });
   const writer = h.b.reserveHandle({ ownerId: 'a' });
-  const sweep = h.b.sweepExpired.bind(h.b); h.b.sweepExpired = () => { sweeps++; return sweep(); };
+  const sweep = h.b.scheduledSweep?.bind(h.b); h.b.scheduledSweep = () => { sweeps++; return sweep(); };
   let schedule, stopping;
   try { await bounded(() => entered.promise, 2000, 'actual writer blocks serialized admission'); h.due(); schedule = await h.schedule();
     await observe(() => sweeps === 1, 2500); await delay(2200);
@@ -256,7 +263,48 @@ for (const stage of ['append', 'sync']) test(`SCHED-FAIL-${stage}: actual handle
   await observe(() => callbacks.length === 1); await delay(2200); await schedule.stop();
   assert.deepEqual(logs, [[logLine]]); assert.deepEqual(callbacks, [[]]); assert.equal(writes, 1);
   assert.equal(h.b.snapshot().requests[0].resolution, 'pending'); await assert.rejects(h.b.status(), storage);
+  const fence = await h.b.status().catch(e => e); h.b.latchDeadlineFailure(); h.b.latchDeadlineFailure();
+  await assert.rejects(h.b.reserveHandle({ ownerId: 'a', sessionLabel: '' }), e => e === fence);
+  await assert.rejects(h.b.recover(), e => e === fence);
   if (stage === 'append') assert.deepEqual(await h.bytes(), before); else assert.notDeepEqual(await h.bytes(), before, 'sync rejection may leave complete frame');
+}));
+test('SCHED-ORDER: actual scheduled clock refusal precedes queued followers; admitted write drains', { timeout: 75000 }, () => composition(async h => {
+  const entered = deferred(), release = deferred(), invoked = deferred(); let writes = 0, followers = [];
+  const randomBytes = crypto.randomBytes; let allocations = 0;
+  crypto.randomBytes = (...args) => { allocations++; return randomBytes(...args); }; syncBuiltinESMExports();
+  h.sync(async () => { entered.resolve(); await release.promise; }); h.write(async () => { writes++; });
+  const held = h.b.reserveHandle({ ownerId: 'a' });
+  try {
+    await bounded(() => entered.promise, 2000, 'admitted actual sync');
+    assert.equal(allocations, 3, 'prearmed actual reservation identity observer');
+    assert.equal(typeof h.b.scheduledSweep, 'function');
+    const sweep = h.b.scheduledSweep.bind(h.b);
+    h.b.scheduledSweep = () => { const pending = sweep(); invoked.resolve(); return pending; };
+    const schedule = await h.schedule(); await bounded(() => invoked.promise, 2500, 'actual scheduled invocation');
+    h.faultClock(); const before = h.counts(), bytes = await h.bytes();
+    followers = [h.b.readRequest(binding), h.b.createRequest(creation), h.b.reserveHandle({ ownerId: 'a' }), h.b.status(), h.b.sweepExpired(), h.b.recover()];
+    const refused = Promise.all(followers.map(p => assert.rejects(p, storage))); refused.catch(() => {});
+    await Promise.resolve(); await Promise.resolve(); // createRequest's existing deferred admission precedes release.
+    release.resolve(); const result = await held; assert.match(result.request_handle, /^hdl_[0-9a-f]{32}$/);
+    await refused; await schedule.stop(); assert.equal(schedule.failed, true);
+    assert.deepEqual(h.counts(), { samples: before.samples + 1, identities: before.identities });
+    assert.equal(writes, 1); assert.deepEqual(await h.bytes(), bytes); assert.equal(closures(bytes).length, 0);
+    assert.equal(allocations, 3, 'no follower identity allocation');
+    assert.equal(h.b.snapshot().prepared.length, 2, 'only admitted write installed');
+    assert.equal(await h.b.readRequest({ ...binding, capability: 'cap_bad' }), null);
+    assert.equal(await h.b.createRequest({ ...creation, ownerId: 'foreign' }), null);
+    await assert.rejects(h.b.createRequest({ ...creation, action: '' }), e => e?.exitCode === 2);
+    await assert.rejects(h.b.reserveHandle({ ownerId: 'a', sessionLabel: '' }), e => e?.exitCode === 2);
+  } finally { release.resolve(); await Promise.allSettled([held, ...followers]); crypto.randomBytes = randomBytes; syncBuiltinESMExports(); }
+}));
+test('SCHED-HOOKS: synchronous throws are independently attempted once and cannot block stop', { timeout: 75000 }, () => composition(async h => {
+  const attempts = []; h.faultClock();
+  const schedule = await h.schedule({ onFailure: (...args) => { attempts.push(['failure', args]); throw new Error('private-hook'); },
+    logger: (...args) => { attempts.push(['logger', args]); throw new Error('private-logger'); } });
+  await observe(() => attempts.length === 2); assert.equal(schedule.failed, true);
+  const stop = schedule.stop(); assert.equal(schedule.stop(), stop); await bounded(() => stop, 2000, 'throwing hooks drain');
+  assert.equal(schedule.stop(), stop); await delay(1100);
+  assert.deepEqual(attempts, [['failure', []], ['logger', [logLine]]]); await assert.rejects(h.b.status(), storage);
 }));
 test('SCHED-LATCH: queued authorized work rechecks latch after held turn; authority/input denials remain', { timeout: 75000 }, () => composition(async h => {
   assert.equal(typeof h.b.latchDeadlineFailure, 'function');
