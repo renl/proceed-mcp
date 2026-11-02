@@ -1,5 +1,11 @@
 # Tasks
 
+## C2a-ii sent/failed receipt-core preparation
+- [x] P.C2AII-tests [Sole-source brief, exact receipt mapping and mandatory public remainder](slices/03c2a-ii-presentation-receipts.md). Baseline `9e68b2c05b3c246fe4b51b0000a2b151c4a2d3f1`, accepted allocation `789b7f3` present. Tests plus owned tasks/slice only, no production edit.
+- [ ] P.C2AII-review ONE combined journal/decomposition/test-artifact review, triggers1/4YES,2/3/5NO. Review-ready preparation, no implementation authority or C2 acceptance. Sole later source `src/broker/portable.js`, supplied210-240gross, actual whole packet hard600.
+- Final Windows Node24.22.2 new100:64PASS/36expectedRED, exit1, no skipped/cancelled/todo. Three calibrations PASS,61 unknown-op negatives not decoding proof. Missing receipt methods/ops block downstream assertions. Cheap gates and owned cleanup PASS separately, exact evidence/proof limits in slice.
+- Actual preparation234gross/3paths =191 tests +37 slice +6 tasks versus `9e68b2c`. Separate source210-240 gives444-474/4paths,126 upper-bound headroom under600, no whole-change exception. Lifecycle unchanged: same worktree/branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain, not cleanup-ready. Next action combined review. Preserve unknown/owner work. No network/human/C2/feature/release claim.
+
 ## C2a-i durable presentation allocation preparation
 - [x] P.C2AI-tests [Sole-source brief, exact allocation mapping and mandatory receipt/public remainder](slices/03c2a-i-presentation-allocation.md). Baseline `358d3da`, accepted C1 `add0bfc`/P2 `358d3da` present. Tests plus owned tasks/slice only, no production edits or presentation claim.
 - [x] P.C2AI-review ONE combined journal/decomposition/test-artifact review approved per verification authorization, triggers1/4YES,2/3/5NO. Unchanged contract not resubmitted. This is not C2 acceptance.
