@@ -6,9 +6,11 @@
 // closes only the authorized pending request, and acknowledgement records the
 // capability holder's receipt of the matching terminal outcome through the same
 // authority. The waiting tool creates or replays its request once per invocation
-// and keeps that one invocation waiting on the broker's bounded poll; no tool result
-// claims a Telegram presentation, a human decision or a returned write. Closing stdin
-// starts cleanup immediately: submitted work that has not begun never reaches the broker.
+// and keeps that one invocation waiting on the broker's bounded poll. Only an
+// error-free write callback of an original terminal wait result reports that one
+// successful write, and no tool result claims a Telegram presentation, a human
+// decision, caller receipt or acknowledgement. Closing stdin starts cleanup
+// immediately: submitted work that has not begun never reaches the broker.
 import { createInterface } from 'node:readline';
 import {
   CLIENT_REQUEST_ID_PATTERN,
@@ -78,7 +80,7 @@ const TOOLS = [
   {
     name: 'request_approval',
     description:
-      'Create or reuse the request of an authorized prepared handle exactly once and keep this call waiting for its resolution, expiry or cancellation; this call returns the recorded terminal representation as its own result and reports no returned write. No Telegram transport is implemented yet, so no question is presented to a human in this build.',
+      'Create or reuse the request of an authorized prepared handle exactly once and keep this call waiting for its resolution, expiry or cancellation; this call returns the recorded terminal representation as its own result, and after an error-free write of that result it reports that single successful write to the delivery ledger without waiting for the report reply. No Telegram transport is implemented yet, so no question is presented to a human in this build.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -139,19 +141,37 @@ export async function runMcpServer({
   stdin = process.stdin,
   stdout = process.stdout,
   execute,
+  onResultWritten,
   onInputClosed,
 } = {}) {
   // One serialized stdout writer: concurrent invocations may settle in any order,
-  // but no two frames can interleave inside one newline-delimited message.
+  // but no two frames can interleave inside one newline-delimited message. A frame
+  // settles with its own outcome instead of a rejection, so a failed write releases
+  // its queue ownership and the frames behind it still write in order, and only an
+  // error-free callback for a still-usable stream counts as a successful write.
+  const CLOSED_STREAM = new Error('stdout is not writable');
   let writing = Promise.resolve();
   const write = (message) => {
-    writing = writing.then(
+    const frame = writing.then(
       () =>
         new Promise((resolve) => {
-          stdout.write(`${JSON.stringify(message)}\n`, () => resolve());
+          let settled = false;
+          const settle = (error) => {
+            if (settled) return;
+            settled = true;
+            // A destroyed stream cannot have delivered these bytes, whatever its
+            // callback reports, so that is a failed write rather than evidence.
+            resolve(error ?? (stdout.destroyed === true ? CLOSED_STREAM : null));
+          };
+          try {
+            stdout.write(`${JSON.stringify(message)}\n`, settle);
+          } catch (error) {
+            settle(error);
+          }
         }),
     );
-    return writing;
+    writing = frame;
+    return frame;
   };
 
   const handle = async (message, signal) => {
@@ -232,11 +252,34 @@ export async function runMcpServer({
     return task;
   };
 
+  // Successful-write reporting is optional ordinary wiring: the executor decides
+  // whether this exact result is an eligible original wait outcome. A throw or a
+  // failed report never becomes a protocol error, a second frame or a late retry.
+  const admitReport = (entry, message, response) => {
+    if (typeof onResultWritten !== 'function' || entry === null) return null;
+    try {
+      const attempt = onResultWritten(message, response);
+      if (typeof attempt?.abort !== 'function' || typeof attempt.settled?.then !== 'function') {
+        return null;
+      }
+      return attempt;
+    } catch {
+      return null;
+    }
+  };
+
   const dispatch = async (message) => {
     const id = message?.id;
     const cancellable = typeof id === 'number' || typeof id === 'string';
-    const entry = cancellable ? { cancelled: false, controller: new AbortController() } : null;
+    const entry = cancellable
+      ? { cancelled: false, controller: new AbortController(), reportAbort: null }
+      : null;
     if (entry !== null) active.set(id, entry);
+    // Settling releases the invocation, so a later cancellation for this exact ID is
+    // an ordinary no-op rather than an adapter-wide abort.
+    const release = () => {
+      if (entry !== null && active.get(id) === entry) active.delete(id);
+    };
     let response;
     try {
       response = await handle(message, entry?.controller.signal);
@@ -247,15 +290,21 @@ export async function runMcpServer({
         id: message?.id ?? null,
         error: { code: -32603, message: 'internal error' },
       };
-    } finally {
-      // Settling removes the invocation, so a later cancellation for this exact ID
-      // is an ordinary no-op rather than an adapter-wide abort.
-      if (entry !== null && active.get(id) === entry) active.delete(id);
     }
-    // A cancelled invocation's frames are suppressed; every other invocation keeps
-    // its own outcome.
-    if (response === null || closed || entry?.cancelled === true) return;
-    await write(response);
+    // A cancelled invocation, and everything after EOF, writes nothing: neither a
+    // frame nor successful-write evidence may be produced from it.
+    if (response === null || closed || entry?.cancelled === true) return release();
+    const failed = await write(response);
+    // A callback error, a synchronous throw, a destroyed stream, a cancellation or
+    // EOF processed before the callback: all are failed or suppressed writes.
+    if (failed !== null || closed || entry?.cancelled === true) return release();
+    const attempt = admitReport(entry, message, response);
+    if (attempt === null) return release();
+    // An admitted report has its own tracked lifetime beyond this completed
+    // invocation, so the entry stays addressable until it settles: a later
+    // cancellation aborts that exact transport instead of admitting another report.
+    entry.reportAbort = attempt.abort;
+    attempt.settled.then(release, release);
   };
 
   // Protocol cancellation identifies one invocation by its own request ID and
@@ -265,6 +314,9 @@ export async function runMcpServer({
     if (entry === undefined) return;
     entry.cancelled = true;
     entry.controller.abort();
+    // A report admitted by this invocation's earlier write ends with it: the result
+    // frame may exist already, but its report may not continue or be repeated.
+    entry.reportAbort?.();
   };
 
   lines.on('line', (line) => {
@@ -295,6 +347,9 @@ export async function runMcpServer({
       for (const entry of active.values()) {
         entry.cancelled = true;
         entry.controller.abort();
+        // A report admitted before EOF is aborted with its invocation; the executor
+        // also fences its own transports under the same shutdown budget.
+        entry.reportAbort?.();
       }
       onInputClosed?.();
       Promise.allSettled([...inflight]).then(resolve);

@@ -304,6 +304,9 @@ async function runMcp(argv, { env }) {
   try {
     await runMcpServer({
       execute: executor.execute,
+      // The one successful-write report for an eligible original wait outcome: the
+      // executor selects eligibility, and the report never delays or repeats this result.
+      onResultWritten: (message, response) => executor.reportWritten(response.result),
       onInputClosed: () => {
         void executor.close();
       },

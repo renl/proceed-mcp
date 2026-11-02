@@ -61,6 +61,18 @@ function complete(value, isError) {
 
 const invalid = (message) => complete(envelope('INVALID_ARGUMENT', message, false), true);
 
+// The one private fact that makes a result eligible for successful-write reporting:
+// it is this invocation's own terminal wait outcome, and it names the registration
+// incarnation, request, decision and capability that produced it. The descriptor is
+// non-enumerable implementation structure, so no result channel serializes authority
+// and an idempotent terminal creation replay never becomes write evidence.
+const WRITTEN = Symbol('original wait result');
+
+function waited(result, report) {
+  Object.defineProperty(result, WRITTEN, { value: report, enumerable: false });
+  return result;
+}
+
 // Design section 3's tool-code list is closed: a broker value outside it is never
 // reported as a new private outcome, and a transport abort, an unreadable reply or
 // an unrecognized envelope is one redacted, retryable unavailable prerequisite.
@@ -539,7 +551,15 @@ export function createToolExecutor({ client, waitClient, registration }) {
       if (status === 200) {
         const terminal = requestView(sent.response.body, args.request_handle, requestId);
         if (terminal !== null && terminal.resolution !== 'pending') {
-          return complete(terminal, false);
+          // This original invitation's outcome names the incarnation that supplied it,
+          // so a later successful write reports only that captured authority.
+          return waited(complete(terminal, false), {
+            request_id: terminal.request_id,
+            decision_id: terminal.decision_id,
+            capability: args.request_capability,
+            authority: { ...authority },
+            admitted: false,
+          });
         }
         return unusable();
       }
@@ -548,6 +568,35 @@ export function createToolExecutor({ client, waitClient, registration }) {
       // reconnected or transferred waiter.
       return outcomeOf(sent.response);
     }
+  }
+
+  // At most one automatic report per eligible actual result write, using the ordinary
+  // tracked, abortable transport and only the captured incarnation. Nothing waits for
+  // its reply, a rejection or lost response is observed and discarded, and no report
+  // retries, refreshes authority, replays business work or fabricates ledger evidence.
+  function reportWritten(result) {
+    const report = result?.[WRITTEN];
+    if (report === undefined || report.admitted === true || ordinary.signal.aborted) return null;
+    report.admitted = true;
+    const controller = new AbortController();
+    const path = `/v1/requests/${encodeURIComponent(report.request_id)}/returned`;
+    const body = {
+      registration_id: report.authority.registration_id,
+      decision_id: report.decision_id,
+    };
+    const headers = {
+      [CAPABILITY_HEADER]: report.capability,
+      [REGISTRATION_HEADER]: report.authority.registration_secret,
+    };
+    return {
+      // Later cancellation of that invocation aborts this exact transport, which may
+      // still commit remotely: that is uncertainty, not rollback or a reason to retry.
+      abort: () => controller.abort(),
+      settled: transmit(client, 'POST', path, body, headers, controller.signal).then(
+        () => {},
+        () => {},
+      ),
+    };
   }
 
   // Admission precedes the first implemented operation and never the catalog:
@@ -591,6 +640,9 @@ export function createToolExecutor({ client, waitClient, registration }) {
 
   return {
     execute,
+    // The server calls this only after an error-free callback of the original result,
+    // so a failed, suppressed or replayed result can never report a write.
+    reportWritten,
     // Terminal and idempotent: fence new and queued ordinary exchanges first, then
     // let the binding release only its captured registration. Repeated close shares
     // this one shutdown instead of starting another budget.
