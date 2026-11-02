@@ -56,7 +56,20 @@ function orderedBatch(value) {
   return usable ? [...value].sort((left, right) => left.update_id - right.update_id) : null;
 }
 
-const codeOf = (error) => (typeof error?.code === 'string' ? error.code : 'UNKNOWN');
+// The client's closed classification vocabulary. A code outside this list is
+// reported as the private generic fallback, so an arbitrary code string can
+// never carry exception content into a log, a diagnostic or a stop reason.
+const CODES = new Set([
+  'TELEGRAM_UNAVAILABLE',
+  'TELEGRAM_TIMEOUT',
+  'TELEGRAM_RATE_LIMITED',
+  'TELEGRAM_REJECTED',
+  'TOKEN_REJECTED',
+  'TOKEN_MISSING',
+  'POLLER_CONFLICT',
+  'CANCELLED',
+]);
+const codeOf = (error) => (CODES.has(error?.code) ? error.code : 'UNKNOWN');
 const transient = (error) =>
   ['TELEGRAM_UNAVAILABLE', 'TELEGRAM_TIMEOUT', 'TELEGRAM_RATE_LIMITED'].includes(error?.code);
 const rejectedCredential = (error) => ['TOKEN_REJECTED', 'POLLER_CONFLICT'].includes(error?.code);
@@ -108,9 +121,13 @@ export function createPortableTelegramPoller({ broker, telegram, logger = () => 
       signal.addEventListener('abort', done, { once: true });
     });
 
+  // The rung is chosen by the count of failures already completed, so the last
+  // rung repeats for as long as the outage lasts. A platform retry_after replaces
+  // the rung only when it asks for a longer wait.
   const backoff = async (error) => {
-    attempt = Math.min(attempt + 1, LADDER.length - 1);
-    await pause(Math.max(retryAfterMs(error), LADDER[attempt - 1]));
+    const rung = LADDER[Math.min(attempt, LADDER.length - 1)];
+    attempt += 1;
+    await pause(Math.max(retryAfterMs(error), rung));
   };
 
   // One external UI operation. A committed update is never replayed because its
