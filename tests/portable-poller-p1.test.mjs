@@ -43,7 +43,8 @@ async function native(work, load = true) {
       sync = async () => { entered.release(); await release.promise; };
       return { entered: () => bounded(() => entered.promise, 1000, 'actual flush gate'), release: () => { sync = async () => {}; release.release(); } }; },
     start() { poller = factory({ broker: b, telegram, logger: (...a) => logs.push(a) }); poller.start(); poller.start(); },
-    async until(check) { await bounded(async () => { while (!await check()) await tick(); }, 1500, 'poller observable deadline'); } };
+    async until(check) { const deadline = performance.now() + 1500;
+      while (!await check()) { assert.ok(performance.now() < deadline, 'poller observable deadline'); await tick(); } } };
   let assertionError, cleanupError;
   try { await bounded(async () => { await phase('setup'); j = await Journal.open(path); await j.close(); file = await open(path, 'a');
     j = new Journal(path, { write: (...a) => file.write(...a), sync: async () => { await sync(); await file.sync(); }, close: () => file.close() }, 0);
@@ -153,6 +154,99 @@ test('C1P-BACKOFF-STOP: rate retry wait aborts without another platform call', o
   h.queue.push(new TelegramError('TELEGRAM_RATE_LIMITED', 'sensitive', { retryable: true, retryAfter: 30 })); h.start();
   await tick(); await tick(); await h.poller.stop(); assert.equal(h.calls.length, 1); assert.equal(h.b.telegramCursor(), null);
 }));
+// TEST ONLY: Node's native mock clock controls global setTimeout, not production
+// timing knobs. This small broker double isolates scheduling, NOT durability.
+async function clocked(t, work) {
+  const { createPortableTelegramPoller } = await import('../src/telegram/portable-poller.js');
+  const queue = [], offsets = [], logs = []; let cursor = 7, writes = 0, signal;
+  const broker = { telegramCursor: () => cursor, pairing: () => null,
+    completePairing: async () => { throw new Error('timing fixture must not pair'); },
+    advanceCursor: async id => { cursor = id; writes++; } };
+  const telegram = { async updates(offset, options) { offsets.push(offset); signal = options.signal;
+    if (!queue.length) return waitAbort(signal);
+    const value = queue.shift(); if (value instanceof Error) throw value; return value; } };
+  const poller = createPortableTelegramPoller({ broker, telegram, logger: (...args) => logs.push(args) });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const settle = async () => { await tick(); await tick(); };
+  const h = { queue, offsets, poller, settle, get writes() { return writes; }, get signal() { return signal; },
+    async advance(ms) { t.mock.timers.tick(ms); await settle(); } };
+  try { await work(h); } finally {
+    try { await poller.stop(); } finally { t.mock.timers.reset(); }
+    assert.ok(!JSON.stringify([logs, poller.diagnostic()]).includes(privateMarker));
+  }
+}
+const unavailable = () => new TelegramError('TELEGRAM_UNAVAILABLE', privateMarker, { retryable: true });
+test('C1P-RETRY-LADDER: each rung boundary including 30 and repeated 30', opts, t => clocked(t, async h => {
+  h.queue.push(...Array.from({ length: 8 }, (_, i) => new TelegramError(recognized[i % 3], privateMarker, { retryable: true })));
+  h.poller.start(); await h.settle();
+  for (const [index, ms] of [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000].entries()) {
+    assert.equal(h.offsets.length, index + 1);
+    await h.advance(ms - 1); assert.equal(h.offsets.length, index + 1, `no early retry at rung ${index + 1}`);
+    await h.advance(1); assert.equal(h.offsets.length, index + 2, `retry at rung ${index + 1}`);
+  }
+  assert.deepEqual(h.offsets, Array(9).fill(8)); assert.equal(h.writes, 0);
+  await h.poller.stop(); assert.equal(h.signal.aborted, true);
+}));
+test('C1P-RETRY-RESET: empty and committed valid batches reset, malformed batch does not', opts, t => clocked(t, async h => {
+  h.queue.push(unavailable(), null, [], unavailable(), [{ update_id: 9 }], unavailable());
+  h.poller.start(); await h.settle(); await h.advance(1000);
+  await h.advance(1999); assert.equal(h.offsets.length, 2);
+  await h.advance(1); assert.equal(h.offsets.length, 4);
+  await h.advance(999); assert.equal(h.offsets.length, 4);
+  await h.advance(1); assert.equal(h.offsets.length, 6); assert.equal(h.writes, 1);
+  await h.advance(999); assert.equal(h.offsets.length, 6);
+  await h.advance(1); assert.deepEqual(h.offsets, [8, 8, 8, 8, 8, 10, 10]);
+}));
+test('C1P-RETRY-RATE-ABORT: retry_after lower bound, next rung, abort cancels pending wait', opts, t => clocked(t, async h => {
+  h.queue.push(new TelegramError('TELEGRAM_RATE_LIMITED', privateMarker, { retryAfter: 45 }), unavailable());
+  h.poller.start(); await h.settle(); await h.advance(44999); assert.equal(h.offsets.length, 1);
+  await h.advance(1); assert.equal(h.offsets.length, 2);
+  await h.advance(1999); assert.equal(h.offsets.length, 2);
+  const stop = h.poller.stop(); assert.equal(h.poller.stop(), stop); await stop;
+  await h.advance(100000); assert.equal(h.offsets.length, 2); assert.equal(h.writes, 0);
+}));
+const recognized = ['TELEGRAM_UNAVAILABLE', 'TELEGRAM_TIMEOUT', 'TELEGRAM_RATE_LIMITED',
+  'TOKEN_REJECTED', 'POLLER_CONFLICT', 'TELEGRAM_REJECTED'];
+const privateMarker = 'SYNTHETIC_SECRET_ACTOR_71';
+const faultCases = [...recognized, 'CANCELLED', `${privateMarker}\nforged diagnostic`, '', { nested: privateMarker }, undefined];
+for (const path of ['poll', 'handler', 'sendMessage', 'answerCallbackQuery']) {
+  for (const [index, faultCode] of faultCases.entries()) {
+    if (path === 'poll' && (recognized.slice(0, 3).includes(faultCode) || faultCode === 'CANCELLED')) continue;
+    test(`C1P-REDACTION-${path}-${index}: classified behavior without exception disclosure`, opts, () => native(async h => {
+      const error = Object.assign(new Error(`${privateMarker} message ${code}`, { cause: new Error(`${privateMarker} cause`) }), { code: faultCode });
+      const fatalUI = ['TOKEN_REJECTED', 'POLLER_CONFLICT'].includes(faultCode);
+      if (path === 'poll') h.queue.push(error);
+      else {
+        if (path === 'handler') h.b.completePairing = async () => { throw error; };
+        else h.telegram[path] = async () => { throw error; };
+        h.queue.push([path === 'answerCallbackQuery' ? { update_id: 7, callback_query: { id: 'opaque' } } : update(7)]);
+      }
+      h.start();
+      await h.until(() => path === 'poll' || path === 'handler' || fatalUI
+        ? h.logs.length > 0 : h.calls.filter(c => c[0] === 'poll').length === 2);
+      await h.poller.stop();
+      const committed = path === 'sendMessage' || path === 'answerCallbackQuery';
+      assert.equal(h.b.telegramCursor(), committed ? 7 : null);
+      assert.equal(h.b.pairing() !== null, path === 'sendMessage');
+      assert.equal((await h.rows()).length, committed ? 2 : 1);
+      assert.deepEqual(h.calls.filter(c => c[0] === 'poll').map(c => c[1]), committed && !fatalUI ? [null, 8] : [null]);
+      assert.ok(h.logs.length); assert.ok(h.logs.every(args => args.length === 1 && typeof args[0] === 'string'));
+      const observed = JSON.stringify([h.logs, h.poller.diagnostic()]);
+      assert.ok(!observed.includes(privateMarker) && !observed.includes(code), 'code/message/cause never enter diagnostics');
+      if (path === 'handler') assert.deepEqual(h.logs, [['Telegram update processing stopped; stop and restart serve']]);
+      else if (recognized.includes(faultCode) || faultCode === 'CANCELLED') {
+        assert.ok(h.logs.some(args => args[0].includes(faultCode)), 'recognized diagnostic retained');
+        if (path === 'poll' || fatalUI) assert.equal(h.poller.diagnostic(), faultCode);
+      }
+      else {
+        // Existing private generic fallback, not a new public error code.
+        assert.ok(h.logs.some(args => args[0].includes(': UNKNOWN')), 'unknown codes use fixed generic fallback');
+        if (path === 'poll') assert.equal(h.poller.diagnostic(), 'UNKNOWN');
+      }
+      if (committed && !fatalUI) assert.equal(h.poller.diagnostic(), null);
+    }));
+  }
+}
 for (const code of ['TOKEN_REJECTED', 'POLLER_CONFLICT', 'TELEGRAM_REJECTED']) test(`C1P-FATAL-${code}: terminal consumption diagnostic without local state mutation`, opts, () => native(async h => {
   h.queue.push(new TelegramError(code, 'sensitive actor token code')); h.start(); await h.until(() => h.poller.diagnostic());
   await tick(); assert.equal(h.calls.length, 1); assert.equal(h.b.telegramCursor(), null); assert.equal((await h.rows()).length, 1);
