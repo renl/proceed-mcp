@@ -19,6 +19,7 @@ import { readLocalCredential } from '../state/credentials.js';
 import { readOwnerCredential } from '../state/owner-credentials.js';
 import { resolveStateDir, statePaths } from '../state/paths.js';
 import { addOrigin, addOwner, initializeState, loadPortableConfiguration } from '../state/store.js';
+import { PAIRING_CODE_PATTERN, isPlainObject, isUtcTimestamp } from '../util/values.js';
 import { parseArguments, requireOptions } from './args.js';
 
 const USAGE = [
@@ -40,10 +41,11 @@ const USAGE = [
   'with no path, query, fragment or credentials.',
   '',
   'The Telegram token is read from the environment, never from state or arguments.',
-  'This checkpoint runs portable schema 2 setup: init, owner add, serve, mcp and status.',
+  'This checkpoint runs portable schema 2 setup: init, owner add, pair, serve, mcp and status.',
   '`mcp` prepares real request authority through the running broker; request_approval creates',
   'or replays one request and waits for its resolution; no Telegram transport exists yet.',
-  '`pair` and `retry` report their operation as unavailable; `origin add` refuses schema 2 state.',
+  '`pair` obtains a one-use five-minute pairing code from the running broker; `retry`',
+  'reports its operation as unavailable; `origin add` refuses schema 2 state.',
   '`doctor` is a documented target that this build does not implement.',
   '',
   'Exit codes: 0 completed, 2 invalid arguments or configuration, 3 unavailable prerequisite,',
@@ -106,6 +108,21 @@ function controlClient(paths, config) {
   );
 }
 
+// A 201 is the only pairing success a consumer may act on, and its two fields are
+// revalidated before anything reaches the operator: a malformed success is an
+// unavailable prerequisite, never a code or deadline to guess around.
+function pairingChallengeFrom(response) {
+  if (response.status !== 201) throw failureFromResponse(response);
+  const { code, expires_at: expiresAt } = isPlainObject(response.body) ? response.body : {};
+  if (typeof code !== 'string' || !PAIRING_CODE_PATTERN.test(code) || !isUtcTimestamp(expiresAt)) {
+    throw blockedPrerequisite(
+      'the broker returned a malformed pairing challenge; no pairing code was issued',
+      'PAIRING_CHALLENGE_INVALID',
+    );
+  }
+  return { code, expiresAt };
+}
+
 async function runInit(argv, { stdout, env }) {
   const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir'] });
   noPositionals(positionals, 'init');
@@ -126,8 +143,9 @@ async function runInit(argv, { stdout, env }) {
       '     request_approval creates that one request and waits for its resolution, expiry or',
       '     cancellation; no Telegram transport exists yet, so no human decision is delivered)',
       '  4. proceed-mcp serve starts the loopback broker and "status" reports it.',
-      '     Pairing, retry and request delivery are later checkpoints: "pair" and "retry"',
-      '     report that their operation is unavailable rather than pretending to succeed.',
+      '     "pair" obtains a one-use code from that running broker for private-chat pairing;',
+      '     retry and request delivery are later checkpoints that report their operation as',
+      '     unavailable rather than pretending to succeed.',
       '',
     ].join('\n'),
   );
@@ -237,7 +255,7 @@ async function runServe(argv, { stdout, stderr, env }) {
   return EXIT_CODE.OK;
 }
 
-async function runPair(argv, { env }) {
+async function runPair(argv, { stdout, env }) {
   const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir'] });
   noPositionals(positionals, 'pair');
 
@@ -251,7 +269,10 @@ async function runPair(argv, { env }) {
   } catch (error) {
     throw asCliFailure(error);
   }
-  unavailableResponse(response);
+  // The challenge is the operator's own new setup material, written only after the
+  // broker's committed response: no partial code and no paired-success claim.
+  const challenge = pairingChallengeFrom(response);
+  stdout.write(`Pairing code: ${challenge.code}\nExpires at: ${challenge.expiresAt}\n`);
   return EXIT_CODE.OK;
 }
 

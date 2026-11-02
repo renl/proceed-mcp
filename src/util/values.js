@@ -61,6 +61,30 @@ export function parseTimestamp(text) {
   return Number.isFinite(value) ? value : null;
 }
 
+// A stored or broker-issued instant is admitted only in the UTC RFC 3339 spelling
+// the journal's own decoder accepts; a permissive date parser would accept and
+// silently normalize an instant (a rolled-over day, a leap second, a non-UTC
+// offset) that the durable record would never contain.
+const UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|\+00:00)$/;
+
+export function isUtcTimestamp(text) {
+  if (typeof text !== 'string') return false;
+  const match = UTC_TIMESTAMP.exec(text);
+  if (match === null) return false;
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, 0);
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day &&
+    date.getUTCHours() === hour &&
+    date.getUTCMinutes() === minute &&
+    date.getUTCSeconds() === second
+  );
+}
+
 export function sha256Hex(value) {
   return createHash('sha256').update(value).digest('hex');
 }

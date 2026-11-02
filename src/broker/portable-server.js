@@ -14,9 +14,10 @@
 // returned additionally requires the live registration it renews only after the
 // whole operation succeeds. A wait holds one request's attachment across a bounded
 // turnover without holding the serialized turn, and only an attached settlement of
-// the still-current registration renews it. Pairing and retry stay honest temporary
-// unavailability (design section 3). Adapter registration is an ephemeral
-// reachability lease and never touches approval state.
+// the still-current registration renews it. Pairing issuance is the one control
+// operation this cut enables; retry stays honest temporary unavailability (design
+// section 3). Adapter registration is an ephemeral reachability lease and never
+// touches approval state.
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import {
@@ -35,7 +36,6 @@ import { createRegistrationRegistry } from './registration.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
 
-const PAIRING_UNAVAILABLE = 'pairing is not implemented in this setup checkpoint';
 const RETRY_UNAVAILABLE = 'request retry is not implemented in this setup checkpoint';
 const REQUEST_CAPABILITY_HEADER = 'x-proceed-request-capability';
 const REGISTRATION_HEADER = 'x-proceed-registration';
@@ -488,10 +488,15 @@ export function createPortableServer({
       }
     }
 
+    // Pairing issuance is a control setup operation, not an approval outcome: the
+    // body is settled before the serialized turn, and the challenge is returned
+    // only after its committed append, so no code exists ahead of durable history.
     if (request.method === 'POST' && pathname === '/v1/pairing') {
       if (!requireRole(response, principal, 'control')) return;
-      await readJsonBody(request);
-      throw unavailable(PAIRING_UNAVAILABLE, 'ENHANCEMENT_UNAVAILABLE', { retryable: false });
+      const body = await readJsonBody(request);
+      requireEmptyBody(body);
+      send(response, 201, await broker.pairingChallenge());
+      return;
     }
 
     if (request.method === 'POST' && requestRoute && segments[3] === 'retry') {
