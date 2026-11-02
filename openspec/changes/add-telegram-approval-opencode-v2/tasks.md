@@ -1,5 +1,12 @@
 # Tasks
 
+## C2a-i durable presentation allocation preparation
+- [x] P.C2AI-tests [Sole-source brief, exact allocation mapping and mandatory receipt/public remainder](slices/03c2a-i-presentation-allocation.md). Baseline `358d3da`, accepted C1 `add0bfc`/P2 `358d3da` present. Tests plus owned tasks/slice only, no production edits or presentation claim.
+- [ ] P.C2AI-review ONE combined journal/decomposition/test-artifact review, triggers1/4YES,2/3/5NO. Review readiness is not implementation authority or behavioral acceptance.
+- [ ] P.C2AI-source Separately authorize ONLY `src/broker/portable.js`, source forecast190-215gross. Retain creation/replay snapshot privately, exact prepare/work bindings and durable allocation. Full actual preparation+source hard600, no implicit whole-change exception.
+- [ ] P.C2AI-verify Full new native suite plus affected creation/replay/expiry/fence/native-wait checks after source. Mapped-message suppression awaits actual C2a-ii receipt writer. Public worker and terminal edit proofs remain mandatory before C2 acceptance.
+- Lifecycle: same worktree/branch/change `add-telegram-approval-opencode-v2`, path `.worktree/add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action combined review. Owned run cleanup only, no unknown cleanup or worktree removal. Evidence/charges in linked slice. No Telegram/human/feature/release acceptance.
+
 ## C1-P2 public proof preparation
 - [x] P.C1P2-tests Controlled public proof prepared and executed: unfiltered32/32PASS, separate cleanupPASS. Actual-client lifecycle/abort/drain plus raw-batch/admission/fault breadth, unchanged native-rule reuse and proof limits in linked slice. Source remains accepted `add0bfc` at baseline `e3d16735`. No production edits or real Telegram/human acceptance.
 - [ ] P.C1P2-review [Public lifecycle, abort/drain packet and exact mandatory remainder](slices/03c1-p2-public-proof.md). Baseline `e3d16735`, tests/helpers/owned docs only. One combined owning review pending. No C1 acceptance or partial promotion.
