@@ -42,6 +42,17 @@
 // outcome, repeats never append, and a returned report never downgrades a
 // confirmation. Both are ledger assertions, never proof of a written response.
 //
+// Presentation allocation is the first durable Telegram fact about a request: one
+// callback token, allocated separately from creation and bound permanently to the
+// request and to the private pairing snapshot that creation copied. Allocation
+// applies the same serialized deadline rule first, so a due request closes
+// instead of being sent and a terminal one is never allocated. No token exists
+// before its own flush, a retry or reopen reuses the committed one, and recovery
+// replays an allocation only onto a pending request that has none while keeping
+// every token unique across the whole journal. The copied work view derives its
+// sends from that committed state, never from a caller's request or a fresh
+// pairing read.
+//
 // A wait is an attached, non-durable observation of one request: admission,
 // duplicate refusal and the deadline check share the serialized turn, but the
 // turn is released before a future outcome is awaited. Every terminal writer
@@ -71,6 +82,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { conflict, invalidArgument, storageFailure, unavailable } from '../errors.js';
 import { MAX_TELEGRAM_TEXT, measurePortablePresentation } from '../telegram/portable-render.js';
 import {
+  CALLBACK_TOKEN_PATTERN,
   CLIENT_REQUEST_ID_PATTERN,
   DECISION_ID_PATTERN,
   PAIRING_CODE_PATTERN,
@@ -78,6 +90,7 @@ import {
   REQUEST_HANDLE_PATTERN,
   REQUEST_ID_PATTERN,
   isPlainObject,
+  randomCallbackToken,
   randomDecisionId,
   randomPairingCode,
   randomRequestCapability,
@@ -101,6 +114,7 @@ const EXPIRE_OP = 'request.expire';
 const CANCEL_OP = 'request.cancel';
 const ACKNOWLEDGE_OP = 'request.acknowledge';
 const RETURNED_OP = 'request.returned';
+const PREPARE_OP = 'telegram.presentation.prepare';
 const PAIRING_TTL_SECONDS = 300n;
 // At most five verification attempts per sender in any rolling 60-second
 // interval. The limiter is process-local, so a restart resets it and no failure
@@ -143,6 +157,9 @@ const CREATE_FIELDS = [
   'pairing_snapshot',
   'request_handle',
 ];
+// The first durable presentation record: one token per request, allocated once
+// and never rotated, plus the instant it was written.
+const PREPARE_FIELDS = ['callback_token', 'op', 'prepared_at', 'request_id'];
 // Expiry and cancellation persist the same five closure fields: one mutation
 // establishes the terminal resolution, its identity and its initial delivery.
 const CLOSURE_FIELDS = ['decision_id', 'delivery_state', 'op', 'request_id', 'resolved_at'];
@@ -573,6 +590,29 @@ function readCreate(mutation) {
   };
 }
 
+// An allocation decodes from exactly its four persisted fields: the request it
+// belongs to, the one token bound to that request, and the instant of allocation.
+// Everything else about the allocation is derived from the request's own history.
+function readPresentation(mutation) {
+  exactFields(mutation, PREPARE_FIELDS);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string') throw integrity(`${PREPARE_OP} needs a text request id`);
+  if (!REQUEST_ID_PATTERN.test(requestId))
+    throw integrity(`${PREPARE_OP} has a malformed request id`);
+  const callbackToken = mutation.callback_token;
+  if (typeof callbackToken !== 'string')
+    throw integrity(`${PREPARE_OP} needs a text callback token`);
+  if (!CALLBACK_TOKEN_PATTERN.test(callbackToken)) {
+    throw integrity(`${PREPARE_OP} has a malformed callback token`);
+  }
+  const preparedAt = readInstant(mutation.prepared_at);
+  if (preparedAt === null) throw integrity(`${PREPARE_OP} has a malformed preparation time`);
+  return {
+    kind: 'presentation',
+    record: { request_id: requestId, callback_token: callbackToken, preparedAt },
+  };
+}
+
 // A closure decodes from exactly its five persisted fields: only the window and
 // the installed resolution differ between expiry and cancellation.
 function readClosure(mutation, op) {
@@ -680,6 +720,8 @@ function readMutation(mutation) {
       return readEvidence(mutation, 'acknowledge');
     case RETURNED_OP:
       return readEvidence(mutation, 'returned');
+    case PREPARE_OP:
+      return readPresentation(mutation);
     default:
       throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
   }
@@ -810,12 +852,44 @@ function stageCreate(record, staged, pairing, reservedNow) {
     telegram_state: 'pending',
     delivery_state: 'not_applicable',
     delivery_error: null,
+    // Private to this module: creation copied the committed pairing without
+    // normalization, so presentation binds to that frozen chat rather than a
+    // later pairing read. The token starts unallocated.
+    pairing_snapshot: { ...record.snapshot },
+    callback_token: null,
   };
   if (measurePortablePresentation(requestView(request)).worst.length > MAX_TELEGRAM_TEXT) {
     throw integrity(`${CREATE_OP} cannot be presented within ${MAX_TELEGRAM_TEXT} characters`);
   }
   staged.created.add(request.request_handle);
   staged.requests.set(request.request_id, request);
+}
+
+// An allocation is its own mutation, applied in array order against staged state:
+// it targets one pending request that has no token yet, is journal-wide unique,
+// and lies inside that request's own lifetime. A second allocation for the same
+// request, a reused token or a terminal/early/late target is invalid history, not
+// an idempotent repeat.
+function stagePresentation(record, staged) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${PREPARE_OP} names no committed request`);
+  if (request.resolution !== 'pending') {
+    throw integrity(`${PREPARE_OP} targets an already resolved request`);
+  }
+  if (request.callback_token !== null) {
+    throw integrity(`${PREPARE_OP} allocates a second token for ${record.request_id}`);
+  }
+  if (staged.tokens.has(record.callback_token)) {
+    throw integrity(`callback token for ${record.request_id} is reused`);
+  }
+  if (compareInstants(record.preparedAt, request.createdAt) < 0) {
+    throw integrity(`${PREPARE_OP} precedes its request creation`);
+  }
+  if (compareInstants(record.preparedAt, request.expiresAt) >= 0) {
+    throw integrity(`${PREPARE_OP} must precede the request deadline`);
+  }
+  staged.tokens.add(record.callback_token);
+  request.callback_token = record.callback_token;
 }
 
 // A closure resolves one pending request and spends its decision identity once
@@ -898,6 +972,8 @@ class PortableBroker {
 
   #generatePairingCode;
 
+  #generateCallbackToken;
+
   #startedAt;
 
   #byHandle = new Map();
@@ -917,6 +993,8 @@ class PortableBroker {
   #requests = new Map();
 
   #decisions = new Set();
+
+  #tokens = new Set();
 
   #queue = Promise.resolve();
 
@@ -942,6 +1020,7 @@ class PortableBroker {
     logger,
     generateDecisionId,
     generatePairingCode,
+    generateCallbackToken,
     waitTurnoverMs,
   }) {
     this.#journal = journal;
@@ -962,6 +1041,7 @@ class PortableBroker {
     this.#logger = logger;
     this.#generateDecisionId = generateDecisionId;
     this.#generatePairingCode = generatePairingCode;
+    this.#generateCallbackToken = generateCallbackToken;
     this.#startedAt = utcTimestamp(clock());
     // The turnover is a private observation window, never public configuration.
     this.#waiters = createWaiterRegistry({ timeoutMs: waitTurnoverMs });
@@ -1009,6 +1089,7 @@ class PortableBroker {
       requests: new Map(),
       created: new Set(),
       decisions: new Set(),
+      tokens: new Set(),
     };
     const challenges = new Map();
     let pairing = null;
@@ -1027,7 +1108,8 @@ class PortableBroker {
         else if (record.kind === 'cancel') stageClosure(record.record, staged, 'cancelled');
         else if (record.kind === 'acknowledge' || record.kind === 'returned') {
           stageEvidence(record, staged);
-        } else if (record.kind === 'cursor') cursorRecords.push(record);
+        } else if (record.kind === 'presentation') stagePresentation(record.record, staged);
+        else if (record.kind === 'cursor') cursorRecords.push(record);
         else pairingRecords.push(record);
       }
       pairing = applyPairing(pairingRecords, challenges, pairing);
@@ -1038,6 +1120,7 @@ class PortableBroker {
     this.#byVerifier = staged.byVerifier;
     this.#requests = staged.requests;
     this.#decisions = staged.decisions;
+    this.#tokens = staged.tokens;
     this.#pairing = pairing;
     // Challenge state stays retained after the staging maps are installed: a
     // later issuance cannot reuse a hash that history already committed, and a
@@ -1167,6 +1250,47 @@ class PortableBroker {
       }
       return this.#enqueue(() => this.#create(reservation, fields));
     });
+  }
+
+  // Allocates one durable presentation token for a committed request (design
+  // section 5, C2a-i). A malformed, unknown or unused-reservation id is the same
+  // non-disclosing null as an absent one, and no argument matrix is invented for
+  // this private seam. Authority is the caller's in-process position, exactly as
+  // for the other private observers; this enables no public route.
+  preparePresentation(input = {}) {
+    return Promise.resolve().then(() => {
+      const requestId = isPlainObject(input) ? input.requestId : undefined;
+      if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) return null;
+      const refusal = this.#admissionRefusal();
+      if (refusal !== null) throw refusal;
+      if (!this.#recovered) {
+        throw storageFailure(
+          'the portable broker has not recovered the journal',
+          'STORAGE_FAILURE',
+        );
+      }
+      return this.#enqueue(() => this.#prepare(requestId));
+    });
+  }
+
+  // Synchronous copied view of the committed presentation work (design section 5,
+  // C2a-i): one send per pending request, carrying its frozen snapshot chat, its
+  // current nullable token and a fresh request copy. It samples no clock, applies
+  // no expiry and still has no mapping, failure or edit writer, so terminal
+  // requests contribute nothing and edits stay empty at this cut.
+  presentationWork() {
+    return {
+      sends: [...this.#requests.values()]
+        .filter((request) => request.resolution === 'pending')
+        .map((request) => ({
+          request_id: request.request_id,
+          chat_id: request.pairing_snapshot.chat_id,
+          callback_token: request.callback_token,
+          request: requestView(request),
+          last_failure_code: null,
+        })),
+      edits: [],
+    };
   }
 
   // Redacted view: the capability verifier and pairing snapshot stay
@@ -1653,6 +1777,10 @@ class PortableBroker {
       telegram_state: 'pending',
       delivery_state: 'not_applicable',
       delivery_error: null,
+      // The same private binding the replay decoder installs: the committed
+      // pairing copied at creation, and a token no send has allocated yet.
+      pairing_snapshot: { ...this.#pairing },
+      callback_token: null,
     };
     // The complete plain-text presentation is measured before the append, so a
     // request that could not be shown within the platform limit is refused while
@@ -1678,6 +1806,70 @@ class PortableBroker {
     this.#requests.set(request.request_id, request);
     this.#logger('portable.request.created', { request_id: request.request_id });
     return { created: true, request: requestView(request) };
+  }
+
+  // One serialized allocation turn (design section 5, C2a-i). The target is
+  // re-read from installed state, its deadline is applied first through the
+  // existing closure/wake path, and only a still-pending request with no token is
+  // allocated. The one sampled instant bounds the record, the token is validated
+  // and checked against every committed allocation before the append, and nothing
+  // is installed until that frame has flushed, so a caller never sees a token that
+  // was not committed and a retry reuses the one already there.
+  async #prepare(requestId) {
+    const request = this.#requests.get(requestId);
+    if (request === undefined || request.resolution !== 'pending') return null;
+    const sampled = turnTime(this.#clock, 'preparing a presentation', 'presentation preparation');
+    if (isDue(request, sampled.milliseconds)) {
+      await this.#commitExpiry(sampled.milliseconds, [request]);
+      return null;
+    }
+    if (request.callback_token !== null) return this.#preparedView(request);
+    if (typeof request.pairing_snapshot?.chat_id !== 'string') return null;
+    if (compareInstants(sampled.instant, request.createdAt) < 0) {
+      throw storageFailure(`${PREPARE_OP} would precede its request creation`, 'STORAGE_FAILURE');
+    }
+    let token;
+    try {
+      token = this.#generateCallbackToken();
+    } catch {
+      // The cause is dropped: a broken generator may have put the generated value
+      // in its message, and a refusal must not disclose it.
+      throw storageFailure('the callback token generator failed', 'STORAGE_FAILURE');
+    }
+    if (typeof token !== 'string' || !CALLBACK_TOKEN_PATTERN.test(token)) {
+      throw storageFailure(
+        'the callback token generator produced an invalid token',
+        'STORAGE_FAILURE',
+      );
+    }
+    if (this.#tokens.has(token)) {
+      throw storageFailure(
+        'the callback token is already used by a committed allocation',
+        'JOURNAL_IDENTIFIER_COLLISION',
+      );
+    }
+    await this.#append([
+      {
+        op: PREPARE_OP,
+        request_id: request.request_id,
+        callback_token: token,
+        prepared_at: sampled.text,
+      },
+    ]);
+    request.callback_token = token;
+    this.#tokens.add(token);
+    this.#logger('portable.presentation.prepared', { request_id: request.request_id });
+    return this.#preparedView(request);
+  }
+
+  // The copied allocation result: the frozen snapshot chat, the committed token
+  // and an independent common representation.
+  #preparedView(request) {
+    return {
+      chat_id: request.pairing_snapshot.chat_id,
+      callback_token: request.callback_token,
+      request: requestView(request),
+    };
   }
 
   // Closes at most this one target and reports the committed representation: a
@@ -1967,6 +2159,7 @@ export function createPortableBroker({
   logger = () => {},
   generateDecisionId = randomDecisionId,
   generatePairingCode = randomPairingCode,
+  generateCallbackToken = randomCallbackToken,
   waitTurnoverMs,
 } = {}) {
   if (typeof journal?.append !== 'function' || typeof journal?.recover !== 'function') {
@@ -1986,6 +2179,7 @@ export function createPortableBroker({
     logger,
     generateDecisionId,
     generatePairingCode,
+    generateCallbackToken,
     waitTurnoverMs,
   });
 }
