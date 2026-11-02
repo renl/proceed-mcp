@@ -49,6 +49,14 @@
 // the committed closure before waking, and never treats a wake, a turnover or a
 // detached transport as receipt.
 //
+// Pairing consumption is the single writer for a first pairing (design sections
+// 4, 5 and 7). One serialized turn rechecks the committed update cursor, the
+// lossless sender/chat strings, a per-sender rolling attempt window, the absence
+// of a pairing and one known unconsumed challenge, then samples the single
+// instant that both validates `created_at <= now < expires_at` and stamps the
+// persisted consume/set/cursor frame. Success installs nothing before that frame
+// has flushed, and a canonical newer refusal commits only its own cursor.
+//
 // The journal stays caller-owned. This module never opens, replaces or closes
 // it, and no reservation result becomes visible before its serialized append
 // has completed the journal's own file flush.
@@ -94,6 +102,11 @@ const CANCEL_OP = 'request.cancel';
 const ACKNOWLEDGE_OP = 'request.acknowledge';
 const RETURNED_OP = 'request.returned';
 const PAIRING_TTL_SECONDS = 300n;
+// At most five verification attempts per sender in any rolling 60-second
+// interval. The limiter is process-local, so a restart resets it and no failure
+// counter, plaintext code or challenge detail is ever journaled.
+const PAIRING_ATTEMPT_LIMIT = 5;
+const PAIRING_ATTEMPT_WINDOW_MS = 60000;
 const MAX_LABEL_SCALARS = 128;
 const MIN_DURATION_SECONDS = 60;
 const MAX_DURATION_SECONDS = 86400;
@@ -719,6 +732,13 @@ function applyCursor(records, cursor) {
   return next;
 }
 
+// A refusal is exactly `{paired:false,reason}` and a successful consumption is
+// exactly `{paired:true}`: neither carries a challenge, identity, cursor or
+// clock detail, so no refusal can become a disclosure.
+function pairingRefusal(reason) {
+  return { paired: false, reason };
+}
+
 // A reservation is installed immediately for uniqueness, but a creation naming
 // one reserved in its own transaction still fails in every array order.
 function stageReservation(record, staged, reservedNow) {
@@ -888,7 +908,9 @@ class PortableBroker {
 
   #pairing = null;
 
-  #challengeHashes = new Set();
+  #challenges = new Map();
+
+  #attempts = new Map();
 
   #cursor = null;
 
@@ -1017,9 +1039,11 @@ class PortableBroker {
     this.#requests = staged.requests;
     this.#decisions = staged.decisions;
     this.#pairing = pairing;
-    // Challenge verifiers stay retained after the staging maps are installed, so
-    // a later issuance cannot reuse a hash that history already committed.
-    this.#challengeHashes = new Set(challenges.keys());
+    // Challenge state stays retained after the staging maps are installed: a
+    // later issuance cannot reuse a hash that history already committed, and a
+    // consumption is validated against the recorded creation, expiry and burn
+    // that committed history established, never against recovery time.
+    this.#challenges = challenges;
     this.#cursor = cursor;
     this.#recovered = true;
     return { records: transactions.length };
@@ -1063,6 +1087,28 @@ class PortableBroker {
       const refusal = this.#admissionRefusal();
       if (refusal !== null) throw refusal;
       return this.#enqueue(() => this.#advance(updateId));
+    });
+  }
+
+  // Completes one private pairing attempt from an already parsed update (design
+  // sections 4, 5 and 7; C1). The update id is validated before the queue, so a
+  // malformed one rejects without sampling time, spending a quota slot or
+  // touching the journal. Staleness, sender/chat admission, one sampled instant,
+  // the rate window and the challenge are all decided inside the serialized turn.
+  // This is the selected private seam for a future poller: the raw Telegram
+  // envelope, sender/chat validation and command parsing stay that owner's.
+  completePairing(input = {}) {
+    return Promise.resolve().then(() => {
+      if (!isPlainObject(input)) throw invalidArgument('a pairing completion needs an object');
+      const { code, userId, chatId, updateId } = input;
+      if (!usableUpdateId(updateId)) {
+        throw invalidArgument(
+          'updateId must be a nonnegative safe integer whose next offset is safe',
+        );
+      }
+      const refusal = this.#admissionRefusal();
+      if (refusal !== null) throw refusal;
+      return this.#enqueue(() => this.#consumePairing({ code, userId, chatId, updateId }));
     });
   }
 
@@ -1298,7 +1344,7 @@ class PortableBroker {
       );
     }
     const hash = sha256Hex(code);
-    if (this.#challengeHashes.has(hash)) {
+    if (this.#challenges.has(hash)) {
       throw storageFailure(
         'the pairing code verifier is already used by a committed challenge',
         'STORAGE_FAILURE',
@@ -1317,7 +1363,12 @@ class PortableBroker {
         expires_at: times.expires_at,
       },
     ]);
-    this.#challengeHashes.add(hash);
+    this.#challenges.set(hash, {
+      hash,
+      createdAt: times.createdAt,
+      expiresAt: times.expiresAt,
+      consumedAt: null,
+    });
     this.#logger('portable.pairing.challenge', { expires_at: times.expires_at });
     return { code, expires_at: times.expires_at };
   }
@@ -1334,6 +1385,106 @@ class PortableBroker {
     await this.#append([{ op: CURSOR_OP, last_update_id: updateId }]);
     this.#cursor = updateId;
     return updateId;
+  }
+
+  // One serialized consumption turn (design sections 4, 5 and 7; C1). A stale
+  // update samples no clock, spends no verification quota and appends nothing. An
+  // invalid sender/chat string cannot be attributed to a sender, so it is a
+  // cursor-only refusal. Everything after that shares one sampled instant: the
+  // rolling attempt window, challenge validity and both persisted pairing times.
+  // Nothing is installed for the challenge, pairing or cursor until the single
+  // consume/set/cursor frame has flushed.
+  async #consumePairing({ code, userId, chatId, updateId }) {
+    if (!this.#recovered) {
+      throw storageFailure('the portable broker has not recovered the journal', 'STORAGE_FAILURE');
+    }
+    if (this.#cursor !== null && updateId <= this.#cursor) return pairingRefusal('stale');
+    if (identityProblem(userId) !== null || identityProblem(chatId) !== null) {
+      return this.#refusePairing(updateId, 'invalid');
+    }
+    const times = turnTime(this.#clock, 'consuming a pairing challenge', 'pairing consumption');
+    const attempts = this.#recentAttempts(userId, times.milliseconds);
+    if (attempts.length >= PAIRING_ATTEMPT_LIMIT)
+      return this.#refusePairing(updateId, 'rate_limited');
+    // The single-pairing rule is checked before any code verification, so a
+    // repeated message can neither replace the stored identity nor burn another
+    // challenge.
+    if (this.#pairing !== null) return this.#refusePairing(updateId, 'already_paired');
+    // Every verification attempt spends one slot, including an invalid or expired
+    // code: the ceiling bounds guesses, never successes.
+    attempts.push(times.milliseconds);
+    this.#attempts.set(userId, attempts);
+    if (typeof code !== 'string' || !PAIRING_CODE_PATTERN.test(code)) {
+      return this.#refusePairing(updateId, 'invalid');
+    }
+    const hash = sha256Hex(code);
+    const challenge = this.#challenges.get(hash);
+    if (challenge === undefined || challenge.consumedAt !== null) {
+      return this.#refusePairing(updateId, 'invalid');
+    }
+    // Validity is tested against the sampled instant, not recovery time and not
+    // declaration order: a sample outside `created_at <= now < expires_at` is a
+    // refusal that leaves the challenge unconsumed.
+    if (
+      compareInstants(times.instant, challenge.createdAt) < 0 ||
+      compareInstants(times.instant, challenge.expiresAt) >= 0
+    ) {
+      return this.#refusePairing(updateId, 'expired');
+    }
+    await this.#appendPairing([
+      { op: CONSUME_OP, hash, consumed_at: times.text },
+      { op: SET_OP, pairing: { user_id: userId, chat_id: chatId, paired_at: times.text } },
+      { op: CURSOR_OP, last_update_id: updateId },
+    ]);
+    challenge.consumedAt = times.instant;
+    this.#pairing = { user_id: userId, chat_id: chatId, paired_at: times.text };
+    this.#cursor = updateId;
+    // The logged view carries no code, verifier, identity or cursor: a success is
+    // reported only through the returned value.
+    this.#logger('portable.pairing.set', { paired_at: times.text });
+    return { paired: true };
+  }
+
+  // A per-sender rolling window: only attempts strictly newer than 60 seconds
+  // before this sample remain, so the released slot is admitted exactly at the
+  // 60000 ms boundary and a fixed-minute bucket cannot widen it. Changing chat or
+  // code keeps the same sender key, so neither bypasses the ceiling, and another
+  // sender starts with its own empty window.
+  #recentAttempts(userId, now) {
+    const cutoff = now - PAIRING_ATTEMPT_WINDOW_MS;
+    const retained = (this.#attempts.get(userId) ?? []).filter(
+      (attempt) => attempt > cutoff && attempt <= now,
+    );
+    this.#attempts.set(userId, retained);
+    return retained;
+  }
+
+  // A canonical newer refusal commits only its own update cursor: the challenge,
+  // the pairing and every other position stay untouched, so a refusal can never
+  // be replayed as a verification or a recorded decision.
+  async #refusePairing(updateId, reason) {
+    if (this.#cursor === null || updateId > this.#cursor) {
+      await this.#appendPairing([{ op: CURSOR_OP, last_update_id: updateId }]);
+      this.#cursor = updateId;
+    }
+    return pairingRefusal(reason);
+  }
+
+  // The consumption turn's only write path. A rejected append has already fenced
+  // the instance through #append; a failure that did not carry the storage
+  // classification is wrapped here, because no caller may mistake a storage
+  // failure for a refusal it is allowed to skip.
+  async #appendPairing(mutations) {
+    try {
+      await this.#append(mutations);
+    } catch (error) {
+      if (error?.code === 'STORAGE_FAILURE') throw error;
+      throw storageFailure(
+        'the pairing consumption could not be committed',
+        'STORAGE_FAILURE',
+        error,
+      );
+    }
   }
 
   async #reserve(ownerId, sessionLabel) {
