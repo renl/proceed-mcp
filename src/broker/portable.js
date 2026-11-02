@@ -53,6 +53,14 @@
 // sends from that committed state, never from a caller's request or a fresh
 // pairing read.
 //
+// A presentation receipt is the next durable Telegram fact: one actual result of
+// one send, bound to the allocated token, the frozen snapshot chat and that
+// allocation's own instant. A sent receipt alone establishes the chat-message
+// mapping that then suppresses routine work, while a failed receipt records one
+// closed redacted class and never downgrades a mapping. A late result stays
+// truthful without rewriting the decision, and a repeated identical tuple is an
+// observation rather than another append.
+//
 // A wait is an attached, non-durable observation of one request: admission,
 // duplicate refusal and the deadline check share the serialized turn, but the
 // turn is released before a future outcome is awaited. Every terminal writer
@@ -160,6 +168,15 @@ const CREATE_FIELDS = [
 // The first durable presentation record: one token per request, allocated once
 // and never rotated, plus the instant it was written.
 const PREPARE_FIELDS = ['callback_token', 'op', 'prepared_at', 'request_id'];
+// A sent receipt is the mapped chat message and its own instant; a failed one is
+// only the allocation-bound redacted classification and its own instant.
+const SENT_OP = 'telegram.presentation.sent';
+const FAILED_OP = 'telegram.presentation.failed';
+const SENT_FIELDS = ['callback_token', 'chat_id', 'message_id', 'op', 'request_id', 'sent_at'];
+const FAILED_FIELDS = ['callback_token', 'error_code', 'failed_at', 'op', 'request_id'];
+// A failure is reported only as one of these redacted classes, never as a
+// platform description.
+const FAILURE_CODES = new Set(['unavailable', 'rate_limited', 'rejected', 'invalid_response']);
 // Expiry and cancellation persist the same five closure fields: one mutation
 // establishes the terminal resolution, its identity and its initial delivery.
 const CLOSURE_FIELDS = ['decision_id', 'delivery_state', 'op', 'request_id', 'resolved_at'];
@@ -270,6 +287,48 @@ function sameCreation(request, fields) {
     request.context === fields.context &&
     request.expiresAt.seconds - request.createdAt.seconds === BigInt(fields.duration)
   );
+}
+
+// Receipt primitives are validated without coercion before any authority lookup:
+// a raw request id and the exact allocated token spelling are shared, while the
+// chat, message and classification domains differ per receipt kind.
+function receiptBinding(input, op) {
+  if (!isPlainObject(input)) throw invalidArgument(`${op} expects an argument object`);
+  const { requestId, callbackToken } = input;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw invalidArgument('a presentation receipt needs a request identifier');
+  }
+  if (typeof callbackToken !== 'string' || !CALLBACK_TOKEN_PATTERN.test(callbackToken)) {
+    throw invalidArgument('a presentation receipt needs a callback token');
+  }
+  return { requestId, callbackToken };
+}
+
+function sentFields(input) {
+  const { requestId, callbackToken } = receiptBinding(input, SENT_OP);
+  const { chatId, messageId } = input;
+  if (typeof chatId !== 'string' || identityProblem(chatId) !== null) {
+    throw invalidArgument('a sent receipt needs a decimal chat id');
+  }
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw invalidArgument('a sent receipt needs a positive safe-integer message id');
+  }
+  return { requestId, callbackToken, chatId, messageId };
+}
+
+function failedFields(input) {
+  const { requestId, callbackToken } = receiptBinding(input, FAILED_OP);
+  const { errorCode } = input;
+  if (typeof errorCode !== 'string' || !FAILURE_CODES.has(errorCode)) {
+    throw invalidArgument(`a failed receipt needs one of ${[...FAILURE_CODES].join(', ')}`);
+  }
+  return { requestId, callbackToken, errorCode };
+}
+
+// A chat message is one durable address across every role, so its two raw values
+// are joined by a separator neither admitted domain can contain.
+function mappingKey(chatId, messageId) {
+  return `${chatId}:${messageId}`;
 }
 
 // The common request representation of design section 3, rebuilt as a fresh
@@ -474,6 +533,14 @@ function evidenceTime(clock) {
   return turnTime(clock, 'recording delivery evidence', 'delivery evidence');
 }
 
+function sentTime(clock) {
+  return turnTime(clock, 'recording a sent presentation receipt', 'sent receipt');
+}
+
+function failedTime(clock) {
+  return turnTime(clock, 'recording a failed presentation receipt', 'failed receipt');
+}
+
 // Telegram IDs are stored losslessly as decimal strings: no numeric conversion,
 // no digit-count ceiling, exact spelling kept, and an all-zero string names
 // nobody. Actual sender/private-chat checking belongs to the Telegram boundary.
@@ -613,6 +680,70 @@ function readPresentation(mutation) {
   };
 }
 
+// A sent receipt decodes from exactly its six persisted fields: the target, its
+// allocated token, the mapped chat and message, and the receipt instant. The
+// binding and mapping themselves are validated against staged state.
+function readSent(mutation) {
+  exactFields(mutation, SENT_FIELDS);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw integrity(`${SENT_OP} has a malformed request id`);
+  }
+  const callbackToken = mutation.callback_token;
+  if (typeof callbackToken !== 'string' || !CALLBACK_TOKEN_PATTERN.test(callbackToken)) {
+    throw integrity(`${SENT_OP} has a malformed callback token`);
+  }
+  const chatId = mutation.chat_id;
+  if (identityProblem(chatId) !== null) throw integrity(`${SENT_OP} has a malformed chat id`);
+  const messageId = mutation.message_id;
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw integrity(`${SENT_OP} needs a positive safe-integer message id`);
+  }
+  const sentAt = readInstant(mutation.sent_at);
+  if (sentAt === null) throw integrity(`${SENT_OP} has a malformed receipt time`);
+  return {
+    kind: 'sent',
+    record: {
+      request_id: requestId,
+      callback_token: callbackToken,
+      chat_id: chatId,
+      message_id: messageId,
+      sent_at: mutation.sent_at,
+      sentAt,
+    },
+  };
+}
+
+// A failed receipt decodes from exactly its five persisted fields: the target,
+// its allocated token, one closed redacted classification and its instant.
+function readFailed(mutation) {
+  exactFields(mutation, FAILED_FIELDS);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw integrity(`${FAILED_OP} has a malformed request id`);
+  }
+  const callbackToken = mutation.callback_token;
+  if (typeof callbackToken !== 'string' || !CALLBACK_TOKEN_PATTERN.test(callbackToken)) {
+    throw integrity(`${FAILED_OP} has a malformed callback token`);
+  }
+  const errorCode = mutation.error_code;
+  if (typeof errorCode !== 'string' || !FAILURE_CODES.has(errorCode)) {
+    throw integrity(`${FAILED_OP} has an unsupported failure classification`);
+  }
+  const failedAt = readInstant(mutation.failed_at);
+  if (failedAt === null) throw integrity(`${FAILED_OP} has a malformed receipt time`);
+  return {
+    kind: 'failed',
+    record: {
+      request_id: requestId,
+      callback_token: callbackToken,
+      error_code: errorCode,
+      failed_at: mutation.failed_at,
+      failedAt,
+    },
+  };
+}
+
 // A closure decodes from exactly its five persisted fields: only the window and
 // the installed resolution differ between expiry and cancellation.
 function readClosure(mutation, op) {
@@ -722,6 +853,10 @@ function readMutation(mutation) {
       return readEvidence(mutation, 'returned');
     case PREPARE_OP:
       return readPresentation(mutation);
+    case SENT_OP:
+      return readSent(mutation);
+    case FAILED_OP:
+      return readFailed(mutation);
     default:
       throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
   }
@@ -854,9 +989,14 @@ function stageCreate(record, staged, pairing, reservedNow) {
     delivery_error: null,
     // Private to this module: creation copied the committed pairing without
     // normalization, so presentation binds to that frozen chat rather than a
-    // later pairing read. The token starts unallocated.
+    // later pairing read. The token and its allocation instant start absent, and
+    // receipt state is filled only by a committed receipt record.
     pairing_snapshot: { ...record.snapshot },
     callback_token: null,
+    preparedAt: null,
+    mapped: false,
+    lastFailureAt: null,
+    lastFailureCode: null,
   };
   if (measurePortablePresentation(requestView(request)).worst.length > MAX_TELEGRAM_TEXT) {
     throw integrity(`${CREATE_OP} cannot be presented within ${MAX_TELEGRAM_TEXT} characters`);
@@ -890,6 +1030,58 @@ function stagePresentation(record, staged) {
   }
   staged.tokens.add(record.callback_token);
   request.callback_token = record.callback_token;
+  // The allocation's own instant is retained for exact receipt lower bounds, so
+  // no receipt ever compares against a recovery or retry time instead.
+  request.preparedAt = record.preparedAt;
+}
+
+// A receipt is bound to the allocated token, the frozen snapshot chat and the
+// instant of that allocation, and it applies in staged array order. A sent
+// receipt alone creates the globally unique chat-message mapping and marks the
+// request sent; it never resolves, reopens or re-ledgers it.
+function stageSent(record, staged) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${SENT_OP} names no committed request`);
+  if (request.callback_token !== record.callback_token) {
+    throw integrity(`${SENT_OP} does not match the allocated token`);
+  }
+  if (request.pairing_snapshot.chat_id !== record.chat_id) {
+    throw integrity(`${SENT_OP} does not match the snapshot chat`);
+  }
+  if (request.preparedAt === null || compareInstants(record.sentAt, request.preparedAt) < 0) {
+    throw integrity(`${SENT_OP} precedes its allocation`);
+  }
+  const key = mappingKey(record.chat_id, record.message_id);
+  if (staged.mappings.has(key)) {
+    throw integrity(`${SENT_OP} maps an already mapped chat message`);
+  }
+  staged.mappings.set(key, record.request_id);
+  request.mapped = true;
+  request.telegram_state = 'sent';
+}
+
+// A failed receipt is appended per actual attempt, bounded by the allocation and
+// by the previous failure of the same request. It keeps the latest redacted
+// classification, and only a request without a mapping changes presentation
+// state; no mapping, resolution or ledger value is touched.
+function stageFailed(record, staged) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${FAILED_OP} names no committed request`);
+  if (request.callback_token !== record.callback_token) {
+    throw integrity(`${FAILED_OP} does not match the allocated token`);
+  }
+  if (request.preparedAt === null || compareInstants(record.failedAt, request.preparedAt) < 0) {
+    throw integrity(`${FAILED_OP} precedes its allocation`);
+  }
+  if (
+    request.lastFailureAt !== null &&
+    compareInstants(record.failedAt, request.lastFailureAt) < 0
+  ) {
+    throw integrity(`${FAILED_OP} failure times must not regress`);
+  }
+  request.lastFailureAt = record.failedAt;
+  request.lastFailureCode = record.error_code;
+  if (!request.mapped) request.telegram_state = 'failed';
 }
 
 // A closure resolves one pending request and spends its decision identity once
@@ -996,6 +1188,8 @@ class PortableBroker {
 
   #tokens = new Set();
 
+  #mappings = new Map();
+
   #queue = Promise.resolve();
 
   #recovered = false;
@@ -1090,6 +1284,7 @@ class PortableBroker {
       created: new Set(),
       decisions: new Set(),
       tokens: new Set(),
+      mappings: new Map(),
     };
     const challenges = new Map();
     let pairing = null;
@@ -1109,6 +1304,8 @@ class PortableBroker {
         else if (record.kind === 'acknowledge' || record.kind === 'returned') {
           stageEvidence(record, staged);
         } else if (record.kind === 'presentation') stagePresentation(record.record, staged);
+        else if (record.kind === 'sent') stageSent(record.record, staged);
+        else if (record.kind === 'failed') stageFailed(record.record, staged);
         else if (record.kind === 'cursor') cursorRecords.push(record);
         else pairingRecords.push(record);
       }
@@ -1121,6 +1318,7 @@ class PortableBroker {
     this.#requests = staged.requests;
     this.#decisions = staged.decisions;
     this.#tokens = staged.tokens;
+    this.#mappings = staged.mappings;
     this.#pairing = pairing;
     // Challenge state stays retained after the staging maps are installed: a
     // later issuance cannot reuse a hash that history already committed, and a
@@ -1252,6 +1450,31 @@ class PortableBroker {
     });
   }
 
+  // Records one actual successful send for an allocated request (design section 5,
+  // C2a-ii). Primitives are validated before the queue, the receipt binds to the
+  // allocated token, the frozen snapshot chat and the exact allocation instant, and
+  // a repeated identical tuple is an observation that samples no clock and appends
+  // nothing. The mapping that suppresses routine work exists only after its commit
+  // has flushed.
+  recordPresentationSent(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = sentFields(input);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#recordSent(fields));
+    });
+  }
+
+  // Records one actual failed send attempt for an allocated request (design section
+  // 5, C2a-ii): one closed redacted classification bounded by the allocation and by
+  // the previous attempt, never a platform description and never a mapping.
+  recordPresentationFailed(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = failedFields(input);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#recordFailed(fields));
+    });
+  }
+
   // Allocates one durable presentation token for a committed request (design
   // section 5, C2a-i). A malformed, unknown or unused-reservation id is the same
   // non-disclosing null as an absent one, and no argument matrix is invented for
@@ -1274,20 +1497,21 @@ class PortableBroker {
   }
 
   // Synchronous copied view of the committed presentation work (design section 5,
-  // C2a-i): one send per pending request, carrying its frozen snapshot chat, its
-  // current nullable token and a fresh request copy. It samples no clock, applies
-  // no expiry and still has no mapping, failure or edit writer, so terminal
-  // requests contribute nothing and edits stay empty at this cut.
+  // C2a-i/ii): one send per unresolved request that has no mapping yet, carrying
+  // its frozen snapshot chat, its allocated token, the latest failure class and a
+  // fresh request copy. A mapped or terminal request contributes nothing, because a
+  // message already known to be delivered is exactly what routine sending must not
+  // repeat. It samples no clock and owns no edit work at this cut.
   presentationWork() {
     return {
       sends: [...this.#requests.values()]
-        .filter((request) => request.resolution === 'pending')
+        .filter((request) => request.resolution === 'pending' && !request.mapped)
         .map((request) => ({
           request_id: request.request_id,
           chat_id: request.pairing_snapshot.chat_id,
           callback_token: request.callback_token,
           request: requestView(request),
-          last_failure_code: null,
+          last_failure_code: request.lastFailureCode,
         })),
       edits: [],
     };
@@ -1778,9 +2002,14 @@ class PortableBroker {
       delivery_state: 'not_applicable',
       delivery_error: null,
       // The same private binding the replay decoder installs: the committed
-      // pairing copied at creation, and a token no send has allocated yet.
+      // pairing copied at creation, and the allocation and receipt slots that
+      // only their own commits fill.
       pairing_snapshot: { ...this.#pairing },
       callback_token: null,
+      preparedAt: null,
+      mapped: false,
+      lastFailureAt: null,
+      lastFailureCode: null,
     };
     // The complete plain-text presentation is measured before the append, so a
     // request that could not be shown within the platform limit is refused while
@@ -1811,10 +2040,11 @@ class PortableBroker {
   // One serialized allocation turn (design section 5, C2a-i). The target is
   // re-read from installed state, its deadline is applied first through the
   // existing closure/wake path, and only a still-pending request with no token is
-  // allocated. The one sampled instant bounds the record, the token is validated
-  // and checked against every committed allocation before the append, and nothing
-  // is installed until that frame has flushed, so a caller never sees a token that
-  // was not committed and a retry reuses the one already there.
+  // allocated. The one sampled instant bounds the record and is retained as that
+  // allocation's own instant, the token is validated and checked against every
+  // committed allocation before the append, and nothing is installed until that
+  // frame has flushed, so a caller never sees a token that was not committed and a
+  // retry reuses the one already there.
   async #prepare(requestId) {
     const request = this.#requests.get(requestId);
     if (request === undefined || request.resolution !== 'pending') return null;
@@ -1857,6 +2087,7 @@ class PortableBroker {
       },
     ]);
     request.callback_token = token;
+    request.preparedAt = sampled.instant;
     this.#tokens.add(token);
     this.#logger('portable.presentation.prepared', { request_id: request.request_id });
     return this.#preparedView(request);
@@ -1870,6 +2101,99 @@ class PortableBroker {
       callback_token: request.callback_token,
       request: requestView(request),
     };
+  }
+
+  // Receipt turns share the ordinary admission and recovery gates, so a fenced,
+  // closed or unrecovered instance refuses before any clock sample or append.
+  #receiptAdmission() {
+    const refusal = this.#admissionRefusal();
+    if (refusal !== null) throw refusal;
+    if (!this.#recovered) {
+      throw storageFailure('the portable broker has not recovered the journal', 'STORAGE_FAILURE');
+    }
+  }
+
+  // One serialized sent-receipt turn (design section 5, C2a-ii). An unknown or
+  // unallocated target, a mismatched token or a foreign snapshot chat is a
+  // non-disclosing null, and an already mapped identical tuple is the current copied
+  // view without a clock sample or append. A new tuple samples once, must not
+  // precede the allocation, and installs its mapping and state only after the flush.
+  async #recordSent({ requestId, callbackToken, chatId, messageId }) {
+    const request = this.#requests.get(requestId);
+    if (request === undefined || request.callback_token !== callbackToken) return null;
+    if (request.pairing_snapshot.chat_id !== chatId) return null;
+    const key = mappingKey(chatId, messageId);
+    const owner = this.#mappings.get(key);
+    if (owner !== undefined) return owner === requestId ? requestView(request) : null;
+    const sampled = sentTime(this.#clock);
+    if (request.preparedAt === null || compareInstants(sampled.instant, request.preparedAt) < 0) {
+      throw storageFailure(`${SENT_OP} would precede its allocation`, 'STORAGE_FAILURE');
+    }
+    await this.#appendReceipt([
+      {
+        op: SENT_OP,
+        request_id: requestId,
+        callback_token: callbackToken,
+        chat_id: chatId,
+        message_id: messageId,
+        sent_at: sampled.text,
+      },
+    ]);
+    this.#mappings.set(key, requestId);
+    request.mapped = true;
+    request.telegram_state = 'sent';
+    this.#logger('portable.presentation.sent', { request_id: requestId });
+    return requestView(request);
+  }
+
+  // One serialized failed-receipt turn (design section 5, C2a-ii). Every actual
+  // attempt may append, bounded by the allocation and by the previous failure of
+  // the same request, so a repeated classification at the same instant is admitted
+  // while a regression is refused. Only the latest redacted class is retained, and a
+  // request that already has a mapping keeps its sent state.
+  async #recordFailed({ requestId, callbackToken, errorCode }) {
+    const request = this.#requests.get(requestId);
+    if (request === undefined || request.callback_token !== callbackToken) return null;
+    const sampled = failedTime(this.#clock);
+    if (request.preparedAt === null || compareInstants(sampled.instant, request.preparedAt) < 0) {
+      throw storageFailure(`${FAILED_OP} would precede its allocation`, 'STORAGE_FAILURE');
+    }
+    if (
+      request.lastFailureAt !== null &&
+      compareInstants(sampled.instant, request.lastFailureAt) < 0
+    ) {
+      throw storageFailure(`${FAILED_OP} would precede the previous failure`, 'STORAGE_FAILURE');
+    }
+    await this.#appendReceipt([
+      {
+        op: FAILED_OP,
+        request_id: requestId,
+        callback_token: callbackToken,
+        failed_at: sampled.text,
+        error_code: errorCode,
+      },
+    ]);
+    request.lastFailureAt = sampled.instant;
+    request.lastFailureCode = errorCode;
+    if (!request.mapped) request.telegram_state = 'failed';
+    this.#logger('portable.presentation.failed', { request_id: requestId });
+    return requestView(request);
+  }
+
+  // A receipt's only write path: an append that did not already carry the storage
+  // classification is wrapped in one, so no caller can mistake an uncertain receipt
+  // commit for a refusal it may skip. #append has already installed the fence.
+  async #appendReceipt(mutations) {
+    try {
+      await this.#append(mutations);
+    } catch (error) {
+      if (error?.code === 'STORAGE_FAILURE') throw error;
+      throw storageFailure(
+        'the presentation receipt could not be committed',
+        'STORAGE_FAILURE',
+        error,
+      );
+    }
   }
 
   // Closes at most this one target and reports the committed representation: a
