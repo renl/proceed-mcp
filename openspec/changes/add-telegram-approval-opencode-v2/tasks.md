@@ -1,5 +1,14 @@
 # Tasks
 
+## C1-consumer-A public challenge/CLI preparation
+- [x] P.C1CA-tests [Exact public source binding, tests, proof limits and ordered commands](slices/03c1-consumer-a-challenge-cli.md), baseline `8c630833`, accepted core-A/B present. Tests and owned docs only, no production/poller/live Telegram.
+- [ ] P.C1CA-review ONE focused combined HTTP/CLI boundary, test-artifact and decomposition review. Triggers1/4YES,2/3/5NO. Prepared for review only, no implementation or behavior acceptance.
+- [ ] P.C1CA-implementation Separately authorize ONLY server/CLI/optional ordinary-consumer values helper, supplied70-99gross/3paths. Full packet hard600. Core/runtime untouched. No public consumption route, reason leak or re-pair/reset.
+- [ ] P.C1CA-verification Independent real public HTTP/CLI/Journal challenge, flush/failure/privacy/refusal proof after source binding. Synthetic invalid201 coverage is consumer-contract evidence, not Telegram proof. Human pairing/poll consumer remains later.
+- Preparation: pinned Windows Node24 final34 entries23PASS/11expectedRED, exit1, no cancelled/skipped/todo. CalibrationPASS, three valid201 controlsRED,22 invalid201 negatives not validation proof while generic unavailable stub remains. Final affected2expectedRED after allocation/envelope assertions. Existing IPC rebind1/1PASS. Cheap gates and run cleanup PASS separately, bounded logs in slice.
+- Gross preparation262/4paths versus `8c630833`, source forecast70-99/3paths separately gives332-361/7paths,239 upper-bound headroom under600. Not a whole-change exception or implementation acceptance.
+- Lifecycle same `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, test-engineering owner, active/retain/not cleanup-ready. Next action combined review. Measured preparation and assertion/cleanup evidence in slice. Preserve all unknown/other-owner state, no automatic downstream authority or C1/feature/release claim.
+
 ## C1-core-B native consumption preparation
 - [x] P.C1B-tests [Native consumption/rate/atomic pairing-cursor tests and ready brief](slices/03c1-core-b-consumption.md), baseline `01b164dac4869feba187f53ab3ba040df641bce9`, accepted core-A `3cf98d5` present. Tests/owned docs only, no production. Private selected `completePairing`, no fabricated raw Telegram method.
 - [x] P.C1B-review Supplied combined persisted-contract/test-artifact/decomposition approval covers triggers1/4YES and2/3/5NO. No new external wire gate for private helpers or unchanged post-code owner review.

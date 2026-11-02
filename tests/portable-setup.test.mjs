@@ -197,7 +197,6 @@ test('PORT-SETUP-IPC: owner CLI handshake/catalog and control/browser separation
     const configBytes = await readFile(join(h.state, 'config.json'));
     const callsBefore = h.fixture.calls.length;
     for (const [path, message] of [
-      ['/v1/pairing', 'pairing is not implemented in this setup checkpoint'],
       [`/v1/requests/req_${'0'.repeat(32)}/retry`, 'request retry is not implemented in this setup checkpoint'],
     ]) {
       const response = await h.http(path, h.control, { method: 'POST', body: {} });
