@@ -26,6 +26,7 @@ export async function until(check, label, signal) {
 
 export async function telegramFixture() {
   const calls = [], updates = [], messages = [];
+  const polls = new Set();
   let updateId = 1, messageId = 100;
   const server = createServer(async (req, res) => {
     try {
@@ -37,7 +38,12 @@ export async function telegramFixture() {
       let result = true;
       if (method === 'getMe') result = { id: 99, is_bot: true, first_name: 'Fixture', username: 'fixture_bot' };
       else if (method === 'getUpdates') {
-        await delay(30);
+        if (!updates.some(update => update.update_id >= (body.offset ?? 0))) {
+          await new Promise(done => {
+            const wake = () => { polls.delete(wake); res.off('close', wake); done(); };
+            polls.add(wake); res.once('close', wake);
+          });
+        }
         result = updates.filter((update) => update.update_id >= (body.offset ?? 0));
       } else if (method === 'sendMessage') {
         result = { ...body, message_id: messageId++, chat: { id: 7, type: 'private' } };
@@ -51,9 +57,9 @@ export async function telegramFixture() {
   });
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   const address = `http://127.0.0.1:${server.address().port}`;
-  const enqueue = (value) => updates.push({ update_id: updateId++, ...value });
+  const enqueue = (value) => { updates.push({ update_id: updateId++, ...value }); for (const wake of [...polls]) wake(); };
   const text = (value, reply) => enqueue({ message: { message_id: messageId++,
-    from: { id: 7 }, chat: { id: 7, type: 'private' }, text: value,
+    from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: value,
     ...(reply ? { reply_to_message: { message_id: reply.message_id } } : {}) } });
   return { calls, messages, address, text,
     choose(message, prefix) {
@@ -63,6 +69,7 @@ export async function telegramFixture() {
         message, data: button.callback_data } });
     },
     async close() {
+      for (const wake of [...polls]) wake();
       server.closeAllConnections();
       await new Promise((done, reject) => server.close((error) => error ? reject(error) : done()));
       // Prove namespace listener release, not merely a close request.

@@ -36,6 +36,7 @@ async function observe(check, ms = 4500) {
 }
 async function fixture(work, { futureMs = 60000 } = {}) {
   const result = await managed(async ctx => {
+    const progress = phase => writeFile(join(ctx.directory, 'progress.json'), JSON.stringify({ phase })); await progress('setup');
     const paths = statePaths(join(ctx.directory, 'state'));
     const env = Object.fromEntries(['PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
     Object.assign(env, { TMP: ctx.directory, TEMP: ctx.directory, TMPDIR: ctx.directory });
@@ -82,9 +83,9 @@ async function fixture(work, { futureMs = 60000 } = {}) {
       async runtime(options = {}) { runtime = await startPortableRuntime({ paths, config, ...options }); return runtime; },
       async bytes() { return readFile(paths.journalFile); },
       async recovered() { const j = await Journal.open(paths.journalFile); try { return (await j.recover()).transactions.flatMap(t => t.mutations); } finally { await j.close(); } } };
-    try { await work(h); }
+    try { await progress('assertions'); await work(h); }
     finally {
-      await runtime?.stop();
+      await progress('teardown'); await bounded(() => runtime?.stop(), 3000, 'runtime teardown deadline');
       for (const r of children) if (!r.closed && r.child.connected) await stopped(r);
       for (const r of children) assert.ok(![control, owner, capability, 'synthetic-token'].some(s => (r.out + r.err).includes(s)), 'no credential output');
       await assert.rejects(access(paths.brokerLockFile), { code: 'ENOENT' });
@@ -121,14 +122,29 @@ test('SCHED-RESTART: future pending stop, deadline crossed while stopped, durabl
   const third = h.start(); await observe(() => third.out.includes('broker ready on'), 10000); await stopped(third);
   assert.deepEqual((await h.recovered()).filter(m => m.op === 'request.expire'), first);
 }, { futureMs: 5000 }));
-test('SCHED-TOKEN: missing/empty once on stderr only after success; present is not transport proof', { timeout: 75000 }, () => fixture(async h => {
+test('SCHED-TOKEN: missing/empty local-only; synthetic token reaches guarded transport, not live proof', { timeout: 75000 }, () => fixture(async h => {
   for (const token of [undefined, '', 'synthetic-token']) {
     const r = h.start(['serve'], token); await observe(() => r.out.includes('broker ready on'), 10000);
+    if (token === 'synthetic-token') await observe(() => r.events.some(e => e.kind === 'network-attempt'), 1500);
     await delay(100); await stopped(r);
     assert.equal(r.err.split(tokenLine).length - 1, token === 'synthetic-token' ? 0 : 1);
     assert.equal(r.out.includes('Telegram unavailable'), false);
-    assert.equal(r.events.filter(e => e.kind === 'network-attempt').length, 0);
+    assert.equal(r.events.some(e => e.kind === 'network-attempt'), token === 'synthetic-token');
   }
+}));
+test('C1P-RUNTIME: ordinary Telegram dependency starts after public readiness and aborts before core close', { timeout: 75000 }, () => fixture(async h => {
+  let signal, calls = 0; const entered = deferred(), logs = [];
+  const telegram = { async updates(offset, options) {
+    calls++; signal = options.signal; assert.equal(offset, null);
+    assert.ok(signal instanceof AbortSignal); assert.equal((await h.http()).status, 200);
+    entered.resolve(); return new Promise((_, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('stopped'), { code: 'CANCELLED' })), { once: true }));
+  } };
+  const runtime = await h.runtime({ telegram, logger: (...a) => logs.push(a) });
+  await bounded(() => entered.promise, 1500, 'ordinary runtime must start one injected poller');
+  const close = runtime.broker.close.bind(runtime.broker); let closed = false;
+  runtime.broker.close = () => { assert.equal(signal.aborted, true); closed = true; return close(); };
+  const stop = runtime.stop(); assert.equal(runtime.stop(), stop); await stop;
+  assert.equal(closed, true); assert.equal(calls, 1); assert.deepEqual(logs, []);
 }));
 test('SCHED-START-FAULT: constructor clock succeeds, post-replay initial sweep clock refuses before bind', { timeout: 75000 }, () => fixture(async h => {
   let calls = 0, listens = 0; const before = await h.bytes(), emit = Server.prototype.emit;

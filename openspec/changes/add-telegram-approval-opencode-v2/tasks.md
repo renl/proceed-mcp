@@ -1,5 +1,12 @@
 # Tasks
 
+## C1-P1 poller/runtime foundational preparation
+- [x] P.C1P1-tests [Complete source brief, foundational proof mapping and mandatory P2](slices/03c1-p1-poller-runtime.md). Baseline `215f5a5e`, accepted core-A/B and public challenge `911ebe6e` present. Tests/helpers/owned docs only. No production changes.
+- [ ] P.C1P1-review ONE combined external-boundary/decomposition/test-artifact review. Triggers1/3/4/5YES,2NO. No implementation readiness before that review and separate source authorization. Full compliant four-path source required, not test-selected behavior subset.
+- [ ] P.C1P2-public Mandatory separately prepared out-of-process actual-client intercepted public challenge/private-pair/confirmation/restart proof and full fault/abort breadth AFTER P1 source. Blocks complete C1 acceptance. Fake-client/P1 proof never substitutes for actual client, real Telegram or human first use. C2/C3 still later/unproved.
+- Windows project Node24 final native25:1 calibrationPASS/24expectedRED (22 absent poller imports,2 actual client missing UI signal forwarding). Runtime/token2expectedRED. Affected shared consumers9:7PASS/2RED at absent pairing confirmation while no poller exists. PORT-A/B assertions remain unchanged and must progress to missing presentation after C1 implementation, never pass/waive C3. Separate cleanup PASS and exact evidence/limits in slice.
+- Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, test-engineering owner, active/retain/not cleanup-ready. Next action combined review. Owned run cleanup verified, no unknown/other-owner cleanup, no C1/human/feature/release claim.
+
 ## C1-consumer-A public challenge/CLI preparation
 - [x] P.C1CA-tests [Exact public source binding, tests, proof limits and ordered commands](slices/03c1-consumer-a-challenge-cli.md), baseline `8c630833`, accepted core-A/B present. Tests and owned docs only, no production/poller/live Telegram.
 - [x] P.C1CA-review Supplied combined review of `609b68542e5cad514d6453cd96732a3067c40061` approves HTTP/CLI boundary, test-artifact and decomposition scopes with paired409 CLI corrected to existing exit2 and suffixed diagnostic. Triggers1/4YES,2/3/5NO. No design change or extra unchanged Architecture pass. Ready for separate implementation authorization, not behavior acceptance.

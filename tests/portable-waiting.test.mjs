@@ -15,6 +15,12 @@ test('FIXTURE: only controlled Telegram transport, listener teardown', async () 
       signal: AbortSignal.timeout(1000) });
     const value = await response.json();
     assert.equal(value.result[0].message.text, '/pair synthetic');
+    assert.equal(value.result[0].message.from.is_bot, false);
+    const abort = new AbortController();
+    const pending = fetch(`${fixture.address}/getUpdates`, { method: 'POST', body: '{"offset":999}', signal: abort.signal });
+    pending.catch(() => {});
+    await until(() => fixture.calls.some(c => c.method === 'getUpdates' && c.body.offset === 999), 'held fixture poll');
+    abort.abort(); await assert.rejects(pending, e => e.name === 'AbortError');
     const lifecycle = await managed(async (context) => {
       const preload = pathToFileURL(resolve('tests/fixtures/portable-telegram-preload.mjs'));
       preload.searchParams.set('fixture', fixture.address);
