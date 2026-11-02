@@ -4,6 +4,7 @@ import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { readJournal } from '../src/journal/framing.js';
 import { publicRegistration, observe, success, toolError } from './support/public-registration.mjs';
+import { recorded, reports } from './support/adapter-write-report.mjs';
 
 const opts = { timeout: 65000 }, label = { session_label: 'same label' };
 const authority = p => ({ request_id: p.request_id, request_capability: p.request_capability });
@@ -73,9 +74,12 @@ function original(outcome, id, expected) {
   assert.deepEqual(success(outcome), expected); // Shared consumer checks structured/text equality.
 }
 async function finish(h, a, raw) {
-  noReports(h); await h.eof(a); raw.complete();
+  const written = waits(h).filter(w => w.status === 200);
+  for (const w of written) await recorded(h, { request_id: w.reply.request_id, request_capability: w.capability });
+  assert.equal(reports(h).length, written.length); await h.eof(a); raw.complete();
   const rows = await mutations(h);
-  assert.ok(!rows.some(m => ['request.returned', 'request.acknowledge'].includes(m.op)));
+  assert.equal(rows.filter(m => m.op === 'request.returned').length, written.length);
+  assert.ok(!rows.some(m => m.op === 'request.acknowledge'));
 }
 
 test('W1b-ORIGINAL: actual pending original call returns real committed cancel; replay/conflict are inert', opts, () => publicRegistration(async h => {
@@ -89,8 +93,8 @@ test('W1b-ORIGINAL: actual pending original call returns real committed cancel; 
   assert.equal(rows.filter(m => m.op === 'request.create').length, 1);
   const cancel = rows.filter(m => m.op === 'request.cancel'); assert.equal(cancel.length, 1);
   assert.equal(cancel[0].decision_id, v.decision_id); assert.equal(cancel[0].delivery_state, 'pending');
-  const before = await h.journal();
-  original(await invoke(a, 'replay', p), 'replay', v);
+  await recorded(h, p); const before = await h.journal();
+  original(await invoke(a, 'replay', p), 'replay', { ...v, delivery_state: 'returned' });
   assert.equal(creates(h).length, 2, 'one explicit replay exchange, not recreation');
   assert.equal(creates(h)[1].status, 200); assert.equal(waits(h).length, 1, 'terminal replay never waits again');
   toolError(await a.call('request_approval', { ...question(p), action: 'Changed' }), 'IDEMPOTENCY_CONFLICT');

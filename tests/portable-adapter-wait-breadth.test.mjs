@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readJournal } from '../src/journal/framing.js';
 import { publicRegistration, observe, success, toolError } from './support/public-registration.mjs';
+import { recorded, reports } from './support/adapter-write-report.mjs';
 
 const creates = h => h.calls.filter(c => c.path === '/v1/requests');
 const waits = h => h.calls.filter(c => c.path.endsWith('/wait'));
@@ -70,9 +71,12 @@ async function cancel(h, p) {
   assert.equal(v.resolution, 'cancelled'); assert.equal(v.delivery_state, 'pending'); return v;
 }
 async function finish(h, a, raw) {
-  assert.ok(!h.calls.some(c => /\/(returned|acknowledge)$/.test(c.path)), 'no fabricated write reports');
+  const w = waits(h).find(c => c.status === 200);
+  await recorded(h, { request_id: w.reply.request_id, request_capability: w.capability });
+  assert.equal(reports(h).length, 1);
   await h.eof(a); raw.complete();
-  assert.ok(!(await rows(h)).some(m => ['request.returned', 'request.acknowledge'].includes(m.op)));
+  assert.equal((await rows(h)).filter(m => m.op === 'request.returned').length, 1);
+  assert.ok(!(await rows(h)).some(m => m.op === 'request.acknowledge'));
 }
 
 test('W1c-TURNOVER: real25s204 gap preserves original reservation and re-entry', { timeout: 80000 },
@@ -151,12 +155,12 @@ test('W1c-EXPIRY: real public60s duration automatically returns exact durable ex
     assert.equal(expiration.length, 1); assert.equal(expiration[0].decision_id, v.decision_id);
     assert.equal(expiration[0].request_id, p.request_id); assert.equal(expiration[0].resolved_at, v.resolved_at);
     assert.equal(mutations.filter(m => m.op === 'request.create').length, 1);
-    assert.ok(!h.calls.some(c => /\/(cancel|returned|acknowledge)$/.test(c.path)), 'no substitute terminal producer');
+    assert.ok(!h.calls.some(c => /\/(cancel|acknowledge)$/.test(c.path)), 'no substitute terminal producer');
     await finish(h, a, raw); const before = await h.journal();
     await h.phase('expired-decision-recovery'); await h.restart();
     const again = await h.connect(), repeated = await again.call('request_approval', question(p), { id: 7 });
-    assert.equal(repeated.frame.id, 7); assert.deepEqual(success(repeated), v);
-    assert.deepEqual(success(await again.call('get_approval', authority(p))), v);
+    assert.equal(repeated.frame.id, 7); assert.deepEqual(success(repeated), { ...v, delivery_state: 'returned' });
+    assert.deepEqual(success(await again.call('get_approval', authority(p))), { ...v, delivery_state: 'returned' });
     assert.equal(creates(h).length, 2); assert.equal(creates(h)[1].status, 200);
     assert.ok(before.equals(await h.journal()), 'terminal recovery/repeat preserves exact journal');
     await h.eof(again);
