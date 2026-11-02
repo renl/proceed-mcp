@@ -16,12 +16,16 @@ import { verifyOwnerOnly } from '../state/protection.js';
 import { startExpirySchedule } from './expiry-schedule.js';
 import { createPortableBroker } from './portable.js';
 import { createPortableServer } from './portable-server.js';
+import { createPortableTelegramPoller } from '../telegram/portable-poller.js';
 
+// One token-backed poller exists only when the assembly supplies a Telegram
+// client. Its absence is local-only operation, not a degraded readiness state.
 export async function startPortableRuntime({
   paths,
   config,
   clock = () => Date.now(),
   logger = () => {},
+  telegram = null,
 } = {}) {
   const protectedTargets = [paths.stateDir, paths.credentialsDir, paths.configFile];
   if ((await stat(paths.journalFile).catch(() => null)) !== null) {
@@ -41,6 +45,7 @@ export async function startPortableRuntime({
   let broker = null;
   let server = null;
   let schedule = null;
+  let poller = null;
   try {
     const control = await readLocalCredential(
       paths.controlCredentialFile,
@@ -92,9 +97,16 @@ export async function startPortableRuntime({
     await verifyOwnerOnly([paths.stateDir, paths.credentialsDir, paths.journalFile]);
     server.markReady();
     schedule = startExpirySchedule({ broker, logger });
+    // Exactly one update consumer starts after recovery, startup expiry,
+    // listener setup and local readiness, so no poll races an unready broker.
+    if (telegram !== null) {
+      poller = createPortableTelegramPoller({ broker, telegram, logger });
+      poller.start();
+    }
   } catch (error) {
     // Nothing may outlive a failed start: close only this invocation's own
     // listener, journal activity and ownership record, then report the cause.
+    await poller?.stop().catch(() => {});
     await schedule?.stop().catch(() => {});
     await server?.close().catch(() => {});
     await broker?.close().catch(() => {});
@@ -117,7 +129,11 @@ export async function startPortableRuntime({
       if (stopPromise !== null) return stopPromise;
       stopping = true;
       stopPromise = (async () => {
-        // Scheduling stops first, so a queued attempt settles before any close.
+        // Update consumption stops first: it fences new sends, aborts actual
+        // in-flight poll/reply transport and drains its admitted core turn
+        // before the authority closes, while scheduling keeps its own drain.
+        await poller?.stop().catch(() => {});
+        // Scheduling stops next, so a queued attempt settles before any close.
         await schedule.stop();
         await server.close().catch(() => {});
         // The authority drains accepted commits before its journal and record close.

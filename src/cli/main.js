@@ -19,6 +19,7 @@ import { readLocalCredential } from '../state/credentials.js';
 import { readOwnerCredential } from '../state/owner-credentials.js';
 import { resolveStateDir, statePaths } from '../state/paths.js';
 import { addOrigin, addOwner, initializeState, loadPortableConfiguration } from '../state/store.js';
+import { createTelegramClient } from '../telegram/client.js';
 import { PAIRING_CODE_PATTERN, isPlainObject, isUtcTimestamp } from '../util/values.js';
 import { parseArguments, requireOptions } from './args.js';
 
@@ -43,7 +44,8 @@ const USAGE = [
   'The Telegram token is read from the environment, never from state or arguments.',
   'This checkpoint runs portable schema 2 setup: init, owner add, pair, serve, mcp and status.',
   '`mcp` prepares real request authority through the running broker; request_approval creates',
-  'or replays one request and waits for its resolution; no Telegram transport exists yet.',
+  'or replays one request and waits for its resolution. `serve` consumes private-chat pairing',
+  'updates when the token is set, but presents no approval request to the human yet.',
   '`pair` obtains a one-use five-minute pairing code from the running broker; `retry`',
   'reports its operation as unavailable; `origin add` refuses schema 2 state.',
   '`doctor` is a documented target that this build does not implement.',
@@ -141,7 +143,8 @@ async function runInit(argv, { stdout, env }) {
       '  3. proceed-mcp mcp --owner <owner_id>   (stdio MCP for that transport principal;',
       '     prepare_approval reserves real request authority through the running broker, and',
       '     request_approval creates that one request and waits for its resolution, expiry or',
-      '     cancellation; no Telegram transport exists yet, so no human decision is delivered)',
+      '     cancellation; a configured serve consumes pairing messages only, so no request',
+      '     is presented and no human decision is recorded from Telegram yet)',
       '  4. proceed-mcp serve starts the loopback broker and "status" reports it.',
       '     "pair" obtains a one-use code from that running broker for private-chat pairing;',
       '     retry and request delivery are later checkpoints that report their operation as',
@@ -234,17 +237,21 @@ async function runServe(argv, { stdout, stderr, env }) {
 
   const paths = commandStatePaths(options, env);
   const config = await loadPortableConfiguration(paths);
+  // The environmental token selects the fixed-origin client; no token means no
+  // Telegram traffic at all and keeps local-only readiness.
+  const token = env[TELEGRAM_TOKEN_ENV];
+  const telegram = token === undefined || token === '' ? null : createTelegramClient({ token });
   const runtime = await startPortableRuntime({
     paths,
     config,
+    telegram,
     logger: (message) => stderr.write(`proceed-mcp: ${message}\n`),
   });
 
   stdout.write(`proceed-mcp: broker ready on http://127.0.0.1:${runtime.port}\n`);
   stdout.write(`proceed-mcp: state directory ${paths.stateDir}\n`);
   // Local readiness does not depend on the token: one diagnostic after success only.
-  const token = env[TELEGRAM_TOKEN_ENV];
-  if (token === undefined || token === '') {
+  if (telegram === null) {
     stderr.write(
       `proceed-mcp: Telegram unavailable: set ${TELEGRAM_TOKEN_ENV} and restart serve; local broker only\n`,
     );

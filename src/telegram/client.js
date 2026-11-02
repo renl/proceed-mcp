@@ -109,12 +109,14 @@ export function createTelegramClient({ token, timeoutMs = TELEGRAM_REQUEST_TIMEO
       );
     },
 
-    async sendMessage(payload) {
-      return call('sendMessage', payload);
+    // UI calls carry the caller's abort signal so a stop reaches transport that
+    // is already in flight, not only the long poll.
+    async sendMessage(payload, { signal } = {}) {
+      return call('sendMessage', payload, timeoutMs, signal);
     },
 
-    async answerCallbackQuery(payload) {
-      return call('answerCallbackQuery', payload);
+    async answerCallbackQuery(payload, { signal } = {}) {
+      return call('answerCallbackQuery', payload, timeoutMs, signal);
     },
 
     async editMessageText(payload) {
