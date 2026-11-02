@@ -1,5 +1,9 @@
 # Tasks
 
+## C1-P2 public proof preparation
+- [x] P.C1P2-tests Controlled public proof prepared and executed: unfiltered32/32PASS, separate cleanupPASS. Actual-client lifecycle/abort/drain plus raw-batch/admission/fault breadth, unchanged native-rule reuse and proof limits in linked slice. Source remains accepted `add0bfc` at baseline `e3d16735`. No production edits or real Telegram/human acceptance.
+- [ ] P.C1P2-review [Public lifecycle, abort/drain packet and exact mandatory remainder](slices/03c1-p2-public-proof.md). Baseline `e3d16735`, tests/helpers/owned docs only. One combined owning review pending. No C1 acceptance or partial promotion.
+
 ## C1-P1 poller/runtime foundational preparation
 - [x] P.C1P1-tests [Complete source brief, foundational proof mapping and mandatory P2](slices/03c1-p1-poller-runtime.md). Baseline `215f5a5e`, accepted core-A/B and public challenge `911ebe6e` present. Tests/helpers/owned docs only. No production changes.
 - [ ] P.C1P1-review ONE combined external-boundary/decomposition/test-artifact review. Triggers1/3/4/5YES,2NO. No implementation readiness before that review and separate source authorization. Full compliant four-path source required, not test-selected behavior subset.
