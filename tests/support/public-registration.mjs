@@ -50,7 +50,8 @@ export function toolError(outcome, code) {
   }), 'matching text and structured error, without printing private output');
   return r.structuredContent.error;
 }
-export async function publicRegistration(work, { paired = false, foreign = false } = {}) {
+export async function publicRegistration(work, { paired = false, foreign = false, totalMs = 50000,
+  transportErrors = false } = {}) {
   const finalChecks = [];
   let progress;
   const result = await bounded(() => managed(async context => {
@@ -143,16 +144,25 @@ export async function publicRegistration(work, { paired = false, foreign = false
             record.release();
           });
         });
-        upstreams.add(up); up.on('close', () => upstreams.delete(up));
-        up.on('error', () => { if (!res.destroyed) { res.writeHead(503); res.end('{}'); } });
+        upstreams.add(up); up.on('close', () => { record.upstreamClosed = true; upstreams.delete(up); });
+        up.on('error', () => {
+          record.upstreamErrorAt = performance.now();
+          if (transportErrors) res.destroy();
+          else if (!res.destroyed) { res.writeHead(503); res.end('{}'); }
+        });
         up.end(Buffer.concat(input));
       } catch { res.destroy(); }
     });
     relay.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
     await new Promise(done => relay.listen(0, '127.0.0.1', done));
     const port = relay.address().port;
-    const restart = async () => {
+    const stop = async () => {
       if (broker) await stopped(broker);
+      broker = null;
+      await assert.rejects(access(join(state, 'broker.lock')), { code: 'ENOENT' });
+    };
+    const restart = async () => {
+      await stop();
       await save(backend); broker = spawnProduct(['serve'], true);
       await observe(async () => { try { return (await http('/v1/status', control)).ok; } catch { return false; } },
         'real broker authenticated readiness', 8000);
@@ -181,7 +191,8 @@ export async function publicRegistration(work, { paired = false, foreign = false
     try {
       await save(port);
       await progress('execution');
-      await work({ connect, restart, eof, http, calls, secrets, requestSecrets, state, owner, control,
+      await work({ connect, restart, stop, eof, http, calls, secrets, requestSecrets, state, owner, control,
+        phase: progress,
         hold: fn => { hold = fn; }, mutate: fn => { mutate = fn; },
         journal: () => readFile(join(state, 'journal.log')) });
     } finally {
@@ -205,7 +216,7 @@ export async function publicRegistration(work, { paired = false, foreign = false
       await new Promise((done, reject) => { backendProbe.once('error', reject); backendProbe.listen(backend, '127.0.0.1', done); });
       await new Promise(done => backendProbe.close(done));
     }
-  }, { totalMs: 50000 }), 60000, 'public registration aggregate setup/execution/teardown deadline');
+  }, { totalMs }), totalMs + 10000, 'public registration aggregate setup/execution/teardown deadline');
   if (progress) await progress(result.cleanupError ? 'cleanup-failed' : 'cleaned');
   assert.ifError(result.cleanupError);
   for (const check of finalChecks) check();

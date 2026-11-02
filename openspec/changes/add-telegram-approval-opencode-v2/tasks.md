@@ -1,5 +1,8 @@
 # Tasks
 
+## B3 W1c mandatory long-lived breadth
+- [ ] P.B3-W1c-1 [Longevity/restart/automatic expiry packet and actual verdict](slices/03b5-adapter-wait-breadth.md#executed-verdict---packet-1-pass-owning-review-pending): unchanged accepted source `c548045e`, authoring HEAD `c47651e`. Full new3/3 and affected helper/public25/25 PASS, cleanup PASS/23 namespaces absent. Ready for owning combined artifact review only. Same path/branch/change/test-engineering owner, active/retain, next action review then separate mandatory packet2 lease/incarnation/race/409 and lifecycle cancellation breadth. No complete waiting, returned-write, human, feature or release acceptance.
+
 ## B3 W1b public original-call proof
 - [x] P.WAIT-AUTHORITY-001 attempt1 CLOSED at `c548045e8a976dc04ab70e0607c5ce6b8b82d333`: independent native83/83 and full public W1b7/7 PASS, cleanup PASS. [Current verdict, reuse, failure disclosure and charges](slices/03b4-adapter-wait-public.md#wait-authority-001-attempt1---independent-affected-pass). Supersedes historical attempt0 blocking state below.
 - [ ] P.B3-W1b-review Executable W1b assertions complete. One combined boundary/decomposition/test-artifact review remains pending through coordination, no repeated W1a review. Helpers18/18 and brokerwait34/34 current evidence reused. Initial helper setup failure and legacy PORT-A/B failures remain disclosed/unpassed as specified in the verdict. Full waiting breadth and actual returned-write remain blocking. Same worktree/branch/change/owner active/retain, next action combined review, no removal eligibility.
