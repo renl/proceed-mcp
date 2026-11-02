@@ -156,15 +156,15 @@ test('C1CA-ADMISSION: browser/readiness/auth/role then exact object and 64KiB li
   assert.deepEqual(await response.json(), challenge); // positive size boundary, not a blanket refusal
 }));
 
-test('C1CA-PAIRED: actual core consumption then HTTP409/CLI3 cannot replace or append', opts, () => consumer(async h => {
+test('C1CA-PAIRED: actual core consumption then HTTP409/CLI2 cannot replace or append', opts, () => consumer(async h => {
   h.ready(); assert.deepEqual(await h.b.pairingChallenge(), challenge); // prerequisite fixture, not public issuance proof
   assert.deepEqual(await h.b.completePairing({ code, userId: '71', chatId: '81', updateId: 7 }), { paired: true });
   const bytes = await h.bytes(), binding = h.b.pairing();
   const refused = await error(await h.request(), 409, 'IDEMPOTENCY_CONFLICT');
   assert.deepEqual(refused, { schema_version: 1, error: { code: 'IDEMPOTENCY_CONFLICT',
     message: 'A human is already paired; pairing cannot be replaced', retryable: false } });
-  const cli = await h.cli('pair'); assert.equal(cli.code, 3); assert.equal(cli.stdout, '');
-  assert.equal(cli.stderr, `proceed-mcp: ${refused.error.message}\n`);
+  const cli = await h.cli('pair'); assert.equal(cli.code, 2); assert.equal(cli.stdout, '');
+  assert.equal(cli.stderr, 'proceed-mcp: A human is already paired; pairing cannot be replaced (IDEMPOTENCY_CONFLICT)\n');
   assert.deepEqual(await h.bytes(), bytes); assert.deepEqual(h.b.pairing(), binding);
 }));
 
