@@ -225,6 +225,28 @@ for (const loss of ['abort', 'release', 'expiry', 'replacement']) test(`WAIT-HTT
   if (loss === 'abort') { const v = await h.b.cancelRequest(bind(p)); assert.equal(v.delivery_state, 'unavailable'); }
   else assert.equal((await h.b.waitRequest(bind(p))).state, 'pending');
 }, { wire: true }));
+for (const loss of ['expiry', 'release']) test(`WAIT-HTTP-STALE-${loss}: attached loss cannot revive or renew/delete replacement`, opts, () => run(async h => {
+  const p = h.ps[0], old = await h.reg(), bytes = await h.bytes(), x = await h.admit(p, old);
+  if (loss === 'expiry') h.regNow += 45000;
+  else assert.equal((await h.call(`/v1/adapter/${old.registration_id}`, {}, { method: 'DELETE', headers: h.rh(old) })).status, 204);
+  const fresh = await h.reg(); assert.notEqual(fresh.registration_id, old.registration_id);
+  code(await x.p, 401, 'AUTH_REQUIRED');
+  h.regNow += 1000;
+  for (const [method, suffix] of [['POST', '/heartbeat'], ['DELETE', '']]) {
+    const result = await h.call(`/v1/adapter/${old.registration_id}${suffix}`, method === 'DELETE' ? '' : {}, { method, headers: h.rh(old) });
+    assert.equal(result.status, 401, `${method} stale authority: ${result.body?.error?.message}`);
+    code(result, 401, 'AUTH_REQUIRED');
+  }
+  code(await h.wait(p, old).p, 401, 'AUTH_REQUIRED');
+  code(await h.call('/v1/adapter'), 409, 'OWNER_IN_USE');
+  assert.equal((await h.call(`/v1/adapter/${fresh.registration_id}/heartbeat`, {}, { headers: h.rh(fresh) })).status, 204);
+  h.regNow += 44999; code(await h.call('/v1/adapter'), 409, 'OWNER_IN_USE');
+  // The denied stale requests at the later instant cannot move the fresh deadline.
+  code(await h.call(`/v1/adapter/${old.registration_id}/heartbeat`, {}, { headers: h.rh(old) }), 401, 'AUTH_REQUIRED');
+  h.regNow++; const next = await h.reg(); assert.notEqual(next.registration_id, fresh.registration_id);
+  assert.deepEqual(await h.bytes(), bytes, 'lease/replacement/loss performs no business mutation');
+  const v = await h.b.cancelRequest(bind(p)); assert.equal(v.delivery_state, 'unavailable', 'no stale attached waiter survives');
+}, { wire: true }));
 test('WAIT-HTTP-SHUTDOWN: detach waits promptly but preserve admitted ordinary sync/result drain', opts, () => run(async h => {
   const p = h.ps[0], r = await h.reg(), x = await h.admit(p, r), g = h.hold();
   const ordinary = h.raw('/v1/handles'); await bounded(() => g.entered.promise, 800, 'ordinary writer sync'); let closed = false, ordinaryDone = false;

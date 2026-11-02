@@ -51,7 +51,7 @@ export function toolError(outcome, code) {
   return r.structuredContent.error;
 }
 export async function publicRegistration(work, { paired = false, foreign = false, totalMs = 50000,
-  transportErrors = false } = {}) {
+  transportErrors = false, detachUpstream = false } = {}) {
   const finalChecks = [];
   let progress;
   const result = await bounded(() => managed(async context => {
@@ -107,18 +107,21 @@ export async function publicRegistration(work, { paired = false, foreign = false
     const http = (path, token = owner, options = {}) => fetch(`http://127.0.0.1:${backend}${path}`, {
       ...options, headers: { ...(token === null ? {} : { authorization: `Bearer ${token}` }), 'content-type': 'application/json', ...options.headers },
       signal: AbortSignal.timeout(1000), redirect: 'error' });
-    let broker, hold = () => false, mutate = value => value;
+    let broker, hold = () => false, mutate = value => value, beforeForward = async () => {};
     const upstreams = new Set();
     const relay = createServer(async (req, res) => {
       const record = { method: req.method, path: req.url, at: performance.now(), closed: false,
         header: req.headers['x-proceed-registration'], token: req.headers.authorization,
         capability: req.headers['x-proceed-request-capability'] };
       calls.push(record);
+      record.disconnect = () => res.destroy();
       req.socket.once('close', () => { record.socketClosed = true; record.socketClosedAt = performance.now(); });
       res.on('close', () => { record.closed = true; record.closedAt = performance.now(); });
       try {
         const input = []; for await (const b of req) input.push(b);
         record.body = JSON.parse(Buffer.concat(input).toString() || 'null');
+        await beforeForward(record);
+        if (res.destroyed) { record.notForwarded = true; return; }
         const up = request({ hostname: '127.0.0.1', port: backend, path: req.url,
           method: req.method, headers: req.headers }, reply => {
           const chunks = []; let size = 0;
@@ -145,6 +148,7 @@ export async function publicRegistration(work, { paired = false, foreign = false
           });
         });
         upstreams.add(up); up.on('close', () => { record.upstreamClosed = true; upstreams.delete(up); });
+        if (detachUpstream) res.once('close', () => { if (!record.committed) up.destroy(); });
         up.on('error', () => {
           record.upstreamErrorAt = performance.now();
           if (transportErrors) res.destroy();
@@ -194,6 +198,7 @@ export async function publicRegistration(work, { paired = false, foreign = false
       await work({ connect, restart, stop, eof, http, calls, secrets, requestSecrets, state, owner, control,
         phase: progress,
         hold: fn => { hold = fn; }, mutate: fn => { mutate = fn; },
+        beforeForward: fn => { beforeForward = fn; },
         journal: () => readFile(join(state, 'journal.log')) });
     } finally {
       await progress('teardown');

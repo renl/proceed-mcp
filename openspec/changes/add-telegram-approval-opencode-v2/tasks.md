@@ -1,6 +1,7 @@
 # Tasks
 
 ## B3 W1c mandatory long-lived breadth
+- [ ] P.B3-W1c-2 [Lease/incarnation/conflict/cancellation packet and verdict](slices/03b6-adapter-wait-races.md#executed-verdict-bounded-pass-combined-owning-review-pending): baseline `307b320a`, production unchanged `c548045e`. Final public13/native84/broker36 and affected helper125 PASS, cleanup PASS. Initial two DELETE-fixture failures and strict correction preserved. Same retained worktree/branch/change/owner, active, next action ONE combined owning review. Full waiting and separate successful-write reporting remain unaccepted.
 - [ ] P.B3-W1c-1 [Longevity/restart/automatic expiry packet and actual verdict](slices/03b5-adapter-wait-breadth.md#executed-verdict---packet-1-pass-owning-review-pending): unchanged accepted source `c548045e`, authoring HEAD `c47651e`. Full new3/3 and affected helper/public25/25 PASS, cleanup PASS/23 namespaces absent. Ready for owning combined artifact review only. Same path/branch/change/test-engineering owner, active/retain, next action review then separate mandatory packet2 lease/incarnation/race/409 and lifecycle cancellation breadth. No complete waiting, returned-write, human, feature or release acceptance.
 
 ## B3 W1b public original-call proof

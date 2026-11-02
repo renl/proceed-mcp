@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getEventListeners } from 'node:events';
 import { createToolExecutor } from '../src/mcp/execution.js';
+import { createRegistrationBinding } from '../src/mcp/registration.js';
 import * as local from '../src/http/local-client.js';
 import { bounded } from './support/managed-spike.mjs';
 const id = (p, n = '1') => p + n.repeat(32);
@@ -283,6 +284,45 @@ test('WAIT-U-401: captured registration refresh; no creation replay, replacement
     assert.deepEqual(f.refreshes, [authority('1')]); assert.equal(f.calls.length, 1);
     assert.equal(f.waits[1][3]['X-Proceed-Registration'], authority('2').registration_secret);
   } finally { await f.ex.close(); }
+});
+test('WAIT-U-INCARNATION: fresh binding survives old heartbeat200/401 and old original wait401', async t => {
+  for (const status of [204, 401]) {
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    let beatRelease, waitRelease; const calls = [], waits = [];
+    const oldBeat = new Promise(r => { beatRelease = r; }), oldWait = new Promise(r => { waitRelease = r; });
+    let registrations = 0;
+    const client = { async request(method, path, body, headers) {
+      calls.push({ method, path, body, headers });
+      if (path === '/v1/adapter') return reply(authority(String(++registrations)), 201);
+      if (path.endsWith('/heartbeat')) return registrations === 1 ? oldBeat : reply(null, 204);
+      if (method === 'DELETE') return reply(null, 204);
+      return reply(view(), 201);
+    } };
+    const binding = createRegistrationBinding({ client });
+    const ex = createToolExecutor({ client, registration: binding, waitClient: { async request(...a) {
+      waits.push(a); return waits.length === 1 ? oldWait : reply(terminal());
+    } } });
+    const original = ex.execute('request_approval', args()); original.catch(() => {});
+    try {
+      await turns(); assert.equal(waits.length, 1); t.mock.timers.tick(10000); await turns();
+      assert.equal(calls.filter(c => c.path.endsWith('/heartbeat')).length, 1, 'old heartbeat actually in flight');
+      assert.deepEqual(await binding.refresh(authority('1')), authority('2'));
+      beatRelease(status === 401 ? fault('AUTH_REQUIRED', 401) : reply(null, 204)); await turns();
+      waitRelease(fault('AUTH_REQUIRED', 401)); success(await original, terminal());
+      assert.deepEqual(await binding.ensure(), authority('2')); assert.equal(registrations, 2);
+      assert.equal(waits.length, 2); assert.equal(waits[1][3]['X-Proceed-Registration'], authority('2').registration_secret);
+      assert.deepEqual(waits[1][2], { registration_id: authority('2').registration_id });
+      t.mock.timers.tick(10000); await turns();
+      const beats = calls.filter(c => c.path.endsWith('/heartbeat')); assert.equal(beats.length, 2);
+      assert.ok(beats[1].path.endsWith(`${authority('2').registration_id}/heartbeat`));
+      assert.equal(beats[1].headers['X-Proceed-Registration'], authority('2').registration_secret);
+      assert.equal(calls.filter(c => c.method === 'DELETE').length, 0, 'stale completion never deletes to evade owner admission');
+      assert.equal(calls.filter(c => c.path === '/v1/requests').length, 1);
+    } finally { beatRelease(reply(null, 204)); waitRelease(reply(terminal())); await ex.close(); t.mock.timers.reset(); }
+    const released = calls.filter(c => c.method === 'DELETE'); assert.equal(released.length, 1);
+    assert.ok(released[0].path.endsWith(authority('2').registration_id));
+    assert.equal(released[0].headers['X-Proceed-Registration'], authority('2').registration_secret);
+  }
 });
 test('WAIT-U-RECONNECT: transport-only 1/2/4/8/16/repeated30 ladder, no cutoff, abortable', async t => {
   for (const stop of ['abort', 'close']) {
