@@ -6,7 +6,9 @@
 // never enters a log line or an error message. A local generation serial fences
 // every completion, so a create, heartbeat or release that settles after close
 // (or after the authority it described was invalidated) cannot install a
-// registration, restyle a timer or remove another incarnation.
+// registration, restyle a timer or remove another incarnation. The same binding
+// answers from retained state only whether a captured incarnation is still the one
+// it holds, so a caller can refuse a stale capture without refreshing or taking over.
 import {
   REGISTRATION_ID_PATTERN,
   REGISTRATION_SECRET_PATTERN,
@@ -119,6 +121,19 @@ class RegistrationBinding {
   close() {
     this.#closing ??= this.#shutdown();
     return this.#closing;
+  }
+
+  // Minimum local identity check for a captured incarnation: does this binding still
+  // hold exactly that authority? It reads retained state only, so it never refreshes,
+  // retries, takes over or exchanges a stale capture for the current credential.
+  holds(authority) {
+    const current = this.#authority;
+    return (
+      !this.#closed &&
+      current !== null &&
+      authority?.registration_id === current.registration_id &&
+      authority?.registration_secret === current.registration_secret
+    );
   }
 
   #begin() {

@@ -574,10 +574,15 @@ export function createToolExecutor({ client, waitClient, registration }) {
   // tracked, abortable transport and only the captured incarnation. Nothing waits for
   // its reply, a rejection or lost response is observed and discarded, and no report
   // retries, refreshes authority, replays business work or fabricates ledger evidence.
+  // A capture this adapter already knows is released or replaced starts no exchange at
+  // all, and is never swapped for the current credentials.
   function reportWritten(result) {
     const report = result?.[WRITTEN];
-    if (report === undefined || report.admitted === true || ordinary.signal.aborted) return null;
+    if (report === undefined || report.admitted === true) return null;
     report.admitted = true;
+    // Local identity is checked synchronously before the one attempt, alongside the
+    // close fence: an incarnation the binding no longer holds cannot report.
+    if (ordinary.signal.aborted || !registration.holds(report.authority)) return null;
     const controller = new AbortController();
     const path = `/v1/requests/${encodeURIComponent(report.request_id)}/returned`;
     const body = {

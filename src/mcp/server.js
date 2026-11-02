@@ -150,6 +150,12 @@ export async function runMcpServer({
   // its queue ownership and the frames behind it still write in order, and only an
   // error-free callback for a still-usable stream counts as a successful write.
   const CLOSED_STREAM = new Error('stdout is not writable');
+  // The closure fence is raised before in-flight work drains, so queued work never
+  // reaches the broker after EOF and no response is written to closed input.
+  let closed = false;
+  // Callback ownership of the frames already handed to stdout, so EOF can abandon a
+  // write whose callback may never arrive instead of waiting for it indefinitely.
+  const pendingWrites = new Set();
   let writing = Promise.resolve();
   const write = (message) => {
     const frame = writing.then(
@@ -159,10 +165,15 @@ export async function runMcpServer({
           const settle = (error) => {
             if (settled) return;
             settled = true;
+            pendingWrites.delete(settle);
             // A destroyed stream cannot have delivered these bytes, whatever its
             // callback reports, so that is a failed write rather than evidence.
             resolve(error ?? (stdout.destroyed === true ? CLOSED_STREAM : null));
           };
+          // A frame queued behind another must not start on closed input: EOF
+          // abandons it as a failed write, so its invocation stays unreported.
+          if (closed) return settle(CLOSED_STREAM);
+          pendingWrites.add(settle);
           try {
             stdout.write(`${JSON.stringify(message)}\n`, settle);
           } catch (error) {
@@ -241,9 +252,6 @@ export async function runMcpServer({
   // ID type, so numeric `7` and string `"7"` are two independent invocations.
   const active = new Map();
   const inflight = new Set();
-  // The closure fence is raised before in-flight work drains, so queued work never
-  // reaches the broker after EOF and no response is written to closed input.
-  let closed = false;
 
   const track = (task) => {
     inflight.add(task);
@@ -295,8 +303,9 @@ export async function runMcpServer({
     // frame nor successful-write evidence may be produced from it.
     if (response === null || closed || entry?.cancelled === true) return release();
     const failed = await write(response);
-    // A callback error, a synchronous throw, a destroyed stream, a cancellation or
-    // EOF processed before the callback: all are failed or suppressed writes.
+    // A callback error, a synchronous throw, a destroyed stream, a write abandoned by
+    // EOF, a cancellation or EOF processed before the callback: all are failed or
+    // suppressed writes.
     if (failed !== null || closed || entry?.cancelled === true) return release();
     const attempt = admitReport(entry, message, response);
     if (attempt === null) return release();
@@ -341,6 +350,11 @@ export async function runMcpServer({
   await new Promise((resolve) => {
     lines.on('close', () => {
       closed = true;
+      // Callback ownership of a frame already handed to stdout is abandoned here: that
+      // callback may never arrive, and its invocation must not outlast the shared
+      // shutdown budget. A late callback finds the frame already settled, so it can
+      // neither revive the writer nor become successful-write evidence.
+      for (const settle of [...pendingWrites]) settle(CLOSED_STREAM);
       // Cleanup starts here, not after in-flight work drains: the execution owner
       // fences new and in-flight broker work and closes its own transport once,
       // while every invocation settles without writing to closed input.
