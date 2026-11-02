@@ -14,6 +14,13 @@
 // alone, so no transport owner, token or recovery clock can grant, remove or
 // invalidate it, and the private getter below never exposes challenges.
 //
+// Challenge issuance is the only writer of a new pairing code: one generated
+// code is hashed inside the serialized turn, one UTC instant fixes its exact
+// five-minute deadline, and the plaintext leaves only through the caller's
+// return value. The Telegram update cursor is the other durable position
+// replayed from history: a raw nonnegative update id that strictly increases,
+// never a derived next offset and never a recovery-time computation.
+//
 // Request replay decodes creation, expiry and cancellation from committed
 // history: creation binds to an already committed reservation and pairing, a
 // closure resolves one pending request, and the whole history is staged before
@@ -58,11 +65,13 @@ import { MAX_TELEGRAM_TEXT, measurePortablePresentation } from '../telegram/port
 import {
   CLIENT_REQUEST_ID_PATTERN,
   DECISION_ID_PATTERN,
+  PAIRING_CODE_PATTERN,
   REQUEST_CAPABILITY_PATTERN,
   REQUEST_HANDLE_PATTERN,
   REQUEST_ID_PATTERN,
   isPlainObject,
   randomDecisionId,
+  randomPairingCode,
   randomRequestCapability,
   randomRequestHandle,
   randomRequestId,
@@ -78,6 +87,7 @@ const RESERVE_OP = 'handle.reserve';
 const CHALLENGE_OP = 'pairing.challenge';
 const CONSUME_OP = 'pairing.challenge.consume';
 const SET_OP = 'pairing.set';
+const CURSOR_OP = 'telegram.cursor';
 const CREATE_OP = 'request.create';
 const EXPIRE_OP = 'request.expire';
 const CANCEL_OP = 'request.cancel';
@@ -107,6 +117,7 @@ const RESERVATION_FIELDS = [
 const CHALLENGE_FIELDS = ['created_at', 'expires_at', 'hash', 'op'];
 const CONSUME_FIELDS = ['consumed_at', 'hash', 'op'];
 const SET_FIELDS = ['op', 'pairing'];
+const CURSOR_FIELDS = ['last_update_id', 'op'];
 const PAIRING_FIELDS = ['chat_id', 'paired_at', 'user_id'];
 const CREATE_FIELDS = [
   'action',
@@ -360,17 +371,14 @@ function isDue(request, milliseconds) {
 
 // Creation samples the clock exactly once. An unusable reading or an instant
 // that cannot be represented is a storage failure, not a caller error, and it is
-// refused before any append, so it never fences the journal.
-function creationTimes(clock, duration) {
+// refused before any append, so it never fences the journal. Challenge issuance
+// reuses the same rule with its own five-minute duration and action name.
+function creationTimes(clock, duration, action = 'creating a request') {
   let milliseconds;
   try {
     milliseconds = clock();
   } catch (cause) {
-    throw storageFailure(
-      'the broker clock failed while creating a request',
-      'STORAGE_FAILURE',
-      cause,
-    );
+    throw storageFailure(`the broker clock failed while ${action}`, 'STORAGE_FAILURE', cause);
   }
   if (typeof milliseconds !== 'number' || !Number.isFinite(milliseconds)) {
     throw storageFailure('the broker clock did not return a usable instant', 'STORAGE_FAILURE');
@@ -614,6 +622,24 @@ function readEvidence(mutation, kind) {
   };
 }
 
+// One Telegram update id is stored exactly as delivered: a raw nonnegative safe
+// integer whose next offset is also safe, so no string, fraction or coercion can
+// become an offset. The same predicate guards the writer and the replay decoder,
+// so a value this instance would never append is also never accepted from history.
+function usableUpdateId(value) {
+  return Number.isSafeInteger(value) && value >= 0 && value < Number.MAX_SAFE_INTEGER;
+}
+
+// The cursor decodes from exactly its two persisted fields: the last fully
+// processed update id, with no derived offset and no implicit default.
+function readCursor(mutation) {
+  exactFields(mutation, CURSOR_FIELDS);
+  if (!usableUpdateId(mutation.last_update_id)) {
+    throw integrity(`${CURSOR_OP} needs a raw nonnegative update id with a safe next offset`);
+  }
+  return { kind: 'cursor', last_update_id: mutation.last_update_id };
+}
+
 // Pairing joins the reservation vocabulary of committed history. An unfamiliar
 // operation stays fatal rather than skipped.
 function readMutation(mutation) {
@@ -629,6 +655,8 @@ function readMutation(mutation) {
       return readConsume(mutation);
     case SET_OP:
       return readSet(mutation);
+    case CURSOR_OP:
+      return readCursor(mutation);
     case CREATE_OP:
       return readCreate(mutation);
     case EXPIRE_OP:
@@ -676,6 +704,19 @@ function applyPairing(records, challenges, pairing) {
     throw integrity('paired_at must equal the same transaction consumption');
   }
   return sets[0].record;
+}
+
+// One transaction advances the cursor at most once, and the committed cursor is
+// strictly increasing across the whole history. Gaps stay valid because Telegram
+// update ids are not contiguous, so no adjacency or sequence assumption is made.
+function applyCursor(records, cursor) {
+  if (records.length === 0) return cursor;
+  if (records.length > 1) throw integrity('a transaction advances the telegram cursor twice');
+  const next = records[0].last_update_id;
+  if (cursor !== null && next <= cursor) {
+    throw integrity(`${CURSOR_OP} must strictly increase`);
+  }
+  return next;
 }
 
 // A reservation is installed immediately for uniqueness, but a creation naming
@@ -835,6 +876,8 @@ class PortableBroker {
 
   #generateDecisionId;
 
+  #generatePairingCode;
+
   #startedAt;
 
   #byHandle = new Map();
@@ -844,6 +887,10 @@ class PortableBroker {
   #byVerifier = new Map();
 
   #pairing = null;
+
+  #challengeHashes = new Set();
+
+  #cursor = null;
 
   #requests = new Map();
 
@@ -865,7 +912,16 @@ class PortableBroker {
 
   #waiters;
 
-  constructor({ journal, owners, port, clock, logger, generateDecisionId, waitTurnoverMs }) {
+  constructor({
+    journal,
+    owners,
+    port,
+    clock,
+    logger,
+    generateDecisionId,
+    generatePairingCode,
+    waitTurnoverMs,
+  }) {
     this.#journal = journal;
     this.#owners = new Map();
     for (const owner of owners) {
@@ -883,17 +939,19 @@ class PortableBroker {
     this.#clock = clock;
     this.#logger = logger;
     this.#generateDecisionId = generateDecisionId;
+    this.#generatePairingCode = generatePairingCode;
     this.#startedAt = utcTimestamp(clock());
     // The turnover is a private observation window, never public configuration.
     this.#waiters = createWaiterRegistry({ timeoutMs: waitTurnoverMs });
   }
 
-  // Rebuilds reservations, pairing and requests from committed transactions.
-  // The whole history is staged first: a replay failure installs nothing and
-  // leaves the previous state untouched, and the journal is never written here.
-  // Recovery shares the mutation queue, so it can neither race an admitted
-  // append nor acknowledge history that a held writer has not committed, and a
-  // failed recovery fences the instance like any other uncertain storage state.
+  // Rebuilds reservations, pairing, challenges, the Telegram cursor and requests
+  // from committed transactions. The whole history is staged first: a replay
+  // failure installs nothing and leaves the previous state untouched, and the
+  // journal is never written here. Recovery shares the mutation queue, so it can
+  // neither race an admitted append nor acknowledge history that a held writer
+  // has not committed, and a failed recovery fences the instance like any other
+  // uncertain storage state.
   recover() {
     const refusal = this.#admissionRefusal();
     if (refusal !== null) return Promise.reject(refusal);
@@ -932,12 +990,14 @@ class PortableBroker {
     };
     const challenges = new Map();
     let pairing = null;
+    let cursor = null;
     for (const transaction of transactions) {
       const records = (transaction?.mutations ?? []).map(readMutation);
       // Committed authority only: this transaction's own reservations and
       // pairing mutations are deliberately not visible to its creations.
       const reservedNow = new Set();
       const pairingRecords = [];
+      const cursorRecords = [];
       for (const record of records) {
         if (record.kind === 'reservation') stageReservation(record.record, staged, reservedNow);
         else if (record.kind === 'create') stageCreate(record.record, staged, pairing, reservedNow);
@@ -945,9 +1005,11 @@ class PortableBroker {
         else if (record.kind === 'cancel') stageClosure(record.record, staged, 'cancelled');
         else if (record.kind === 'acknowledge' || record.kind === 'returned') {
           stageEvidence(record, staged);
-        } else pairingRecords.push(record);
+        } else if (record.kind === 'cursor') cursorRecords.push(record);
+        else pairingRecords.push(record);
       }
       pairing = applyPairing(pairingRecords, challenges, pairing);
+      cursor = applyCursor(cursorRecords, cursor);
     }
     this.#byHandle = staged.byHandle;
     this.#byRequestId = staged.byRequestId;
@@ -955,6 +1017,10 @@ class PortableBroker {
     this.#requests = staged.requests;
     this.#decisions = staged.decisions;
     this.#pairing = pairing;
+    // Challenge verifiers stay retained after the staging maps are installed, so
+    // a later issuance cannot reuse a hash that history already committed.
+    this.#challengeHashes = new Set(challenges.keys());
+    this.#cursor = cursor;
     this.#recovered = true;
     return { records: transactions.length };
   }
@@ -963,6 +1029,41 @@ class PortableBroker {
   // challenge, hash or consumption, and mutating the result cannot alter state.
   pairing() {
     return this.#pairing === null ? null : { ...this.#pairing };
+  }
+
+  // Issues one durable pairing challenge (design section 5, C1). Admission is
+  // settled before the queue, so a closed or fenced broker appends nothing; the
+  // remaining conditions and every allocation happen inside the serialized turn,
+  // and the plaintext code exists only in this promise's value.
+  pairingChallenge() {
+    const refusal = this.#admissionRefusal();
+    if (refusal !== null) return Promise.reject(refusal);
+    return this.#enqueue(() => this.#issueChallenge());
+  }
+
+  // Private copied cursor (design sections 4-5): the last fully processed update
+  // id, never a derived next offset, and never part of a shared representation.
+  telegramCursor() {
+    return this.#cursor;
+  }
+
+  // Records one processed update id (design section 5, C1). The value is validated
+  // before the queue, so no string, fraction or object is coerced into an offset
+  // and nothing is sampled or appended for a malformed one. A stale or repeated id
+  // appends nothing and reports the committed cursor; a newer one appends exactly
+  // one cursor frame inside the serialized turn and reports it only after its
+  // flush, so no offset is ever exposed ahead of its committed history.
+  advanceCursor(updateId) {
+    return Promise.resolve().then(() => {
+      if (!usableUpdateId(updateId)) {
+        throw invalidArgument(
+          'last_update_id must be a nonnegative safe integer whose next offset is safe',
+        );
+      }
+      const refusal = this.#admissionRefusal();
+      if (refusal !== null) throw refusal;
+      return this.#enqueue(() => this.#advance(updateId));
+    });
   }
 
   // Reserves fresh authority for one preparation call. Validated up front, then
@@ -1166,6 +1267,73 @@ class PortableBroker {
       this.#closed = true;
     })();
     return this.#closingPromise;
+  }
+
+  // One serialized challenge issuance (design section 5, C1). Recovered, open,
+  // healthy storage and the absence of a pairing are rechecked here; the code is
+  // generated and hashed, its verifier must be unused across committed history,
+  // and one UTC instant fixes the exact five-minute deadline. Everything is
+  // decided before the append, so a generator, clock or uniqueness refusal
+  // appends nothing and never fences the journal. The plaintext code leaves only
+  // through the returned value: it is never logged, persisted or diagnosed.
+  async #issueChallenge() {
+    if (!this.#recovered) {
+      throw storageFailure('the portable broker has not recovered the journal', 'STORAGE_FAILURE');
+    }
+    if (this.#pairing !== null) {
+      throw conflict('A human is already paired; pairing cannot be replaced');
+    }
+    let code;
+    try {
+      code = this.#generatePairingCode();
+    } catch {
+      // The cause is deliberately dropped: a broken generator may have put the
+      // generated value in its message, and a refusal must not disclose it.
+      throw storageFailure('the pairing code generator failed', 'STORAGE_FAILURE');
+    }
+    if (typeof code !== 'string' || !PAIRING_CODE_PATTERN.test(code)) {
+      throw storageFailure(
+        'the pairing code generator produced an invalid code',
+        'STORAGE_FAILURE',
+      );
+    }
+    const hash = sha256Hex(code);
+    if (this.#challengeHashes.has(hash)) {
+      throw storageFailure(
+        'the pairing code verifier is already used by a committed challenge',
+        'STORAGE_FAILURE',
+      );
+    }
+    const times = creationTimes(
+      this.#clock,
+      Number(PAIRING_TTL_SECONDS),
+      'issuing a pairing challenge',
+    );
+    await this.#append([
+      {
+        op: CHALLENGE_OP,
+        hash,
+        created_at: times.created_at,
+        expires_at: times.expires_at,
+      },
+    ]);
+    this.#challengeHashes.add(hash);
+    this.#logger('portable.pairing.challenge', { expires_at: times.expires_at });
+    return { code, expires_at: times.expires_at };
+  }
+
+  // One serialized cursor turn (design section 5, C1). Only a newer id writes: a
+  // stale or repeated one reports the committed cursor without appending, so a
+  // replayed update batch can never move the position backwards or duplicate a
+  // frame. No clock is sampled, because the cursor is a platform position.
+  async #advance(updateId) {
+    if (!this.#recovered) {
+      throw storageFailure('the portable broker has not recovered the journal', 'STORAGE_FAILURE');
+    }
+    if (this.#cursor !== null && updateId <= this.#cursor) return this.#cursor;
+    await this.#append([{ op: CURSOR_OP, last_update_id: updateId }]);
+    this.#cursor = updateId;
+    return updateId;
   }
 
   async #reserve(ownerId, sessionLabel) {
@@ -1647,6 +1815,7 @@ export function createPortableBroker({
   clock = () => Date.now(),
   logger = () => {},
   generateDecisionId = randomDecisionId,
+  generatePairingCode = randomPairingCode,
   waitTurnoverMs,
 } = {}) {
   if (typeof journal?.append !== 'function' || typeof journal?.recover !== 'function') {
@@ -1665,6 +1834,7 @@ export function createPortableBroker({
     clock,
     logger,
     generateDecisionId,
+    generatePairingCode,
     waitTurnoverMs,
   });
 }
