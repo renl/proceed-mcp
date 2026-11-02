@@ -1,5 +1,9 @@
 # Tasks
 
+## C2b question-send preparation
+- [ ] P.C2B-tests [Case outline, missing private worker binding and complete budget gate](slices/03c2b-question-send.md). Baseline `11ef40d1ca7111f5637d609b3b657c5e97ed75c4`. Blocked before executable authoring, no RED/calibration or review-ready claim. Obtain the referenced implementation-selected export/options/lifecycle binding and complete source upper bound through coordination. Existing allocation/receipt methods verified present, no production edits.
+- Lifecycle: retained worktree/branch/change and test-engineering owner unchanged, active. Next action binding/forecast clarification. No resources created, no cleanup authorized or required, preserve owner/unknown work. Public/fault proof and C2c/C3/live human gates remain mandatory and unpassed.
+
 ## C2a-ii sent/failed receipt-core preparation
 - [x] P.C2AII-tests [Sole-source brief, exact receipt mapping and mandatory public remainder](slices/03c2a-ii-presentation-receipts.md). Baseline `9e68b2c05b3c246fe4b51b0000a2b151c4a2d3f1`, accepted allocation `789b7f3` present. Tests plus owned tasks/slice only, no production edit.
 - [x] P.C2AII-review Supplied approved combined journal/decomposition/test-artifact review covers triggers1/4YES,2/3/5NO. No material contract delta found during verification, no new unchanged Architecture pass or C2 acceptance.
