@@ -1,5 +1,14 @@
 # Tasks
 
+## C1-core-B native consumption preparation
+- [x] P.C1B-tests [Native consumption/rate/atomic pairing-cursor tests and ready brief](slices/03c1-core-b-consumption.md), baseline `01b164dac4869feba187f53ab3ba040df641bce9`, accepted core-A `3cf98d5` present. Tests/owned docs only, no production. Private selected `completePairing`, no fabricated raw Telegram method.
+- [ ] P.C1B-review ONE combined persisted-contract/test-artifact/decomposition review, triggers1/4YES and2/3/5NO. Confirm native refusal edges, rolling cutoff and first-clock-failure staging in linked slice before implementation readiness. No external wire gate for private helpers or automatic post-code pass.
+- [ ] P.C1B-implementation Separately authorize ONLY `src/broker/portable.js`, supplied150-190gross, combined hard600. No public CLI/route/poller, raw Telegram validation or transport policy in this native packet.
+- [ ] P.C1B-verification Independent affected verification after implementation, new suite then core-A/A0/request-replay/creation/expiry/fence checks in slice, unchanged B evidence reused by inputs.
+- Preparation Windows pinned Node24.22.2: final64 entries1 calibrationPASS/63expectedRED, exit1,768.079ms, no cancelled/skipped/todo. Absent method blocks downstream assertions. Syntax2/source-format1/whitespace/live links PASS, tests/OpenSpec formatter-excluded. Run cleanup PASS separately, TAP retained ignored.
+- Actual preparation290gross/3paths versus `01b164d`: tests239/slice42/tasks9. Supplied source upper190 gives480/4paths,120 headroom under hard600, not a whole-change exception.
+- Lifecycle unchanged: `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, test-engineering owner, active/retain/not cleanup-ready. Next action combined review through coordination. No C1/public/human/Telegram/feature/release proof, production/other-owner edits, push/PR/archive/publication or unknown cleanup.
+
 ## C1-core-A challenge/cursor preparation
 - [x] P.C1A-tests [Bounded native contract packet, source binding and dependency outline](slices/03c1-core-a-challenge-cursor.md). Baseline `3e3e5f4b`, accepted A0 and local B `dd11286`/`3e3e5f4b` present. ONLY new native test plus owned slice/index, no production or external access.
 - [x] P.C1A-review ONE focused combined persisted-contract/decomposition/test-artifact review, triggers1/4YES and2/3/5NO. Approved combined review supplied by coordination for this verification. No new Architecture pass or acceptance of other pending contract edits is inferred.
