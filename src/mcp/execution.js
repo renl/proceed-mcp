@@ -418,8 +418,13 @@ export function createToolExecutor({ client, waitClient, registration }) {
   // inside the single shutdown budget.
   const ordinary = new AbortController();
   let closing = null;
-  // One live waiting invocation per prepared handle, held across turnovers and reconnects.
+  // One live waiting invocation per prepared authority, held across turnovers and
+  // reconnects. A handle is authorized by exactly one capability, so a reservation
+  // names both: the same authority again is this adapter's own overlap, while any
+  // other presented key is decided by the broker's owner-plus-capability binding,
+  // which denies it without disclosing, creating or disturbing the live invocation.
   const waiting = new Set();
+  const reserved = (args) => `${args.request_handle}\u0000${args.request_capability}`;
 
   // Each exchange is its own transport, so one invocation's cancel never aborts another's.
   const transmit = async (which, method, path, body, headers, signal) => {
@@ -461,9 +466,10 @@ export function createToolExecutor({ client, waitClient, registration }) {
   // One creation per invocation, then that same invocation waits on the broker's bounded
   // poll; a pending receipt is not its result and no returned write is reported.
   async function requestApproval(args, signal) {
-    if (waiting.has(args.request_handle)) return complete(CONFLICT, true);
+    const reservation = reserved(args);
+    if (waiting.has(reservation)) return complete(CONFLICT, true);
     if (signal?.aborted === true) return abandoned();
-    waiting.add(args.request_handle);
+    waiting.add(reservation);
     try {
       const authority = await untilCancelled(registration.ensure(), signal);
       const capability = { [CAPABILITY_HEADER]: args.request_capability };
@@ -493,7 +499,7 @@ export function createToolExecutor({ client, waitClient, registration }) {
     } catch (error) {
       return registrationFailure(error);
     } finally {
-      waiting.delete(args.request_handle);
+      waiting.delete(reservation);
     }
   }
 
