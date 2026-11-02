@@ -1,5 +1,13 @@
 # Tasks
 
+## C1-core-A challenge/cursor preparation
+- [x] P.C1A-tests [Bounded native contract packet, source binding and dependency outline](slices/03c1-core-a-challenge-cursor.md). Baseline `3e3e5f4b`, accepted A0 and local B `dd11286`/`3e3e5f4b` present. ONLY new native test plus owned slice/index, no production or external access.
+- [ ] P.C1A-review ONE focused combined persisted-contract/decomposition/test-artifact review, triggers1/4YES and2/3/5NO. Private helpers need no wire gate. Preparation ready for that review only, not implementation-ready or C1 accepted.
+- [ ] P.C1A-implementation After review and separate coordination authority, ONLY `src/broker/portable.js`,150-190gross forecast, hard600 combined packet including tests/docs/evidence. Exact private seam and constraints in slice.
+- [ ] P.C1A-verification Whole new suite plus affected A0/recovery/fence consumers, bounded pinned Node24. Native proof is challenge/cursor-only enabling evidence, no public or human pairing, Telegram, complete feature or release claim. Core-B consume/rate/atomic cursor follows this prerequisite, public challenge/poll proof later.
+- Lifecycle unchanged: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action combined review. Run namespaces removed/absence asserted, no worktree cleanup eligibility. Other-owner/unknown state preserved.
+- Final pinned Windows Node24 new51:1 calibrationPASS/50expectedRED, exit1, zero cancelled/skipped/todo, cleanup PASS separately. Gross preparation253/3 paths plus sole-source upper190 gives443/600. Logs, prior calibration correction and blocked downstream assertions in slice. No production edit or behavioral acceptance.
+
 ## B2c actual stdout-write reporting
 - **Current independent verdict: bounded B2c and waiting/delivery B PASS** at `dd11286f94a72cb6d31486f50462aaa6c7e72f9b`, parent `b3a012198067a98052704cc2316f13f652c4d044`. WRITE-EOF-001 and WRITE-AUTHORITY-001 attempt1 closed by independent execution and source conformance review. [Current mapping, evidence, corrective chain and limits](slices/03b7-actual-write-report.md#attempt1-independent-corrected-verdict---2026-11-02). Earlier FAIL/RED remains historical. No human/Telegram, complete feature, first-use or release acceptance.
 - [x] P.B2c-correct Both gaps corrected in the selected three source paths. Independent former-failure cases and controls15/15 PASS, reviewed current full22/22, waiting23/23, affected93/93 and registration8/8 reused by candidate/assertion scope. No automatic full146 replay or unchanged-contract post-code owner gate.
