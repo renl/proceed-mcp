@@ -10,10 +10,10 @@ import { readJournal } from '../src/journal/framing.js';
 import { createTelegramClient, TelegramError } from '../src/telegram/client.js';
 import { bounded } from './support/managed-spike.mjs';
 const code = '0123456789abcdef'.repeat(2), opts = { timeout: 15000 };
-const messages = ['Paired. Approval requests are not available in this setup stage yet.',
+const messages = ['Paired. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.',
   'Pairing was not accepted. Ask the operator for a fresh code.',
   'To pair, ask the operator for a pairing code. Send /pair <code> here before it expires.',
-  'You are paired with this local broker. Approval requests are not available in this setup stage yet.'];
+  'You are paired with this local broker. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.'];
 const gate = () => { let release; const promise = new Promise(r => { release = r; }); return { promise, release }; };
 const tick = () => new Promise(r => setImmediate(r));
 const update = (id, text = `/pair ${code}`, from = { id: 71, is_bot: false }, chat = { id: 81, type: 'private' }) =>

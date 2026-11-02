@@ -10,7 +10,7 @@ import { freePort, completed } from './startup-guards.mjs';
 import { readJournal } from '../../src/journal/framing.js';
 export const rows = bytes => readJournal(Buffer.from(bytes, 'base64')).transactions.map(t => t.mutations);
 export const update = (id, code) => ({ update_id: id, message: { from: { id: 71, is_bot: false }, chat: { id: 81, type: 'private' }, text: `/pair ${code}` } });
-export const paired = 'Paired. Approval requests are not available in this setup stage yet.';
+export const paired = 'Paired. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.';
 export async function publicPoller(work, mode = '') {
   const root = resolve('.scratch/c1-poller-public'); await mkdir(root, { recursive: true });
   let phase;

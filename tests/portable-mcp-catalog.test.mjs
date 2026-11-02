@@ -88,6 +88,10 @@ test('PORT-CATALOG: schema-2 owner CLI exposes exactly five standard MCP tools w
         assert.ok(Array.isArray(tools), 'catalog response');
         assert.deepEqual(tools.map(tool => tool.name).sort(), Object.keys(expected).sort());
         workflowInstructions(initialized, tools);
+        const copy = [initialized.instructions, ...tools.map(tool => tool.description)].join('\n');
+        assert.doesNotMatch(copy, /No Telegram transport is implemented|no question is presented/i);
+        assert.match(copy, /Telegram[\s\S]*(?:display|present|question)/i);
+        assert.match(copy, /(?:approvals|Approve)[\s\S]*(?:not recorded|not available|not implemented)/i);
         for (const { name, inputSchema: schema } of tools) {
           assert.equal(schema.type, 'object');
           assert.equal(schema.additionalProperties, false);

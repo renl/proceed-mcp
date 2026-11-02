@@ -1,7 +1,8 @@
 # Tasks
 
 ## C2b question-send preparation
-- [ ] P.C2B-tests [Case outline, missing private worker binding and complete budget gate](slices/03c2b-question-send.md). Baseline `11ef40d1ca7111f5637d609b3b657c5e97ed75c4`. Blocked before executable authoring, no RED/calibration or review-ready claim. Obtain the referenced implementation-selected export/options/lifecycle binding and complete source upper bound through coordination. Existing allocation/receipt methods verified present, no production edits.
+- [ ] P.C2B-tests [Foundational executable contracts and complete implementation brief](slices/03c2b-question-send.md). Baseline `11ef40d1ca7111f5637d609b3b657c5e97ed75c4`, prerequisites receipts `39b25f06` / evidence `11ef40d1` present. Selected private binding recorded before tests. Native41:3 calibration PASS/38 expected RED. Activation69:65 PASS/4 expected RED. Ready for ONE combined boundary/decomposition/test-artifact review, not implementation or C2 acceptance.
+- [ ] P.C2B-public Mandatory dependent P2 public fixed-origin HTTPS/process and fault/retry/abort/restart breadth after full P1 production. Original adapter-created request must remain waiting while exact question is observed, explicit cancellation supplies non-approval. Native fake-client receipt is not this proof. C2c edits/C3 decisions separate. Worktree retained active, lifecycle details in slice.
 - Lifecycle: retained worktree/branch/change and test-engineering owner unchanged, active. Next action binding/forecast clarification. No resources created, no cleanup authorized or required, preserve owner/unknown work. Public/fault proof and C2c/C3/live human gates remain mandatory and unpassed.
 
 ## C2a-ii sent/failed receipt-core preparation
