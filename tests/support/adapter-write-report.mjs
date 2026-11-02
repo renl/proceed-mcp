@@ -42,11 +42,11 @@ export async function controlled(h, work, { callback = true, fault = null } = {}
   const client = createLocalClient({ port: config.broker.port, token: h.owner });
   const executor = createToolExecutor({ client, waitClient: client,
     registration: createRegistrationBinding({ client }) });
-  const stdin = new PassThrough(), writes = [], errors = [], hooks = [];
+  const stdin = new PassThrough(), writes = [], errors = [], hooks = [], consumed = new Set();
   const stdout = new Writable({ highWaterMark: 1, write(chunk, encoding, done) {
     const frame = JSON.parse(String(chunk)); let released = false;
     writes.push({ frame, done(error) { if (!released) { released = true; done(error); } } });
-    if (frame.id !== 'original') done();
+    if (frame.id !== 'original') { released = true; done(); }
   } });
   if (fault === 'throw') {
     const write = stdout.write.bind(stdout);
@@ -70,13 +70,15 @@ export async function controlled(h, work, { callback = true, fault = null } = {}
     } } : {}), onInputClosed: () => { void executor.close(); } });
   try {
     await work({ call, send, writes, errors, hooks, stdout, executor, end: () => stdin.end(),
-      frame: async id => { await observe(() => writes.some(w => w.frame.id === id), 'actual Writable invocation');
-        return writes.find(w => w.frame.id === id); },
+      frame: async id => { const next = () => writes.find(w => w.frame.id === id && !consumed.has(w));
+        await observe(next, 'actual Writable invocation');
+        const w = next(); consumed.add(w); return w; },
       eof: async () => { const start = performance.now(); stdin.end();
         await bounded(() => Promise.all([task, executor.close()]), 2750, 'shared close deadline');
         assert.ok(performance.now() - start < 2750); } });
   } finally {
-    for (const w of writes) w.done();
+    // Recovery is failed-write cleanup, never manufactured successful-write evidence.
+    for (const w of writes) w.done(Error('test-owned stream cleanup'));
     stdin.end(); stdout.destroy();
     await bounded(() => Promise.allSettled([task, executor.close()]), 3000, 'controlled cleanup deadline');
     assert.ok(stdin.readableEnded && stdout.destroyed, 'owned streams closed');

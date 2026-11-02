@@ -16,7 +16,7 @@ async function start(h, c, { immediate = false } = {}) {
     if (r.path.endsWith('/wait')) terminal = await cancel(h, p);
   });
   c.call('original', 'request_approval', question(p));
-  await observe(() => h.calls.some(r => r.path.endsWith('/wait') && r.body), 'real wait admitted');
+  await observe(() => h.calls.some(r => r.path === `/v1/requests/${p.request_id}/wait` && r.body), 'real wait admitted');
   if (immediate) await observe(() => terminal, 'real closure committed before WAIT forwarding');
   terminal ??= await cancel(h, p);
   const w = await c.frame('original');
@@ -52,6 +52,63 @@ test('B2c-CALIBRATION-LEDGER: direct HTTP report oracle, NOT actual write report
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLocalClient } from '../src/http/local-client.js';
+for (const completion of ['missing', 'late']) test(`WRITE-EOF-001-${completion}`, opts,
+  () => publicRegistration(async h => {
+    await h.restart(); await controlled(h, async c => {
+      const { w } = await start(h, c);
+      // Queue a complete unrelated frame behind the held original, before EOF.
+      c.send({ id: 'queued', method: 'ping' });
+      await new Promise(resolve => setImmediate(resolve));
+      const before = c.writes.length;
+      c.end(); await new Promise(resolve => setImmediate(resolve));
+      if (completion === 'late') w.done();
+      // Missing is not callback-error: no callback is supplied until test recovery.
+      await c.eof();
+      if (completion === 'missing') w.done(); // A real controlled late callback, AFTER bounded shutdown.
+      await quiet(h);
+      assert.equal(c.writes.length, before, 'EOF abandons queued frames, late completion cannot revive writer');
+      assert.equal(c.hooks.filter(id => id === 'original').length, 0, 'late callback admits no report hook');
+    });
+  }, { paired: true }));
+
+for (const replacement of ['pending', 'installed']) test(`WRITE-AUTHORITY-001-${replacement}`, opts,
+  () => publicRegistration(async h => {
+    await h.restart(); await controlled(h, async c => {
+      const { p, w } = await start(h, c);
+      const old = h.calls.find(r => r.path.endsWith('/wait') && r.body);
+      if (replacement === 'pending') h.hold(r => r.path === '/v1/adapter' &&
+        h.calls.filter(x => x.path === '/v1/adapter').length === 2);
+      await h.restart();
+      // Native heartbeat, actual 401 and ensuing single-flight create prove that the
+      // REAL binding processed invalidation. No helper boolean stands in for identity.
+      await observe(() => h.calls.some(r => r.path === `/v1/adapter/${old.body.registration_id}/heartbeat` &&
+        r.status === 401) && h.calls.filter(r => r.path === '/v1/adapter' && r.status === 201).length === 2,
+      'heartbeat denial processed and replacement attempted', 15000);
+      const fresh = h.calls.filter(r => r.path === '/v1/adapter')[1];
+      if (replacement === 'pending') assert.equal(fresh.held, true);
+      else {
+        // Ordinary preparation confirms completed replacement before callback release.
+        const preparations = h.calls.filter(r => r.path === '/v1/handles').length;
+        c.call('replacement-ready', 'prepare_approval');
+        await observe(() => h.calls.filter(r => r.path === '/v1/handles' && r.status === 201).length > preparations,
+          'ordinary preparation passed actual binding ensure after replacement');
+      }
+      let staleAttempts;
+      try {
+        w.done(); await new Promise(resolve => setTimeout(resolve, 150));
+        staleAttempts = reports(h).filter(r => r.path === `/v1/requests/${p.request_id}/returned`).length;
+        await quiet(h, staleAttempts);
+        assert.ok(!(await rows(h)).some(m => m.op === 'request.returned' && m.request_id === p.request_id));
+      } finally { fresh.release(); h.hold(() => false); }
+      if (replacement === 'installed') await c.frame('replacement-ready');
+      const live = await start(h, c);
+      live.w.done(); await recorded(h, live.p); await quiet(h, staleAttempts + 1);
+      assert.equal(h.calls.filter(r => r.path === '/v1/adapter').length, 2, 'report never refreshes or takes over');
+      await c.eof();
+      assert.equal(staleAttempts, 0, 'known-invalid capture starts NO returned HTTP attempt, not merely a rejected one');
+    });
+  }, { paired: true }));
+
 for (const mode of ['success', 'immediate', 'absent', 'callback-error', 'callback-error-reusable', 'throw', 'destroy', 'cancel-first', 'EOF-first', 'stale'])
   test(`B2c-CALLBACK-${mode}`, opts, () => publicRegistration(async h => {
     await h.restart();
