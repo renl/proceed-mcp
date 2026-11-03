@@ -565,6 +565,56 @@ function openFields(input) {
   return { requestId, callbackToken, messageId, userId, chatId, callbackQueryId, updateId };
 }
 
+// Response-text primitives are the incoming human message, the actor and chat it
+// arrived from, the processed update and the exact instructions. They are
+// validated without coercion before any authority lookup, so a malformed value is
+// a caller error that samples no clock, allocates no identity and appends nothing.
+// The text is only well-formedness- and length-checked: it is never trimmed,
+// normalized or inspected for approval-like meaning.
+function responseTextFields(input, op) {
+  if (!isPlainObject(input)) throw invalidArgument(`${op} expects an argument object`);
+  const { messageId, userId, chatId, updateId, text } = input;
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw invalidArgument(`${op} needs a positive safe-integer message id`);
+  }
+  if (identityProblem(userId) !== null) throw invalidArgument(`${op} needs a decimal actor id`);
+  if (identityProblem(chatId) !== null) throw invalidArgument(`${op} needs a decimal chat id`);
+  if (!usableUpdateId(updateId)) {
+    throw invalidArgument(`${op} needs a nonnegative safe-integer update id`);
+  }
+  const problem = textProblem(text, 'text', 1, MAX_TELEGRAM_TEXT);
+  if (problem !== null) throw invalidArgument(`${op} ${problem}`);
+  return { messageId, userId, chatId, updateId, text };
+}
+
+// A reply names no request of its own: one stored same-chat response prompt is
+// its only correlation, so the quoted prompt id is a required positive message id
+// and any caller-supplied request id is simply ignored rather than trusted.
+function replyFields(input) {
+  const fields = responseTextFields(input, RESOLVE_OP);
+  const { replyPromptId } = input;
+  if (!Number.isSafeInteger(replyPromptId) || replyPromptId <= 0) {
+    throw invalidArgument(`${RESOLVE_OP} needs a positive safe-integer reply prompt id`);
+  }
+  return { ...fields, kind: 'reply', replyPromptId };
+}
+
+// A command names its request explicitly and declares its reply context: absent
+// context is exactly null, and present context is a positive message id that is
+// correlated against this request's own stored prompt before a new resolution is
+// admitted, never treated as a fallback to the explicit request id.
+function commandFields(input) {
+  const fields = responseTextFields(input, RESOLVE_OP);
+  const { requestId, replyPromptId } = input;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw invalidArgument(`${RESOLVE_OP} needs a well-formed request identifier`);
+  }
+  if (replyPromptId !== null && (!Number.isSafeInteger(replyPromptId) || replyPromptId <= 0)) {
+    throw invalidArgument(`${RESOLVE_OP} needs a null or positive safe-integer reply prompt id`);
+  }
+  return { ...fields, kind: 'command', requestId, replyPromptId };
+}
+
 // Prompt-receipt arguments are the raw tuple only: the owning request, the
 // frozen snapshot chat and the returned prompt message. Validation happens
 // before the queue, so a malformed value is a caller error that samples no clock
@@ -2592,6 +2642,35 @@ class PortableBroker {
     });
   }
 
+  // Records one explicit, already correlated reply of exact instructions for the
+  // one request whose stored response prompt this message quotes (design section
+  // 5, C3e-B). The raw message, actor, chat, update and text are validated before
+  // the queue, so no malformed or coerced input samples time, allocates an
+  // identity or appends; the prompt tuple and the whole binding are rechecked
+  // inside the serialized turn. Text is an instruction, never an approval, and no
+  // public dispatch, prompt send or raw Telegram parsing is enabled here.
+  resolveReply(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = replyFields(input);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#recordText(fields));
+    });
+  }
+
+  // Records one explicit, already parsed `/respond` instruction for the request
+  // the caller named (design section 5, C3e-B). Command grammar, the raw update
+  // envelope and text extraction stay with the future consumer; this seam takes
+  // the parsed request id, the declared reply context and the extracted payload
+  // only. A present context is validated against this request's own stored prompt
+  // and never falls back to command routing.
+  resolveCommand(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = commandFields(input);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#recordText(fields));
+    });
+  }
+
   // Attached wait for one committed request's outcome (design sections 3, 4 and 7,
   // G1/G3). Authority, the unused-reservation denial and the request lookup are
   // settled before the queue, so a denial samples no clock and appends nothing. The
@@ -3661,6 +3740,115 @@ class PortableBroker {
     request.openedAt = sampled.instant;
     this.#logger('portable.response.opened', { request_id: requestId });
     return { result: 'opened', request: requestView(request) };
+  }
+
+  // One serialized text-resolution turn (design section 5, C3e-B). The admitted
+  // binding is rechecked against installed state before any deadline or identity
+  // work: a reply derives its only target from the stored same-chat response
+  // prompt it quotes, while a command uses its explicit request. A request-message
+  // tuple, an unknown target, a foreign actor/chat or a request without its
+  // durable opening is a silent refusal that samples nothing. A bound update at or
+  // below the committed cursor is stale; a newer one on an already terminal target
+  // commits only its cursor and retains the exact outcome without sampling time or
+  // allocating an identity. Only a pending target rechecks the command's declared
+  // prompt context, then samples once: at or after its deadline the existing expiry
+  // writer commits with this update's cursor instead, otherwise the exact
+  // instructions commit as responded with their source, initial ledger and stable
+  // decision in one flushed transaction, and only then is the matching original
+  // wait woken with that committed representation.
+  async #recordText(fields) {
+    const { kind, messageId, userId, chatId, updateId, text } = fields;
+    let requestId = fields.requestId;
+    if (kind === 'reply') {
+      const prompt = this.#mappings.get(mappingKey(chatId, fields.replyPromptId));
+      if (prompt === undefined || prompt.role !== 'prompt') return RESOLVE_REFUSED;
+      requestId = prompt.request_id;
+    }
+    const request = this.#requests.get(requestId);
+    if (request === undefined) return RESOLVE_REFUSED;
+    const snapshot = request.pairing_snapshot;
+    if (snapshot.user_id !== userId || snapshot.chat_id !== chatId) return RESOLVE_REFUSED;
+    if (this.#pairing === null) return RESOLVE_REFUSED;
+    if (this.#pairing.user_id !== userId || this.#pairing.chat_id !== chatId) {
+      return RESOLVE_REFUSED;
+    }
+    if (request.openedAt === null) return RESOLVE_REFUSED;
+    if (this.#cursor !== null && updateId <= this.#cursor) return RESOLVE_STALE;
+    // The update id and its durable consequences share one transaction, so either
+    // mutation order replays and the cursor never advances past an uncommitted
+    // resolution. Nothing is installed until that frame has flushed.
+    const cursorMutation = { op: CURSOR_OP, last_update_id: updateId };
+    const advance = async (mutations, requestIds) => {
+      await this.#commitFor(mutations, requestIds);
+      this.#cursor = updateId;
+    };
+    if (request.resolution !== 'pending') {
+      await advance([cursorMutation], []);
+      return { result: 'retained', request: requestView(request) };
+    }
+    // Declared reply context is a second correlation for a command, never a
+    // fallback: it must already be this same request's prompt in this same chat.
+    // It gates only a new resolution, so a stale or retained update is settled
+    // without it and no input ever routes by request id alone.
+    if (kind === 'command' && fields.replyPromptId !== null) {
+      const prompt = this.#mappings.get(mappingKey(chatId, fields.replyPromptId));
+      if (prompt === undefined || prompt.role !== 'prompt') return RESOLVE_REFUSED;
+      if (prompt.request_id !== requestId) return RESOLVE_REFUSED;
+    }
+    const sampled = turnTime(this.#clock, 'recording a text response', 'resolution');
+    // Reachability is selected while the mutation is constructed, so a later
+    // registration loss changes no committed ledger and no second write repairs it.
+    const delivery_state = this.#waiters.live(requestId) ? 'pending' : 'unavailable';
+    if (isDue(request, sampled.milliseconds)) {
+      const mutation = {
+        op: EXPIRE_OP,
+        request_id: requestId,
+        decision_id: this.#nextDecisionId(new Set()),
+        resolved_at: sampled.text,
+        delivery_state,
+      };
+      await advance([mutation, cursorMutation], [requestId]);
+      this.#installClosure(mutation, 'expired');
+      this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
+      return { result: 'expired', request: requestView(request) };
+    }
+    // A recorded time before creation cannot describe this request's lifetime, so
+    // it is the existing storage failure rather than a caller error.
+    if (compareInstants(sampled.instant, request.createdAt) < 0) {
+      throw storageFailure(`${RESOLVE_OP} would precede its request creation`, 'STORAGE_FAILURE');
+    }
+    const mutation = {
+      op: RESOLVE_OP,
+      request_id: requestId,
+      decision_id: this.#nextDecisionId(new Set()),
+      resolution: 'responded',
+      response_text: text,
+      resolved_at: sampled.text,
+      user_id: userId,
+      chat_id: chatId,
+      update_id: updateId,
+      source: {
+        kind,
+        message_id: messageId,
+        callback_query_id: null,
+        callback_token: null,
+        reply_prompt_id: fields.replyPromptId,
+      },
+      delivery_state,
+    };
+    await advance([mutation, cursorMutation], [requestId]);
+    this.#installClosure(mutation, 'responded');
+    request.response_text = text;
+    request.delivery_error = null;
+    request.resolution_source = {
+      user_id: userId,
+      chat_id: chatId,
+      update_id: updateId,
+      ...mutation.source,
+    };
+    this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
+    this.#logger('portable.request.resolved', { request_id: requestId, resolution: 'responded' });
+    return { result: 'recorded', request: requestView(request) };
   }
 
   // One serialized wait admission (design section 3, G3). A queued call whose
