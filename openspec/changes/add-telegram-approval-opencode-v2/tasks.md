@@ -1,10 +1,11 @@
 # Tasks
 
-## C3 P3 - activated privacy packet A PASS, remaining breadth pending
+## C3 P3 - activated packets A/B PASS, remaining breadth and B review pending
 
 - [x] P.C3P3-A [Activated privacy/context/scalar tests and evidence](slices/03c3j-p3-privacy.md). Accepted source `dae0a47a`, packet baseline `e5810a98`. Full unfiltered maintained suite3/3 PASS. Actor/chat/token/message/prompt-role refusals, context binding, 4096-scalar exact original-call outcomes and no response echo. Initial fixture-output-cap failures preserved, not production failures or retroactive passes.
-- [ ] P.C3P3-review One focused combined boundary/test-artifact/decomposition review. Packet A is not complete C3. Immutable snapshot divergence and raw non-object envelopes remain unproved in assembled scope.
-- [ ] P.C3P3-B Public deadline equality/backlog/restart, replay/retained/terminal, repeated Respond and competing outcomes. Exact outstanding packets/dependencies/budgets are in the linked slice.
+- [ ] P.C3P3-review Packet A `c1b6c1d451556a753258b8589a0401e5dbc291ef` received bounded combined approval without corrections. Packet B needs one focused combined boundary/test-artifact/decomposition review. Neither packet is complete C3. Immutable snapshot divergence and raw non-object envelopes remain unproved in assembled scope.
+- [x] P.C3P3-B [Activated deadline/replay/competing-outcome proof](slices/03c3k-p3-races.md). Production `dae0a47a` unchanged. New suite4/4 and full affected fixture/PORT-A/B3/3 PASS, unfiltered final run7/7. Exact controlled equality, deadline-minus-one positive, actual stale redelivery, retained/cancelled/expired inputs, repeated Respond, original-call single winners and restart backlog. Offline proof only, owning review pending.
+- Packet B lifecycle: retained same active worktree/branch/change, owner test engineering. Owned process-tree/run-directory/listener cleanup PASS. Next action focused combined owning review, then separately authorized C/D. No worktree removal or unknown cleanup.
 - [ ] P.C3P3-C Positive flush/install/wake/ack ordering, append faults, UI/client failure isolation and global credential fanout versus method rejection, rate/transient/abort.
 - [ ] P.C3P3-D Assembled three-worker normal/partial-start/send-only/late-drain, full public copy/current-ledger/privacy selection and remaining raw/snapshot discrimination. No private mock substituted for assembled proof.
 - Lifecycle: existing worktree/branch/change retained active, owner test engineering. Next action combined owning review of packet A and route remaining packets. Owned execution cleanup PASS separately, evidence under ignored `.scratch/c3-activation/`. Owner/unknown files preserved. No complete C3/live/human/feature/release acceptance or cleanup/removal authorization.

@@ -25,7 +25,7 @@ export async function until(check, label, signal) {
 }
 
 export async function telegramFixture() {
-  const calls = [], updates = [], messages = [];
+  const calls = [], updates = [], messages = [], batches = [], forced = [];
   let observe = async () => {};
   const polls = new Set();
   let updateId = 1, messageId = 100;
@@ -40,13 +40,14 @@ export async function telegramFixture() {
       let result = true;
       if (method === 'getMe') result = { id: 99, is_bot: true, first_name: 'Fixture', username: 'fixture_bot' };
       else if (method === 'getUpdates') {
-        if (!updates.some(update => update.update_id >= (body.offset ?? 0))) {
+        if (!forced.length && !updates.some(update => update.update_id >= (body.offset ?? 0))) {
           await new Promise(done => {
             const wake = () => { polls.delete(wake); res.off('close', wake); done(); };
             polls.add(wake); res.once('close', wake);
           });
         }
-        result = updates.filter((update) => update.update_id >= (body.offset ?? 0));
+        result = forced.shift() ?? updates.filter((update) => update.update_id >= (body.offset ?? 0));
+        batches.push({ offset: body.offset, updates: result });
       } else if (method === 'sendMessage') {
          result = { ...body, message_id: messageId++, date: Math.floor(Date.now() / 1000), chat: { id: 7, type: 'private' } };
         messages.push(result);
@@ -65,7 +66,10 @@ export async function telegramFixture() {
   const text = (value, reply) => enqueue({ message: { message_id: messageId++, date: Math.floor(Date.now() / 1000),
     from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: value,
     ...(reply ? { reply_to_message: { message_id: reply.message_id } } : {}) } });
-  return { calls, messages, address, text, enqueue,
+  return { calls, messages, address, text, enqueue, batches,
+    // Deliberate remote replay despite offset, proving the real consumer rather
+    // than having fixture filtering silently remove the stale input under test.
+    redeliver(batch) { forced.push(batch); for (const wake of [...polls]) wake(); },
     observe(value) { observe = value; },
     choose(message, prefix) {
       const button = message.reply_markup.inline_keyboard.flat().find((b) => b.callback_data.startsWith(`${prefix}:`));
@@ -99,7 +103,7 @@ export function success(outcome) {
   return value;
 }
 
-export async function portable(work, { pair = true, strictProtocol = false } = {}) {
+export async function portable(work, { pair = true, strictProtocol = false, controlledClock = false } = {}) {
   await mkdir(resolve('.scratch/c3-activation'), { recursive: true });
   const fixture = await telegramFixture();
   const peers = [], connections = [], secrets = [], logs = [];
@@ -109,6 +113,12 @@ export async function portable(work, { pair = true, strictProtocol = false } = {
       const phase = value => appendFile(resolve('.scratch/c3-activation/progress.log'), `${context.directory.split(/[\\/]/).at(-1)} ${value}\n`);
       await phase('setup');
       const state = join(context.directory, 'state');
+      const clockPath = join(context.directory, 'clock.json');
+      const setTime = async value => {
+        assert.ok(Number.isSafeInteger(value), 'test clock is an exact millisecond instant');
+        await writeFile(clockPath, JSON.stringify(value));
+      };
+      if (controlledClock) await setTime(Date.now());
       const executable = resolve('bin/proceed-mcp.js');
       const env = Object.fromEntries(['PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC']
         .filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
@@ -149,7 +159,10 @@ export async function portable(work, { pair = true, strictProtocol = false } = {
       await cli('owner', 'add', 'foreign', '--label', 'Other transport');
       const preload = pathToFileURL(resolve('tests/fixtures/portable-telegram-preload.mjs'));
       preload.searchParams.set('fixture', fixture.address);
+      const clockPreload = pathToFileURL(resolve('tests/fixtures/portable-clock-preload.mjs'));
+      clockPreload.searchParams.set('clock', clockPath);
       const start = (...args) => context.start([process.execPath, '--import', preload.href,
+        ...(controlledClock && args[0] === 'serve' ? ['--import', clockPreload.href] : []),
         executable, ...args, '--state-dir', state]);
       let broker = await start('serve');
       broker.child.stderr.on('data', (b) => logs.push(String(b)));
@@ -207,15 +220,17 @@ export async function portable(work, { pair = true, strictProtocol = false } = {
         } };
       };
       const shared = await connect('shared');
-      const restart = async () => {
+      const restart = async ({ whileStopped, beforeReadiness } = {}) => {
         for (const { peer, resource } of connections) {
           peer.close?.(); resource.child.stdin.end();
           await until(() => resource.closed, 'adapter EOF shutdown', context.signal);
           if (strictProtocol) peer.assertComplete();
         }
         await stopped(broker); // Graceful own-state release; no stale-lock deletion.
+        await whileStopped?.();
         broker = await start('serve');
         for (const stream of [broker.child.stdout, broker.child.stderr]) stream.on('data', (b) => logs.push(String(b)));
+        await beforeReadiness?.();
         await until(status, 'restarted authenticated broker readiness', context.signal);
         return connect('shared');
       };
@@ -240,7 +255,7 @@ export async function portable(work, { pair = true, strictProtocol = false } = {
           redirect: 'error', signal: AbortSignal.timeout(1000) });
       await phase('assertions');
       try { await work({ fixture, shared, connect, prepare, state, broker, start, scan, restart,
-        signal: context.signal, cli, http, control }); }
+        signal: context.signal, cli, http, control, ...(controlledClock ? { setTime } : {}) }); }
       finally {
         await phase('teardown');
         for (const { peer, resource } of connections) {
