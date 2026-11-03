@@ -275,9 +275,13 @@ const STATUS_DISPLAY_STATES = new Set([
   'unavailable',
   'blocked',
 ]);
-// The two resolutions a callback can record. Respond vocabulary needs its real
-// opening and prompt history first, so it stays fail-closed here.
+// The two resolutions a callback can record. A Respond text resolution is a
+// separate variant with its own opening and prompt prerequisites, so the callback
+// writer stays closed to it.
 const CALLBACK_RESOLUTIONS = new Set(['approved', 'rejected']);
+// Every resolution a committed human mutation may carry. The source variant then
+// fixes which of these that mutation is allowed to be.
+const HUMAN_RESOLUTIONS = new Set([...CALLBACK_RESOLUTIONS, 'responded']);
 // A valid but non-matching callback binding and an already processed update are
 // both silent: neither result carries a request, actor, token or outcome detail.
 const RESOLVE_REFUSED = Object.freeze({ result: 'refused' });
@@ -299,8 +303,8 @@ const RESOLVE_FIELDS = [
   'user_id',
 ];
 // A callback source is one query against one allocated request message. A reply
-// or command source needs prompt history this checkpoint does not replay, so its
-// fields exist here only to refuse them without inventing a variant.
+// or command source is the human's own message, correlated by the stored response
+// prompt it quotes or, for an unquoted command, by the request its writer parsed.
 const SOURCE_FIELDS = [
   'callback_query_id',
   'callback_token',
@@ -1178,11 +1182,12 @@ function readEvidence(mutation, kind) {
   };
 }
 
-// A callback resolution decodes from exactly its eleven persisted fields. A
-// malformed primitive is refused before any lookup, and the callback-only
-// vocabulary refuses reply/command/respond history that needs an opening this
-// checkpoint cannot replay. The actor, token, message and time window are
-// validated against staged state afterwards.
+// A human resolution decodes from exactly its eleven persisted fields. Every
+// primitive is checked before any lookup, and the source variant fixes the only
+// resolution it can carry: a callback chooses approved/rejected with no text,
+// while a reply or command carries the exact Respond instructions. The actor,
+// token, message, prompt and time window are validated against staged state
+// afterwards.
 function readResolve(mutation) {
   exactFields(mutation, RESOLVE_FIELDS);
   const requestId = mutation.request_id;
@@ -1194,12 +1199,9 @@ function readResolve(mutation) {
     throw integrity(`${RESOLVE_OP} has a malformed decision id`);
   }
   const resolution = mutation.resolution;
-  if (typeof resolution !== 'string' || !CALLBACK_RESOLUTIONS.has(resolution)) {
+  if (typeof resolution !== 'string' || !HUMAN_RESOLUTIONS.has(resolution)) {
     throw integrity(`${RESOLVE_OP} has an unsupported resolution`);
   }
-  // A callback carries no human text: only a Respond resolution ever does, and
-  // that vocabulary is not replayable yet.
-  if (mutation.response_text !== null) throw integrity(`${RESOLVE_OP} needs null response text`);
   const resolvedAt = readInstant(mutation.resolved_at);
   if (resolvedAt === null) throw integrity(`${RESOLVE_OP} has a malformed resolution time`);
   if (identityProblem(mutation.user_id) !== null)
@@ -1216,20 +1218,48 @@ function readResolve(mutation) {
   const source = mutation.source;
   if (!isPlainObject(source)) throw integrity(`${RESOLVE_OP} needs a source object`);
   exactFields(source, SOURCE_FIELDS);
-  if (source.kind !== 'callback') throw integrity(`${RESOLVE_OP} has an unsupported source kind`);
   if (!Number.isSafeInteger(source.message_id) || source.message_id <= 0) {
     throw integrity(`${RESOLVE_OP} needs a positive safe-integer message id`);
   }
-  if (typeof source.callback_query_id !== 'string' || source.callback_query_id.length === 0) {
-    throw integrity(`${RESOLVE_OP} needs a nonempty callback query id`);
+  if (source.kind === 'callback') {
+    if (!CALLBACK_RESOLUTIONS.has(resolution)) {
+      throw integrity(`${RESOLVE_OP} has an unsupported callback resolution`);
+    }
+    // A callback carries no human text: only a Respond resolution ever does.
+    if (mutation.response_text !== null) {
+      throw integrity(`${RESOLVE_OP} needs null response text for a callback`);
+    }
+    if (typeof source.callback_query_id !== 'string' || source.callback_query_id.length === 0) {
+      throw integrity(`${RESOLVE_OP} needs a nonempty callback query id`);
+    }
+    if (
+      typeof source.callback_token !== 'string' ||
+      !CALLBACK_TOKEN_PATTERN.test(source.callback_token)
+    ) {
+      throw integrity(`${RESOLVE_OP} has a malformed callback token`);
+    }
+    if (source.reply_prompt_id !== null) throw integrity(`${RESOLVE_OP} has no reply prompt role`);
+  } else if (source.kind === 'reply' || source.kind === 'command') {
+    if (resolution !== 'responded') {
+      throw integrity(`${RESOLVE_OP} needs responded for a ${source.kind} source`);
+    }
+    // The instructions are the human's raw text, so only well-formed text of the
+    // admitted scalar range is retained; nothing here trims or normalizes it.
+    const problem = textProblem(mutation.response_text, 'response_text', 1, MAX_TELEGRAM_TEXT);
+    if (problem !== null) throw integrity(`${RESOLVE_OP} ${problem}`);
+    if (source.callback_query_id !== null || source.callback_token !== null) {
+      throw integrity(`${RESOLVE_OP} has no callback binding for a ${source.kind} source`);
+    }
+    // A reply always quotes a stored prompt; a command without reply context names
+    // none, and a present context is never read as its absence.
+    if (source.kind === 'reply' || source.reply_prompt_id !== null) {
+      if (!Number.isSafeInteger(source.reply_prompt_id) || source.reply_prompt_id <= 0) {
+        throw integrity(`${RESOLVE_OP} needs a positive safe-integer reply prompt id`);
+      }
+    }
+  } else {
+    throw integrity(`${RESOLVE_OP} has an unsupported source kind`);
   }
-  if (
-    typeof source.callback_token !== 'string' ||
-    !CALLBACK_TOKEN_PATTERN.test(source.callback_token)
-  ) {
-    throw integrity(`${RESOLVE_OP} has a malformed callback token`);
-  }
-  if (source.reply_prompt_id !== null) throw integrity(`${RESOLVE_OP} has no reply prompt role`);
   return {
     kind: 'resolve',
     record: {
@@ -1787,13 +1817,15 @@ function stageClosure(record, staged, resolution) {
   request.delivery_state = record.delivery_state;
 }
 
-// A callback resolution resolves one pending request for the paired human: the
-// actor equals both the committed pairing and that request's immutable snapshot,
-// the exact allocated token is the one bound to that request's own mapped request
-// message in the actor's chat, and the recorded instant lies inside the request
-// lifetime. One journal-wide decision identity is spent, the initial ledger is
-// the writer's persisted selection, and the private actor/source stays outside
-// every common view.
+// A human resolution resolves one pending request for the paired human: the actor
+// equals both the committed pairing and that request's immutable snapshot, and the
+// recorded instant lies inside the request lifetime. A callback must additionally
+// present the exact allocated token of this request's own mapped request message.
+// A reply or command instead needs this request's durable opening and, when it
+// quotes one, a response prompt already mapped to this request in the same chat.
+// One journal-wide decision identity is spent, the exact text and the writer's
+// persisted initial ledger are installed together, and the private actor/source
+// stays outside every common view.
 function stageResolve(record, staged, pairing) {
   const request = staged.requests.get(record.request_id);
   if (request === undefined) throw integrity(`${RESOLVE_OP} names no committed request`);
@@ -1813,13 +1845,27 @@ function stageResolve(record, staged, pairing) {
   ) {
     throw integrity(`${RESOLVE_OP} does not match the request snapshot`);
   }
-  if (request.callback_token !== record.source.callback_token) {
-    throw integrity(`${RESOLVE_OP} does not match the allocated token`);
-  }
-  const mapping = staged.mappings.get(mappingKey(record.chat_id, record.source.message_id));
-  if (mapping === undefined) throw integrity(`${RESOLVE_OP} names no mapped request message`);
-  if (mapping.role !== 'request' || mapping.request_id !== record.request_id) {
-    throw integrity(`${RESOLVE_OP} names another request's message`);
+  const callback = record.source.kind === 'callback';
+  if (callback) {
+    if (request.callback_token !== record.source.callback_token) {
+      throw integrity(`${RESOLVE_OP} does not match the allocated token`);
+    }
+    const mapping = staged.mappings.get(mappingKey(record.chat_id, record.source.message_id));
+    if (mapping === undefined) throw integrity(`${RESOLVE_OP} names no mapped request message`);
+    if (mapping.role !== 'request' || mapping.request_id !== record.request_id) {
+      throw integrity(`${RESOLVE_OP} names another request's message`);
+    }
+  } else {
+    if (request.openedAt === null) {
+      throw integrity(`${RESOLVE_OP} text response precedes its durable opening`);
+    }
+    if (record.source.reply_prompt_id !== null) {
+      const prompt = staged.mappings.get(mappingKey(record.chat_id, record.source.reply_prompt_id));
+      if (prompt === undefined) throw integrity(`${RESOLVE_OP} names no mapped response prompt`);
+      if (prompt.role !== 'prompt' || prompt.request_id !== record.request_id) {
+        throw integrity(`${RESOLVE_OP} names another request's prompt`);
+      }
+    }
   }
   if (
     compareInstants(record.resolvedAt, request.createdAt) < 0 ||
@@ -1834,7 +1880,7 @@ function stageResolve(record, staged, pairing) {
   request.resolution = record.resolution;
   request.resolved_at = record.resolved_at;
   request.resolvedAt = record.resolvedAt;
-  request.response_text = null;
+  request.response_text = callback ? null : record.response_text;
   request.decision_id = record.decision_id;
   request.delivery_state = record.delivery_state;
   request.delivery_error = null;
