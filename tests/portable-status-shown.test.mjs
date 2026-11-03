@@ -66,7 +66,8 @@ for (const kind of ['cancel', 'expire']) test(`S-WORK-${kind}: controls first pe
   const bytes = await h.bytes(), repeat = await shown(h); repeat.request.event_capability.status = 'evil';
   assert.deepEqual(await shown(h), { shown: false, request }); assert.deepEqual(await h.bytes(), bytes); assert.equal(h.samples(), count);
   assert.deepEqual(edits(h).map(e => [e.kind, e.message_id]), [['controls', 8]]); await retired(h, 8); assert.deepEqual(edits(h), [status(h, 8)]);
-  await shown(h, { messageId: 8 }); assert.deepEqual(edits(h), []); await h.reopen(); assert.deepEqual(edits(h), []); assert.deepEqual(view(h), request);
+  await shown(h, { messageId: 8 }); assert.deepEqual(edits(h), []); h.now = at + (kind === 'expire' ? 60000 : 0);
+  await h.reopen(); assert.deepEqual(edits(h), []); assert.deepEqual(view(h), request);
 }));
 test('S-WRITE: actual returned/ack transitions rederive both copies, old captured work stays immutable', opts, () => native(async h => {
   await h.create(); await h.send(8); await h.terminal(); await retired(h); await retired(h, 8); await shown(h); await shown(h, { messageId: 8 });
