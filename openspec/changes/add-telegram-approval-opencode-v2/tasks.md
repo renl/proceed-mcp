@@ -1,12 +1,12 @@
 # Tasks
 
-## C3g P1 inert prompt worker - prepared for combined review, not implementation-ready
+## C3g P1 inert prompt worker - policy aligned, implementation-ready handoff
 
 - [x] P.C3GP1-tests [Foundation tests, exact sole-source brief and RED evidence](slices/03c3g-p1-inert-prompt-worker.md). Baseline `2f1eac32`, accepted private admission/core present. No production edits.
-- [ ] P.C3GP1-review Combined boundary/decomposition/test-only review. Resolve invalid-success request versus worker scope and ratify request-local tuple collision within existing invalid_response domain before source authorization.
+- [x] P.C3GP1-review Supplied combined review of `1a21465b` and canonical design5 C3 prompt invalid-result scope applied exactly. Worker-wide malformed Message stop, request-local null tuple/role block, idempotent same-prompt receipt and credential fanout ordering are bound in the slice. No repeat combined review for this alignment. P1 assertions unchanged, P2 only partitions proof.
 - [ ] P.C3GP1-source ONLY new `src/telegram/portable-prompt.js`, full behavior from first implementation, upper330gross. Runtime inert. P2 breadth BLOCKS worker acceptance.
 - [ ] P.C3GP2 Mandatory test-only fault/retry/credential/invalid/collision breadth and independent affected verification before acceptance. Forecast370gross, not actual or automatic authorization. Separate public activation/copy/PORT-A/PORT-B/live gates remain mandatory.
-- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change same, owner test engineering, active/retain. Next combined review/clarification. Owned calibration cleanup PASS, ignored RED TAP retained. No worktree removal, unknown cleanup or C3/live/human/feature/release acceptance.
+- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change same, owner test engineering, active/retain. Next separately authorized sole-source implementation under the slice's run sequence and hard600 packet ceiling. Owned calibration cleanup PASS, ignored RED TAP retained. No worktree removal, unknown cleanup or C3/live/human/feature/release acceptance.
 
 ## C3 inert private prompt admission/correlation - bounded PASS, no activation
 
