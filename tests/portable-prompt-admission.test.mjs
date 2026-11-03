@@ -10,6 +10,8 @@ import { bounded } from './support/managed-spike.mjs';
 
 const at = Date.parse('2026-11-04T00:00:00Z'), opts = { timeout: 12000 };
 const unknown = 'req_' + 'f'.repeat(32), token = n => n.toString(16).padStart(32, '0');
+// Distinct canonical namespaces keep public decision IDs from mimicking private tokens.
+const decision = n => 'dec_' + 'd'.repeat(16) + n.toString(16).padStart(16, '0');
 const storage = e => e?.exitCode === 4 && e.code === 'STORAGE_FAILURE';
 const capture = f => Promise.resolve().then(f).then(value => ({ value }), error => ({ error }));
 const tick = () => new Promise(r => setImmediate(r));
@@ -36,7 +38,7 @@ async function native(work) {
       }, sequence);
       b = createPortableBroker({ journal: j, owners: [{ owner_id: 'a', label: 'A' }], port: 43189,
         clock: () => { h.clocks++; if (h.now instanceof Error) throw h.now; return h.now; },
-        generateCallbackToken: () => token(++h.generated), generateDecisionId: () => 'dec_' + token(++h.ids), logger: (...a) => h.logs.push(a) }); },
+        generateCallbackToken: () => token(++h.generated), generateDecisionId: () => decision(++h.ids), logger: (...a) => h.logs.push(a) }); },
     async reopen() { await h.close(); h.now = at + 2000; await h.start(); h.now = NaN;
       const n = h.clocks; await b.recover(); assert.equal(h.clocks, n); },
     async create(stage = 'opened') { const key = await b.reserveHandle({ ownerId: 'a' }), i = h.keys.length;
@@ -72,8 +74,11 @@ test('COR-LIFECYCLE: allocated/mapped/opened/prompted/terminal survive replay, c
     if (stage === 'mapped') await h.b.recordPresentationSent({ ...h.fields(), messageId: 7 });
     if (stage === 'opened') await h.b.openResponse(h.fields());
     if (stage === 'prompted') await h.b.recordPromptSent({ requestId: h.keys[0].requestId, chatId: '00081', messageId: 70 });
-    if (stage === 'terminal') await h.b.cancelRequest(h.keys[0]);
+    if (stage === 'terminal') { await h.b.cancelRequest(h.keys[0]);
+      assert.equal(h.b.snapshot().requests[0].decision_id, decision(1));
+      assert.equal(decision(1).includes(h.tokens[0]), false); }
     await unchanged(h, async () => { const found = h.lookup(h.tokens[0]); assert.deepEqual(found, { request_id: h.keys[0].requestId });
+      for (const field of ['callback_token', 'user_id', 'resolution']) assert.equal(Object.hasOwn(found, field), false);
       found.request_id = unknown; assert.deepEqual(h.lookup(h.tokens[0]), { request_id: h.keys[0].requestId }); });
     await h.reopen(); assert.deepEqual(h.lookup(h.tokens[0]), { request_id: h.keys[0].requestId }); h.now = at + 2000;
     assert.equal(JSON.stringify([h.b.snapshot(), await h.b.status(), h.logs]).includes(h.tokens[0]), false);
