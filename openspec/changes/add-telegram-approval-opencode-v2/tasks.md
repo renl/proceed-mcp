@@ -1,10 +1,15 @@
 # Tasks
 
+## C2c-P2 four remaining public proof blockers
+
+- [x] P.C2CP2-breadth [Copy/ledger/expiry/stale-stop packet](slices/03c2c-p2-breadth.md). Baseline `bf1ae43674ef53282908f5ce09245d8250be64a6`, accepted source `8a3b2463` unchanged. Full unfiltered new8/8 and scoped affected4/4 PASS, separate cleanup12/12 PASS. All four blockers executed through actual public/client/producers, no source change or full C2 acceptance.
+- [ ] P.C2CP2-breadth-review Ready for ONE combined owning boundary/decomposition/test-artifact review, triggers1/3/4/5YES,2NO. Worktree retained active, test engineering owner, next action combined review. Cleanup: owned runs removed and port/lock/process absence checked, ignored TAP retained, unknown/owner work preserved. No worktree removal or partial promotion.
+
 ## C2c-P2 post-stop blocking remainder packet
 
 - [x] P.C2CP2-poststop [Both-method fulfilled-client-before-stop, real-writer-after-stop proof](slices/03c2c-p2-poststop.md). Baseline `239f2de8`, accepted source `8a3b2463`. New3/3PASS includes injected-failure cleanup. Exact current-pair receipts/flush/drain/restart, no full remainder or C2 claim. Initial cleanup-message oracle mismatch retained.
-- [ ] P.C2CP2-poststop-review Ready for ONE combined boundary/decomposition/test-artifact owning review, triggers1/3/4/5YES,2NO. Final full unfiltered affected80/80PASS, separate owned cleanup PASS, source unchanged. Three other blocking areas and post-stop stale rejection remain unproved.
-- Lifecycle: same retained active worktree/branch/change, test engineering owner. Next action combined review of this bounded checkpoint. Multi-copy/sibling, stale returned/ack transitions and public expiry remain mandatory. Run cleanup PASS, ignored evidence retained. No worktree cleanup authorization.
+- [x] P.C2CP2-poststop-review Bounded `bf1ae43674ef53282908f5ce09245d8250be64a6` owning review accepted per breadth authorization. Final full unfiltered affected80/80PASS, separate owned cleanup PASS, source unchanged. Current-pair proof does not replace the four distinct blockers now executed in the breadth packet above, pending its owning review.
+- Lifecycle: same retained active worktree/branch/change, test engineering owner. Next action combined review of the new breadth packet above. Run cleanup PASS, ignored evidence retained. No worktree cleanup authorization.
 
 ## C2c-P2 public terminal edits - bounded primary packet
 

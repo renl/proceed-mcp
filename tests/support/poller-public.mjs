@@ -12,7 +12,7 @@ import { catalogPeer, initializeResult } from './catalog-consumer.mjs';
 export const rows = bytes => readJournal(Buffer.from(bytes, 'base64')).transactions.map(t => t.mutations);
 export const update = (id, code) => ({ update_id: id, message: { from: { id: 71, is_bot: false }, chat: { id: 81, type: 'private' }, text: `/pair ${code}` } });
 export const paired = 'Paired. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.';
-export async function publicPoller(work, mode = '', { mcp = false, preloadPath = 'tests/fixtures/poller-public-preload.mjs' } = {}) {
+export async function publicPoller(work, mode = '', { mcp = false, preloadPath = 'tests/fixtures/poller-public-preload.mjs', totalMs = 16000, aggregateMs = 24000 } = {}) {
   const root = resolve('.scratch/c1-poller-public'); await mkdir(root, { recursive: true });
   let phase;
   const result = await bounded(() => managed(async ctx => {
@@ -84,7 +84,7 @@ export async function publicPoller(work, mode = '', { mcp = false, preloadPath =
         await new Promise(done => probe.close(done));
       }
     }
-  }, { totalMs: 16000, readyMs: 3000 }), 24000, 'aggregate setup/assertions/teardown deadline');
+   }, { totalMs, readyMs: 3000 }), aggregateMs, 'aggregate setup/assertions/teardown deadline');
   await phase(result.cleanupError ? 'cleanup-fail' : 'cleanup-pass: process tree and run directory absent');
   assert.ifError(result.cleanupError); assert.ifError(result.assertionError);
 }
