@@ -1,5 +1,13 @@
 # Tasks
 
+## C3 inert private prompt admission/correlation - preparation only
+
+- [x] P.C3FB-tests [Exact selected bindings, native Journal tests and sole-source brief](slices/03c3f-b-private-admission.md). Baseline `fd6ca62e316112eff0b149465b163083a14e12f9`, accepted raw parser/core prerequisites present. No production changes or public activation.
+- [ ] P.C3FB-review ONE combined normative Journal/private-admission, decomposition and test-artifact review, triggers1/4/5YES,2/3NO. Exact methods `correlateCallbackToken` and `prepareResponsePrompt` on PortableBroker, sole source `src/broker/portable.js`, explicit125 gross ceiling and packet600. Stop/separate token index then admission before any overrun.
+- [ ] P.C3FB-source Separate implementation authorization after review. Remain inert, no consumer/worker/ForceReply/copy activation. All-path activation, full PORT-A/B and separate live-human proof remain mandatory.
+- [ ] P.C3FB-verify Independent affected native verification after source. Current22:2 calibration PASS/20 missing-API RED, exit1, no cancelled/skipped/todo. Missing APIs block conformance, not a passed boundary.
+- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next one combined review. Owned native cleanup PASS, ignored TAP retained, owner/unknown state preserved. No worktree removal or C3/live/human/feature/release acceptance.
+
 ## C2 message-method409 correction - C2-MESSAGE-409-001 CLOSED attempt1
 
 - [x] P.C2-message409-tests [Corrective tests, source-only brief and RED evidence](slices/03c2-message409-correction.md). Baseline `2acded565f78caf5a6658243034c53cc70ac2e83`. Necessary existing C2 correctness, separate from C3 activation. No production edits or retroactive withdrawal of earlier C2 acceptance scopes.
