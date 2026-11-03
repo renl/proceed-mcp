@@ -21,7 +21,7 @@ test('C3-ACT: complete command/open/refusal/commit-copy wiring preserves legitim
   h.fixture.observe(async call => { if (call.method === 'answerCallbackQuery') commitsAtAck.push(await rows()); });
   const raw = text => ({ message: { message_id: 900, date: 1, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text } });
   const before = h.fixture.messages.length;
-  for (const text of ['/pair bad', '/pair  bad', '/pair@bot bad', '/pair\tbad', 'x/pair bad']) h.fixture.enqueue(raw(text));
+  for (const text of ['/pair bad', '/pair  bad', '/pair@bot bad', '/pair\tbad', '/pair bad\n']) h.fixture.enqueue(raw(text));
   h.fixture.enqueue({ edited_message: raw('ignored').message });
   h.fixture.enqueue({ message: { ...raw('ignored').message, text: undefined, caption: 'ignored' } });
   h.fixture.enqueue({ ...raw('foreign'), message: { ...raw('foreign').message, from: { id: 8, is_bot: false } } });
@@ -54,6 +54,93 @@ test('C3-ACT: complete command/open/refusal/commit-copy wiring preserves legitim
   assert.ok(!h.fixture.calls.filter(c => c.method === 'answerCallbackQuery').at(-1).body.text, 'open ack neutral');
   const terminal = await h.cli('status'); assert.ok(terminal.includes('Instructions recorded, not approval.'));
 }));
+
+// design5 "Pairing-intent boundary and text precedence" / C3-PAIR-TEXT-001.
+const guidance = 'No response was recorded. Select Respond on the intended request, then reply to its prompt or send /respond <request_id> <text>. Text is instructions, not approval.';
+const transactions = async h => readJournal(await readFile(join(h.state, 'journal.log'))).transactions.map(t => t.mutations);
+const consumed = async (h, id) => until(async () => (await transactions(h)).find(ms =>
+  ms.some(m => m.op === 'telegram.cursor' && m.last_update_id === id)), 'input cursor committed', h.signal);
+const opened = async (h, id) => {
+  const prepared = await h.prepare(), wait = ask(h.shared, prepared, id);
+  const question = await until(() => h.fixture.messages.find(m => m.text.includes(prepared.request_id)
+    && m.reply_markup?.inline_keyboard), 'question', h.signal);
+  h.fixture.choose(question, 't');
+  const prompt = await until(() => h.fixture.messages.find(m => m.text.includes(prepared.request_id)
+    && m.reply_markup?.force_reply), 'response prompt', h.signal);
+  return { prepared, wait, prompt, id };
+};
+
+test('C3-PAIR-TEXT: exact original-call outcomes for non-command content', { timeout: 65000 }, t => portable(async h => {
+  const entries = [];
+  for (const [name, mode, text] of [
+    ['reported mapped reply', 'reply', 'please inspect /pair handling'],
+    ['reported matching-context command', 'command-reply', 'please inspect /pair handling'],
+    ['reported absent-context command', 'command', 'please inspect /pair handling'],
+    ['prefix is content, not pairing authority', 'reply', `x/pair ${'a'.repeat(32)}`],
+    ['later line and path content', 'reply', ' inspect scripts/pair.js\n/pair handling\n '],
+    ['near command token', 'reply', '/pairing notes'],
+    ['ordinary positive control', 'reply', ' control instructions\n '],
+  ]) {
+    const entry = await opened(h, -710 - entries.length);
+    const raw = mode === 'reply' ? text : `/respond ${entry.prepared.request_id} ${text}`;
+    const updateId = h.fixture.text(raw, mode === 'command' ? undefined : entry.prompt);
+    entries.push({ ...entry, name, text, updateId });
+  }
+  const outcomes = await Promise.all(entries.map(e => e.wait.outcome));
+  for (const [i, e] of entries.entries()) await t.test(e.name, async () => {
+    const outcome = outcomes[i], value = success(outcome);
+    assert.equal(outcome.frame.id, e.id, 'same original waiting RPC');
+    assert.equal(value.request_id, e.prepared.request_id);
+    assert.equal(value.resolution, 'responded'); assert.equal(value.response_text, e.text);
+    const reread = await get(h.shared, e.prepared);
+    assert.equal(reread.decision_id, value.decision_id); assert.equal(reread.response_text, e.text);
+    const matches = (await transactions(h)).filter(ms => ms.some(m => m.op === 'request.resolve.telegram'
+      && m.request_id === e.prepared.request_id));
+    assert.equal(matches.length, 1, 'one durable human resolution');
+    assert.ok(matches[0].some(m => m.op === 'request.resolve.telegram' && m.response_text === e.text && m.update_id === e.updateId));
+    assert.ok(matches[0].some(m => m.op === 'telegram.cursor' && m.last_update_id === e.updateId), 'atomic matching cursor');
+  });
+}));
+
+test('C3-PAIR-CONTEXT: malformed intent stays silent, non-command needs authorized context', { timeout: 65000 }, () => portable(async h => {
+  const { prepared, wait, prompt, id } = await opened(h, -730);
+  const before = h.fixture.messages.length, code = 'a'.repeat(32);
+  for (const text of [`/pair ${code}\n`, `\u2003/pair ${code}`, `/pair@fixture_bot ${code}`,
+    `/pair  ${code}`, `/pair\t${code}`, `/pair ${code.toUpperCase()}`, `/pair ${code} extra`, '/pair prose']) {
+    const updateId = h.fixture.text(text, prompt), row = await consumed(h, updateId);
+    assert.deepEqual(row, [{ op: 'telegram.cursor', last_update_id: updateId }]);
+  }
+  assert.equal(h.fixture.messages.length, before, 'intended malformed controls silent even when mapped');
+  assert.equal((await get(h.shared, prepared)).resolution, 'pending');
+  for (const [text, context] of [[`x/pair ${code}`, undefined],
+    [`/respond ${prepared.request_id} please inspect /pair handling`, { message_id: 999999 }]]) {
+    const prior = h.fixture.messages.filter(m => m.text === guidance).length;
+    const updateId = h.fixture.text(text, context); await consumed(h, updateId);
+    await until(() => h.fixture.messages.filter(m => m.text === guidance).length === prior + 1, 'uncorrelated guidance', h.signal);
+    assert.equal((await get(h.shared, prepared)).resolution, 'pending', 'no context fallback');
+  }
+  h.fixture.text('control instructions', prompt);
+  const outcome = await wait.outcome;
+  assert.equal(outcome.frame.id, id); assert.equal(success(outcome).response_text, 'control instructions');
+}));
+
+test('C3-PAIR-CHALLENGE: malformed command-position input cannot consume challenge or quota', { timeout: 65000 }, () => portable(async h => {
+  const code = /Pairing code: (\S+)/.exec(await h.cli('pair'))?.[1];
+  assert.match(code, /^[a-f0-9]{32}$/);
+  const before = h.fixture.messages.length;
+  for (const text of [`/pair ${code}\n`, ` /pair ${code}`, `\u0085/pair ${code}`, `/pair@fixture_bot ${code}`,
+    `/pair  ${code}`, `/pair\t${code}`, `/pair ${'A'.repeat(32)}`, `/pair ${code} extra`, `x/pair ${code}`]) {
+    const updateId = h.fixture.text(text), row = await consumed(h, updateId);
+    assert.deepEqual(row, [{ op: 'telegram.cursor', last_update_id: updateId }]);
+  }
+  assert.equal(h.fixture.messages.length, before, 'unpaired malformed and non-command text silent');
+  assert.ok(!(await transactions(h)).flat().some(m => ['pairing.challenge.consume', 'pairing.set'].includes(m.op)));
+  const updateId = h.fixture.text(`/pair ${code}`);
+  const row = await consumed(h, updateId);
+  assert.ok(row.some(m => m.op === 'pairing.challenge.consume'));
+  assert.ok(row.some(m => m.op === 'pairing.set'), 'exact command succeeds after more than five non-attempts');
+  await until(() => h.fixture.messages.length === before + 1, 'pairing confirmation', h.signal);
+}, { pair: false }));
 
 test('C3-ACK-CLASS: actual client HTTP/API ack refusal, credential, conflict, rate floor and transient controls', { timeout: 5000 }, async t => {
   const original = https.request; let sample;

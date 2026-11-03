@@ -6,7 +6,9 @@
 - [x] P.C3H-review Supplied approved combined review covers triggers1/3/4/5YES,2NO. Six-path source ceiling270gross and packet600 remain. No automatic unchanged Architecture re-review.
 - [x] P.C3H-source Authorized implementation `67ea42b14e2365e6dfa4c4727015cbd2d7d40e3b`, source269gross across6paths. Implemented is not accepted. No partial public activation or copy deferral authorized.
 - [ ] P.C3H-verify [Independent verdict and exact remaining P3](slices/03c3h-activation.md#independent-affected-verification---2026-11-04): primary17/17 PASS, conformance FAIL on silently discarded legitimate `/pair`-containing Respond text. No C3/live/human/feature/release acceptance.
-- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change same, owner test engineering, blocked/retain. Next action coordination assigns the gap and routes pairing-intent clarification and affected test criteria. Owned cleanup PASS, owner/unknown work preserved. No automatic preparation or worktree removal due.
+- [x] P.C3H-pair-tests [C3-PAIR-TEXT-001 corrective criteria and source-only brief](slices/03c3i-pair-text-correction.md), attempt0. Latest design5 clarification governs. Durable public regressions and discrimination controls prepared, not implementation acceptance.
+- [ ] P.C3H-pair-source Correct raw dispatch within separate proposed40gross source ceiling. No expansion of original269/270 activation source packet. Independent affected verification required after correction.
+- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change same, owner test engineering, blocked/retain. Next action coordination routes implementation using the corrective brief, then independent verification. Owner/unknown work preserved, no worktree removal due. Corrective run results and cleanup recorded in the brief.
 
 ## C3g P2 maintained faults - remaining native breadth PASS, combined review pending
 

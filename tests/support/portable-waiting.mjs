@@ -61,7 +61,7 @@ export async function telegramFixture() {
   });
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   const address = `http://127.0.0.1:${server.address().port}`;
-  const enqueue = (value) => { updates.push({ update_id: updateId++, ...value }); for (const wake of [...polls]) wake(); };
+  const enqueue = (value) => { const id = updateId++; updates.push({ update_id: id, ...value }); for (const wake of [...polls]) wake(); return id; };
   const text = (value, reply) => enqueue({ message: { message_id: messageId++, date: Math.floor(Date.now() / 1000),
     from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: value,
     ...(reply ? { reply_to_message: { message_id: reply.message_id } } : {}) } });
