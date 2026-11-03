@@ -219,6 +219,11 @@ const OPEN_FIELDS = [
 // its own instant. It adds a prompt role and never a resolution or public state.
 const PROMPT_SENT_OP = 'telegram.prompt.sent';
 const PROMPT_SENT_FIELDS = ['chat_id', 'message_id', 'op', 'request_id', 'sent_at'];
+// A failed prompt attempt is the owning request and one closed redacted
+// classification with its own instant: no chat, token or message, so it can never
+// become a mapping, a resolution or a public Telegram/delivery state.
+const PROMPT_FAILED_OP = 'telegram.prompt.failed';
+const PROMPT_FAILED_FIELDS = ['error_code', 'failed_at', 'op', 'request_id'];
 // A controls retirement is one mapped request message and its terminal decision,
 // with no instant: it is a transition, not a timed receipt.
 const RETIRED_OP = 'telegram.controls.retired';
@@ -572,6 +577,24 @@ function promptFields(input) {
     throw invalidArgument(`${PROMPT_SENT_OP} needs a positive safe-integer message id`);
   }
   return { requestId, chatId, messageId };
+}
+
+// Prompt-failure arguments are the target and one closed redacted class only, so
+// no caller can supply text, a chat, a token or a platform description. Validation
+// happens before the queue, so a malformed value is a caller error that samples no
+// clock and appends nothing.
+function promptFailedFields(input) {
+  if (!isPlainObject(input)) {
+    throw invalidArgument(`${PROMPT_FAILED_OP} expects an argument object`);
+  }
+  const { requestId, errorCode } = input;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw invalidArgument(`${PROMPT_FAILED_OP} needs a well-formed request identifier`);
+  }
+  if (typeof errorCode !== 'string' || !FAILURE_CODES.has(errorCode)) {
+    throw invalidArgument(`${PROMPT_FAILED_OP} needs one of ${[...FAILURE_CODES].join(', ')}`);
+  }
+  return { requestId, errorCode };
 }
 
 // A chat message is one durable address across every role, so its two raw values
@@ -1309,6 +1332,33 @@ function readPromptSent(mutation) {
   };
 }
 
+// A prompt failure decodes from exactly its four persisted fields: the owning
+// request, one closed redacted classification and its own instant. The binding to
+// a durable opening and to this request's previous failure is validated against
+// staged state in array order, and it carries no chat, token, message or decision.
+function readPromptFailed(mutation) {
+  exactFields(mutation, PROMPT_FAILED_FIELDS);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw integrity(`${PROMPT_FAILED_OP} has a malformed request id`);
+  }
+  const errorCode = mutation.error_code;
+  if (typeof errorCode !== 'string' || !FAILURE_CODES.has(errorCode)) {
+    throw integrity(`${PROMPT_FAILED_OP} has an unsupported failure classification`);
+  }
+  const failedAt = readInstant(mutation.failed_at);
+  if (failedAt === null) throw integrity(`${PROMPT_FAILED_OP} has a malformed receipt time`);
+  return {
+    kind: 'promptFailure',
+    record: {
+      request_id: requestId,
+      error_code: errorCode,
+      failed_at: mutation.failed_at,
+      failedAt,
+    },
+  };
+}
+
 // One Telegram update id is stored exactly as delivered: a raw nonnegative safe
 // integer whose next offset is also safe, so no string, fraction or coercion can
 // become an offset. The same predicate guards the writer and the replay decoder,
@@ -1360,6 +1410,8 @@ function readMutation(mutation) {
       return readOpen(mutation);
     case PROMPT_SENT_OP:
       return readPromptSent(mutation);
+    case PROMPT_FAILED_OP:
+      return readPromptFailed(mutation);
     case SENT_OP:
       return readSent(mutation);
     case FAILED_OP:
@@ -1555,6 +1607,11 @@ function stageCreate(record, staged, pairing, reservedNow) {
     mapped: false,
     lastFailureAt: null,
     lastFailureCode: null,
+    // A prompt failure keeps its own latest redacted class and exact instant,
+    // separate from the presentation receipt above, because it is bounded by the
+    // response opening instead of an allocation.
+    promptFailureAt: null,
+    promptFailureCode: null,
   };
   if (measurePortablePresentation(requestView(request)).worst.length > MAX_TELEGRAM_TEXT) {
     throw integrity(`${CREATE_OP} cannot be presented within ${MAX_TELEGRAM_TEXT} characters`);
@@ -1856,6 +1913,33 @@ function stagePromptSent(record, staged) {
   staged.mappings.set(key, promptMapping(record.request_id, record.chat_id, record.message_id));
 }
 
+// A prompt failure applies in array order against staged state: it names one
+// committed request whose own durable opening is already in this history, its
+// instant is at or after that opening and never before this request's previous
+// failure. Equal instants stay valid, so a distinct attempt is never mistaken for
+// a repeat. It keeps only the latest redacted class privately and changes no
+// resolution, mapping, public Telegram or delivery state, so a late result after
+// the deadline or after a terminal outcome stays truthful without reopening the
+// window, extending its lifetime or clearing a known copy.
+function stagePromptFailed(record, staged) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${PROMPT_FAILED_OP} names no committed request`);
+  if (request.openedAt === null) {
+    throw integrity(`${PROMPT_FAILED_OP} precedes its response opening`);
+  }
+  if (compareInstants(record.failedAt, request.openedAt) < 0) {
+    throw integrity(`${PROMPT_FAILED_OP} precedes its response opening`);
+  }
+  if (
+    request.promptFailureAt !== null &&
+    compareInstants(record.failedAt, request.promptFailureAt) < 0
+  ) {
+    throw integrity(`${PROMPT_FAILED_OP} failure times must not regress`);
+  }
+  request.promptFailureAt = record.failedAt;
+  request.promptFailureCode = record.error_code;
+}
+
 // First evidence is recorded once per kind against one known terminal request
 // and its already recorded decision identity: it never resolves or re-identifies
 // anything. The recorded time is bounded only by the resolution, and the two
@@ -2055,6 +2139,7 @@ class PortableBroker {
         } else if (record.kind === 'presentation') stagePresentation(record.record, staged);
         else if (record.kind === 'sent') stageSent(record.record, staged);
         else if (record.kind === 'prompt') stagePromptSent(record.record, staged);
+        else if (record.kind === 'promptFailure') stagePromptFailed(record.record, staged);
         else if (record.kind === 'failed') stageFailed(record.record, staged);
         else if (record.kind === 'retired') stageRetired(record.record, staged);
         else if (record.kind === 'status') stageStatusShown(record.record, staged);
@@ -2276,6 +2361,21 @@ class PortableBroker {
       const fields = promptFields(input);
       this.#receiptAdmission();
       return this.#enqueue(() => this.#recordPromptSent(fields));
+    });
+  }
+
+  // Records one actual failed prompt send attempt for an opened response window
+  // (design section 5, C3d). The raw target and the closed redacted class are
+  // validated before admission, while the binding is decided inside the serialized
+  // turn: an unknown or unopened request is the same non-disclosing null that
+  // samples no clock and appends nothing. Each distinct attempt may append, so this
+  // is never an idempotent repeat, and success only returns a fresh common copy. It
+  // neither resolves the request nor changes its public Telegram or delivery state.
+  recordPromptFailed(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = promptFailedFields(input);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#recordPromptFailed(fields));
     });
   }
 
@@ -2906,6 +3006,10 @@ class PortableBroker {
       mapped: false,
       lastFailureAt: null,
       lastFailureCode: null,
+      // The prompt failure keeps its own latest redacted class and exact instant,
+      // bounded by this request's response opening rather than an allocation.
+      promptFailureAt: null,
+      promptFailureCode: null,
     };
     // The complete plain-text presentation is measured before the append, so a
     // request that could not be shown within the platform limit is refused while
@@ -3127,19 +3231,69 @@ class PortableBroker {
     return { sent: true, request: requestView(request) };
   }
 
+  // One serialized prompt-failure turn (design section 5, C3d). The target and the
+  // opening retained from history are re-read from installed state, so an unknown
+  // or unopened request keeps the caller's non-disclosing null without a clock
+  // sample or append. Otherwise exactly one instant is sampled and compared as an
+  // instant, at or after that opening and never before this request's previous
+  // failure. The mutation flushes before the latest redacted class is retained. An
+  // uncertain commit installs nothing, fences the journal and fails the live wait
+  // exactly as every other receipt does; success wakes nothing, allocates no
+  // decision or cursor, and never expires, resolves, re-maps or re-ledgers.
+  async #recordPromptFailed({ requestId, errorCode }) {
+    const request = this.#requests.get(requestId);
+    if (request === undefined || request.openedAt === null) return null;
+    const sampled = turnTime(
+      this.#clock,
+      'recording a prompt failure receipt',
+      'prompt failure receipt',
+    );
+    if (compareInstants(sampled.instant, request.openedAt) < 0) {
+      throw storageFailure(
+        `${PROMPT_FAILED_OP} would precede its response opening`,
+        'STORAGE_FAILURE',
+      );
+    }
+    if (
+      request.promptFailureAt !== null &&
+      compareInstants(sampled.instant, request.promptFailureAt) < 0
+    ) {
+      throw storageFailure(
+        `${PROMPT_FAILED_OP} would precede the previous failure`,
+        'STORAGE_FAILURE',
+      );
+    }
+    try {
+      await this.#appendReceipt(
+        [
+          {
+            op: PROMPT_FAILED_OP,
+            request_id: requestId,
+            failed_at: sampled.text,
+            error_code: errorCode,
+          },
+        ],
+        'prompt failure receipt',
+      );
+    } catch (error) {
+      this.#waiters.fail([requestId], error);
+      throw error;
+    }
+    request.promptFailureAt = sampled.instant;
+    request.promptFailureCode = errorCode;
+    this.#logger('portable.prompt.failed', { request_id: requestId });
+    return { request: requestView(request) };
+  }
+
   // A receipt's only write path: an append that did not already carry the storage
   // classification is wrapped in one, so no caller can mistake an uncertain receipt
   // commit for a refusal it may skip. #append has already installed the fence.
-  async #appendReceipt(mutations) {
+  async #appendReceipt(mutations, noun = 'presentation receipt') {
     try {
       await this.#append(mutations);
     } catch (error) {
       if (error?.code === 'STORAGE_FAILURE') throw error;
-      throw storageFailure(
-        'the presentation receipt could not be committed',
-        'STORAGE_FAILURE',
-        error,
-      );
+      throw storageFailure(`the ${noun} could not be committed`, 'STORAGE_FAILURE', error);
     }
   }
 
