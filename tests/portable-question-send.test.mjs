@@ -86,6 +86,43 @@ test('C2B-SEND: prepare flush before exact payload, one admitted send, receipt i
   t.mock.timers.tick(5000); await turn(); assert.equal(h.calls.length, 1);
   const view = h.b.snapshot().requests[0]; assert.equal(view.resolution, 'pending'); assert.equal(view.telegram_state, 'sent'); assert.equal(view.decision_id, null);
 }));
+
+for (const throws of [false, true]) test(`C2B-CREDENTIAL-001-diagnostic-${throws ? 'throwing' : 'healthy'}: reporting cannot interrupt composed traffic cessation`, { timeout: 22000 }, () => questionRuntime(async h => {
+  const poll = h.defer(), idle = h.defer(), send = h.defer();
+  let pollSignal, sendSignal, polls = 0, questions = 0, replies = 0, acks = 0, faults = 0;
+  const runtime = await h.start({
+    updates: (_, { signal }) => { polls++; pollSignal ??= signal; return polls === 1 ? poll.promise : idle.promise; },
+    sendMessage: (payload, { signal }) => {
+      if (!payload.reply_markup) { replies++; return Promise.resolve(message()); }
+      questions++; sendSignal ??= signal; return questions === 1 ? send.promise : idle.promise;
+    },
+    answerCallbackQuery: async () => { acks++; return true; },
+  }, line => {
+    // Ordinary runtime logger argument, not a production observer/test hook.
+    // This poller diagnostic runs inside shared fanout while the poll is held.
+    if (line.includes('Telegram updates stopped: TOKEN_REJECTED')) {
+      faults++; if (throws) throw new Error('synthetic diagnostic callback fault');
+    }
+  });
+  await until(() => pollSignal && sendSignal);
+  send.release(Promise.reject(new TelegramError('TOKEN_REJECTED', 'synthetic')));
+  await until(() => faults === 1);
+  const fenced = [pollSignal.aborted, sendSignal.aborted];
+  // A late held batch would attempt both an ack and a /start reply if unfenced.
+  poll.release([{ update_id: 2, callback_query: { id: 'synthetic-callback' } },
+    { update_id: 3, message: { from: { id: 71, is_bot: false }, chat: { id: 81, type: 'private' }, text: '/start' } }]);
+  assert.equal(runtime.ready, true); assert.equal(await h.status(), 200);
+  assert.equal((await runtime.broker.readRequest(h.key)).resolution, 'pending');
+  assert.equal(runtime.broker.snapshot().requests[0].telegram_state, 'failed');
+  const waiting = runtime.broker.waitRequest(h.key);
+  assert.equal((await runtime.broker.cancelRequest(h.key)).resolution, 'cancelled');
+  assert.equal((await waiting).request.resolution, 'cancelled');
+  await h.create(); await new Promise(r => realTimer(r, 1100));
+  assert.ok(h.logs.every(line => !/processing stopped|storage failure|synthetic diagnostic/.test(line)), 'logger fault is not a storage/business outcome or raw diagnostic');
+  assert.deepEqual({ fenced, polls, questions, replies, acks },
+    { fenced: [true, true], polls: 1, questions: 1, replies: 0, acks: 0 },
+    'credential fence must finish despite diagnostic failure, before any later traffic');
+}));
 test('C2B-FRESH: snapshot only selects request_id, preparation supplies all actual send data', opts, t => native(t, async h => {
   const request = await h.create(); let scans = 0;
   const broker = { presentationWork() { scans++; return { sends: [{ request_id: request.request_id, chat_id: 'evil', callback_token: 'evil', request: {} }] }; },

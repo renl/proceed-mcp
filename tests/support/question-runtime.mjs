@@ -34,8 +34,8 @@ export async function questionRuntime(work) {
     const h = { logs, get runtime() { return runtime; },
       defer() { let release; const promise = new Promise(r => { release = r; }); releases.push(release); return { promise, release }; },
       sync(fn) { syncHook = fn; },
-      async start(telegram) {
-        runtime = await startPortableRuntime({ paths, config, telegram, logger: line => logs.push(line) });
+      async start(telegram, logger = () => {}) {
+        runtime = await startPortableRuntime({ paths, config, telegram, logger: line => { logs.push(line); logger(line); } });
         const b = runtime.broker, c = await b.pairingChallenge();
         await b.completePairing({ code: c.code, userId: '71', chatId: '81', updateId: 1 });
         await h.create(); return runtime;
