@@ -3,10 +3,10 @@
 ## C3e-A text replay - bounded preparation
 
 - [x] P.C3EA-tests [Exact replay-only tests and sole-source brief](slices/03c3e-a-text-replay.md). Baseline8004c8c7, accepted callback/open/prompt through7d149ef8 present. Implementation-owned future reply/command bindings recorded, NOT tested or implemented in A.
-- [ ] P.C3EA-review ONE combined persisted-contract/decomposition/test-artifact review, triggers1/4/5YES,2/3NO. Sole later `src/broker/portable.js` readResolve/stageResolve extension, SOURCE CEILING135gross, complete packet hard600 including independent evidence. No implementation authorization in preparation.
-- [ ] P.C3EA-source After review and separate authorization, extend exact reply/command replay only, then independent affected verification before B writer preparation. Raw consumer/writer/public original Respond/live proof remain mandatory, no C3/feature/release acceptance.
-- Evidence: Node24.22.2 new18:3PASS/15expectedRED,exit1. CalibrationPASS, negative passes are unsupported-variant refusal NOT conformance. Callback control18/18PASS,exit0. [Limits, mapping and commands](slices/03c3e-a-text-replay.md#preparation-evidence-and-mandatory-remainder).
-- Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, test engineering owner, active/retain, next action ONE combined review. Owned native run cleanupPASS, ignored logs retained. No worktree removal, unknown cleanup or partial promotion.
+- [x] P.C3EA-review Supplied combined persisted-contract/decomposition/test-artifact approval reused. Source122gross <=135, complete packet hard600. No material normative conflict or unchanged-review replay.
+- [x] P.C3EA-source Independent affected replay-only PASS on `e7eebae0794f52c32fc8ebe62e62d01b532fc123`, parent `ae83c533781aa753ddf6989780e53809794e3476`. No writer/raw/public Respond/live or complete C3/feature/release acceptance.
+- Evidence: independently executed text18/18PASS, reused current text18/callback18/affected417PASS after revision/assertion review. Static/source format/whitespace and owned fixture cleanupPASS. RED calibration retained. [Verdict, accounting and proof limits](slices/03c3e-a-text-replay.md#independent-affected-verdict---2026-11-04).
+- Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, test engineering owner, active/retain. Next requires separate writer-preparation authorization, no automatic preparation. Ignored logs retained, owner/unknown work preserved. No worktree removal or partial promotion.
 
 ## C3d-ii prompt-failure core - independently verified checkpoint
 
