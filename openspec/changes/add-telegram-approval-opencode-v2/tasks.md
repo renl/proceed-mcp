@@ -1,14 +1,15 @@
 # Tasks
 
-## C3h complete activation - independent conformance FAIL, retained for correction
+## C3h activation - pairing correction PASS, mandatory P3 pending
 
 - [x] P.C3H-tests [All-path source brief, exact bindings, rebindings and RED limits](slices/03c3h-activation.md). Baseline `96dba1b4`, inert prerequisites present. Tests/helpers and owned tasks/slice only, no production edits.
 - [x] P.C3H-review Supplied approved combined review covers triggers1/3/4/5YES,2NO. Six-path source ceiling270gross and packet600 remain. No automatic unchanged Architecture re-review.
 - [x] P.C3H-source Authorized implementation `67ea42b14e2365e6dfa4c4727015cbd2d7d40e3b`, source269gross across6paths. Implemented is not accepted. No partial public activation or copy deferral authorized.
-- [ ] P.C3H-verify [Independent verdict and exact remaining P3](slices/03c3h-activation.md#independent-affected-verification---2026-11-04): primary17/17 PASS, conformance FAIL on silently discarded legitimate `/pair`-containing Respond text. No C3/live/human/feature/release acceptance.
+- [ ] P.C3H-verify [Historical failure and remaining P3](slices/03c3h-activation.md#independent-affected-verification---2026-11-04). Pairing gap now CLOSED attempt1 below. Bounded activation smoke passes, complete C3 still requires mandatory P3. No live/human/feature/release acceptance.
 - [x] P.C3H-pair-tests [C3-PAIR-TEXT-001 corrective criteria and source-only brief](slices/03c3i-pair-text-correction.md), attempt0. Latest design5 clarification governs. Durable public regressions and discrimination controls prepared, not implementation acceptance.
-- [ ] P.C3H-pair-source Correct raw dispatch within separate proposed40gross source ceiling. No expansion of original269/270 activation source packet. Independent affected verification required after correction.
-- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change same, owner test engineering, blocked/retain. Next action coordination routes implementation using the corrective brief, then independent verification. Owner/unknown work preserved, no worktree removal due. Corrective run results and cleanup recorded in the brief.
+- [x] P.C3H-pair-source Corrected at `dae0a47abf8077aa9b1e399f8899fa86fcee36f9`, sole poller22gross within40. Original269/270 activation source packet remains historical.
+- [x] P.C3H-pair-verify [Independent attempt1 PASS](slices/03c3i-pair-text-correction.md#independent-attempt1-verdict---2026-11-04): executed13/13 TAP points across6 top-level tests, reused current10/27/68/32 by assertion scope. C3-PAIR-TEXT-001 CLOSED, historical failures retained, not retroactive passes.
+- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change same, owner test engineering, active/retain. Next action report bounded correction verdict and mandatory P3 for separate authorization. Owned run cleanup PASS, historical teardown provenance limits in corrective brief. Owner/unknown work preserved, no removal or automatic P3 preparation.
 
 ## C3g P2 maintained faults - remaining native breadth PASS, combined review pending
 
