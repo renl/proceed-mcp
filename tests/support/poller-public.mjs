@@ -12,17 +12,18 @@ import { catalogPeer, initializeResult } from './catalog-consumer.mjs';
 export const rows = bytes => readJournal(Buffer.from(bytes, 'base64')).transactions.map(t => t.mutations);
 export const update = (id, code) => ({ update_id: id, message: { from: { id: 71, is_bot: false }, chat: { id: 81, type: 'private' }, text: `/pair ${code}` } });
 export const paired = 'Paired. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.';
-export async function publicPoller(work, mode = '', { mcp = false } = {}) {
+export async function publicPoller(work, mode = '', { mcp = false, preloadPath = 'tests/fixtures/poller-public-preload.mjs' } = {}) {
   const root = resolve('.scratch/c1-poller-public'); await mkdir(root, { recursive: true });
   let phase;
   const result = await bounded(() => managed(async ctx => {
     phase = value => appendFile(join(root, 'progress.log'), `${ctx.directory.split(/[\\/]/).at(-1)} ${value}\n`);
     await phase('setup');
     const state = join(ctx.directory, 'state'), executable = resolve('bin/proceed-mcp.js');
-    const preload = pathToFileURL(resolve('tests/fixtures/poller-public-preload.mjs'));
+    const preload = pathToFileURL(resolve(preloadPath));
     const resources = []; let port;
     const start = async (args, selectedMode = '') => {
       preload.searchParams.set('mode', selectedMode);
+      preload.searchParams.set('method', selectedMode);
       const r = await ctx.start([process.execPath, '--import', preload.href, executable, ...args, '--state-dir', state]);
        r.output = ''; r.adapter = args[0] === 'mcp'; resources.push(r);
       for (const stream of [r.child.stdout, r.child.stderr]) stream.on('data', b => { r.output += b; });
@@ -72,7 +73,11 @@ export async function publicPoller(work, mode = '', { mcp = false } = {}) {
       assert.ok(!(await readFile(join(state, 'journal.log'))).includes(Buffer.from(code)), 'no plaintext public challenge persisted');
     } finally {
       await phase('teardown');
-      for (const r of resources.filter(x => !x.closed)) r.child.send({ kind: 'release' });
+      for (const r of resources.filter(x => !x.closed)) {
+        r.child.on('message', e => { if (e.kind === 'flush-entered' && r.child.connected) r.child.send({ kind: 'release' }); });
+        r.child.send({ kind: 'release-writer' });
+        r.child.send({ kind: 'release' });
+      }
        for (const r of resources.filter(x => !x.closed).reverse()) await stop(r);
       if (port) {
         const probe = createServer(); await new Promise((done, reject) => { probe.once('error', reject); probe.listen(port, '127.0.0.1', done); });

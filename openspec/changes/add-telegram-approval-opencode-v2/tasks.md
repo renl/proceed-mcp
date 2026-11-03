@@ -1,10 +1,16 @@
 # Tasks
 
+## C2c-P2 post-stop blocking remainder packet
+
+- [x] P.C2CP2-poststop [Both-method fulfilled-client-before-stop, real-writer-after-stop proof](slices/03c2c-p2-poststop.md). Baseline `239f2de8`, accepted source `8a3b2463`. New3/3PASS includes injected-failure cleanup. Exact current-pair receipts/flush/drain/restart, no full remainder or C2 claim. Initial cleanup-message oracle mismatch retained.
+- [ ] P.C2CP2-poststop-review Ready for ONE combined boundary/decomposition/test-artifact owning review, triggers1/3/4/5YES,2NO. Final full unfiltered affected80/80PASS, separate owned cleanup PASS, source unchanged. Three other blocking areas and post-stop stale rejection remain unproved.
+- Lifecycle: same retained active worktree/branch/change, test engineering owner. Next action combined review of this bounded checkpoint. Multi-copy/sibling, stale returned/ack transitions and public expiry remain mandatory. Run cleanup PASS, ignored evidence retained. No worktree cleanup authorization.
+
 ## C2c-P2 public terminal edits - bounded primary packet
 
 - [x] P.C2CP2-tests [Primary public lifecycle and actual-client material faults](slices/03c2c-p2-public-edits.md). Baseline `430def24`, accepted source `8a3b2463` unchanged. Full unfiltered new27/27 and affected53/53 PASS, separate owned cleanup PASS. Both actual edit methods, exact addressed Messages and separate flushed receipts. Initial oracle failure/timeout retained in slice.
-- [ ] P.C2CP2-review ONE combined boundary/decomposition/test-artifact owning review. Triggers1/3/4/5YES,2NO. No full P2/C2 acceptance. Mandatory multi-copy/sibling, stale ack/returned-pair, public expiry and client-fulfilled-before-stop/receipt-entry-after-stop interleaving remain here, not C3.
-- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action combined review of bounded primary packet, then exact blocking remainder. Owned run cleanup PASS, ignored evidence retained. Preserve owner/unknown work. No worktree cleanup or C2/live/human/feature/release acceptance.
+- [x] P.C2CP2-review Bounded primary `239f2de8` owning review accepted per remainder authorization. Triggers1/3/4/5YES,2NO. No full P2/C2 acceptance. Mandatory multi-copy/sibling, stale ack/returned-pair, public expiry and post-stop completion breadth remain here, not C3.
+- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action exact blocking remainder and its combined owning review. Owned run cleanup PASS, ignored evidence retained. Preserve owner/unknown work. No worktree cleanup or C2/live/human/feature/release acceptance.
 
 ## C2c-iii terminal edits - bounded P1 PASS
 
