@@ -11,13 +11,14 @@ import https from 'node:https';
 import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import { createTelegramClient, TelegramError } from '../src/telegram/client.js';
+import { questionRuntime } from './support/question-runtime.mjs';
 const opts = { timeout: 9000 }, at = Date.parse('2026-11-02T00:00:00Z'), token = 'a'.repeat(32);
 const realTimer = setTimeout, realClear = clearTimeout, turn = () => new Promise(r => setImmediate(r));
 const gate = () => { let release; const promise = new Promise(r => { release = r; }); return { promise, release }; };
 const message = () => ({ message_id: 7, date: 1793577600, chat: { id: 81, type: 'private' } });
 const processing = 'Telegram presentation processing stopped; stop and restart serve';
 const invalid = 'Telegram question presentation blocked after an invalid response; stop and restart serve';
-async function until(check) { const deadline = performance.now() + 1500; while (performance.now() < deadline) { if (await check()) return; await turn(); } assert.fail('bounded condition not reached'); }
+async function until(check, detail = () => 'bounded condition not reached') { const deadline = performance.now() + 1500; while (performance.now() < deadline) { if (await check()) return; await turn(); } assert.fail(detail()); }
 async function native(t, work, load = true) {
   const factory = load ? (await import('../src/telegram/portable-presentation.js')).createPortablePresentationWorker : null;
   const root = resolve('.scratch/c2b'); await mkdir(root, { recursive: true });
@@ -39,7 +40,8 @@ async function native(t, work, load = true) {
   try {
     j = await Journal.open(path); await j.close(); file = await open(path, 'a');
     j = new Journal(path, { write: (...a) => file.write(...a), sync: async () => { await h.sync(); await file.sync(); }, close: () => file.close() }, 0);
-    b = createPortableBroker({ journal: j, owners: [{ owner_id: 'a', label: 'A' }], port: 43189, clock: () => h.now, generateCallbackToken: () => token });
+    let tokens = 0;
+    b = createPortableBroker({ journal: j, owners: [{ owner_id: 'a', label: 'A' }], port: 43189, clock: () => h.now, generateCallbackToken: () => ++tokens === 1 ? token : tokens.toString(16).padStart(32, '0') });
     await b.recover(); const c = await b.pairingChallenge(); await b.completePairing({ code: c.code, userId: '71', chatId: '81', updateId: 1 });
     await Promise.race([work(h), new Promise((_, reject) => { timer = realTimer(() => reject(new Error('C2b aggregate deadline')), 6000); })]);
   } finally {
@@ -178,3 +180,75 @@ test('C2B-HELP: exact activation copy without decision availability claim', opts
   assert.ifError(result.error); assert.equal(result.status, 0);
   assert.ok(result.stdout.includes('Local waiting and Telegram question display are available. Human approvals, rejections and responses are not recorded in this setup stage yet.'));
 });
+
+for (const rejected of [false, true]) test(`C2B-REJECTION-001-${rejected ? 'rejected' : 'healthy'}: A does not stop healthy sibling B or later C`, opts, t => native(t, async h => {
+  const a = await h.create(), aKey = { ...h.key }, b = await h.create();
+  h.start(async payload => { if (rejected && payload.reply_markup.inline_keyboard[0][0].callback_data === `a:${token}`) throw new TelegramError('TELEGRAM_REJECTED', 'synthetic'); return { ...message(), message_id: h.calls.length }; });
+  await until(async () => (await h.rows()).some(x => x.op === (rejected ? 'telegram.presentation.failed' : 'telegram.presentation.sent')));
+  await until(() => h.calls.length === 2, () => `request rejection must not terminate the pass before B: actual attempts ${h.calls.length}, expected 2`);
+  await until(() => h.b.snapshot().requests.find(x => x.request_id === b.request_id).telegram_state === 'sent');
+  const c = await h.create(); t.mock.timers.tick(1000);
+  await until(() => h.calls.length === 3);
+  await until(() => h.b.snapshot().requests.find(x => x.request_id === c.request_id).telegram_state === 'sent');
+  t.mock.timers.tick(60000); await turn(); assert.equal(h.calls.length, 3, 'A remains blocked, mapped siblings are not resent');
+  assert.equal((await h.b.readRequest(aKey)).resolution, 'pending');
+  assert.equal(h.b.snapshot().requests.find(x => x.request_id === a.request_id).telegram_state, rejected ? 'failed' : 'sent');
+  assert.ok(c.request_id);
+}));
+
+for (const code of ['TELEGRAM_UNAVAILABLE', 'TELEGRAM_RATE_LIMITED']) test(`C2B-STOP-001-${code}: admitted failure drains without scheduling after stop`, opts, t => native(t, async h => {
+  await h.create(); const result = h.defer(), w = h.start(() => result.promise); await until(() => h.calls.length === 1);
+  const hold = h.holdSync(); result.release(Promise.reject(new TelegramError(code, 'synthetic', { retryable: true, retryAfter: 3 })));
+  await hold.entered; const p = w.stop(); let drained = false; p.then(() => { drained = true; });
+  await turn(); assert.equal(drained, false, 'stop must await admitted failure flush');
+  const timers = [], timeout = globalThis.setTimeout, interval = globalThis.setInterval;
+  globalThis.setTimeout = (...args) => { timers.push('timeout'); return timeout(...args); };
+  globalThis.setInterval = (...args) => { timers.push('interval'); return interval(...args); };
+  try { hold.release(); await p; assert.equal((await h.rows()).at(-1).op, 'telegram.presentation.failed');
+    t.mock.timers.tick(60000); await turn(); assert.equal(h.calls.length, 1);
+    assert.deepEqual(timers, [], 'draining failure must not allocate any new timer');
+  } finally { globalThis.setTimeout = timeout; globalThis.setInterval = interval; }
+}));
+
+test('C2B-STOP-001-runtime: synchronously fence BOTH workers before either held drain', { timeout: 22000 }, () => questionRuntime(async h => {
+  const poll = h.defer(), send = h.defer(); let pollSignal, sendSignal;
+  const runtime = await h.start({ updates: (_, { signal }) => { pollSignal = signal; return poll.promise; },
+    sendMessage: (_, { signal }) => { sendSignal = signal; return send.promise; } });
+  await until(() => sendSignal); const entered = h.defer(), flush = h.defer();
+  h.sync(async () => { entered.release(); await flush.promise; });
+  let closed = false; const close = runtime.broker.close.bind(runtime.broker);
+  runtime.broker.close = () => { closed = true; return close(); };
+  const stop = runtime.stop(); assert.equal(runtime.stop(), stop);
+  const fenced = [pollSignal.aborted, sendSignal.aborted];
+  send.release(message());
+  await boundedGate(entered.promise); assert.equal(closed, false, 'receipt sync must precede core close');
+  poll.release([]); flush.release(); await stop;
+  assert.equal(runtime.broker.snapshot().requests[0].telegram_state, 'sent', 'admitted valid late Message still installs');
+  assert.deepEqual(fenced, [true, true], 'both transport fences must be synchronous, not poller-drain sequential');
+}));
+
+async function boundedGate(promise) {
+  let timer; try { await Promise.race([promise, new Promise((_, reject) => { timer = realTimer(() => reject(new Error('receipt gate deadline')), 1500); })]); }
+  finally { realClear(timer); }
+}
+for (const origin of ['healthy', 'presentation', 'poller']) test(`C2B-CREDENTIAL-001-${origin}: actual runtime shares traffic fence, not local authority fence`, { timeout: 22000 }, () => questionRuntime(async h => {
+  const poll = h.defer(), idle = h.defer(), send = h.defer(); let pollSignal, sendSignal, polls = 0, sends = 0;
+  const runtime = await h.start({ updates: (_, { signal }) => { polls++; pollSignal ??= signal; return polls === 1 ? poll.promise : idle.promise; },
+    sendMessage: (_, { signal }) => { sends++; sendSignal ??= signal; return sends === 1 ? send.promise : idle.promise; } });
+  await until(() => sendSignal);
+  if (origin !== 'healthy') {
+    (origin === 'presentation' ? send : poll).release(Promise.reject(new TelegramError('TOKEN_REJECTED', 'synthetic')));
+    await until(() => h.logs.some(line => origin === 'presentation' ? line.includes('credential rejection') : line.includes('TOKEN_REJECTED')));
+  }
+  const fenced = [pollSignal.aborted, sendSignal.aborted];
+  if (origin !== 'presentation') { send.release(message()); await until(() => runtime.broker.snapshot().requests[0].telegram_state === 'sent'); }
+  else poll.release([]);
+  assert.equal(runtime.ready, true); assert.equal(await h.status(), 200);
+  const waiting = runtime.broker.waitRequest(h.key);
+  assert.equal((await runtime.broker.cancelRequest(h.key)).resolution, 'cancelled');
+  assert.equal((await waiting).request.resolution, 'cancelled', 'local wait/cancel survive credential rejection');
+  await h.create();
+  await new Promise(r => realTimer(r, 1100));
+  assert.deepEqual([polls, sends], origin === 'healthy' ? [1, 2] : [1, 1], 'only healthy runtime may admit new Telegram traffic');
+  assert.deepEqual(fenced, origin === 'healthy' ? [false, false] : [true, true], 'only credential rejection must abort both actual worker transports');
+}));
