@@ -19,6 +19,34 @@ import { createPortableServer } from './portable-server.js';
 import { createPortableTelegramPoller } from '../telegram/portable-poller.js';
 import { createPortablePresentationWorker } from '../telegram/portable-presentation.js';
 
+// One private, process-local Telegram traffic fence shared by the two owned
+// consumers. A rejected credential observed by either of them stops all outbound
+// Telegram traffic; the local broker, its readiness, status, cancellation, waiting
+// and expiry are deliberately outside this fence. Both admission fences run
+// synchronously inside stop(), so a held drain on one side never leaves the other
+// side admitting scans, polls, sends, replies, acknowledgements or retries.
+function createTelegramTrafficFence() {
+  const listeners = new Set();
+  let stopped = false;
+  return {
+    // One way only: the first credential rejection fences every current worker, and
+    // a worker created afterwards is fenced on registration instead of starting.
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      for (const listener of [...listeners]) listener();
+      listeners.clear();
+    },
+    add(listener) {
+      if (stopped) listener();
+      else listeners.add(listener);
+    },
+    remove(listener) {
+      listeners.delete(listener);
+    },
+  };
+}
+
 // One token-backed poller exists only when the assembly supplies a Telegram
 // client. Its absence is local-only operation, not a degraded readiness state.
 export async function startPortableRuntime({
@@ -102,21 +130,25 @@ export async function startPortableRuntime({
     // Exactly one update consumer starts after recovery, startup expiry,
     // listener setup and local readiness, so no poll races an unready broker.
     if (telegram !== null) {
-      poller = createPortableTelegramPoller({ broker, telegram, logger });
+      const traffic = createTelegramTrafficFence();
+      poller = createPortableTelegramPoller({ broker, telegram, logger, traffic });
       poller.start();
       // Question display is equally a private transport concern: it starts after
       // the same local readiness and only when the client can actually send. Its
       // own failures never withdraw local readiness.
       if (typeof telegram.sendMessage === 'function') {
-        presentation = createPortablePresentationWorker({ broker, telegram, logger });
+        presentation = createPortablePresentationWorker({ broker, telegram, logger, traffic });
         presentation.start();
       }
     }
   } catch (error) {
-    // Nothing may outlive a failed start: close only this invocation's own
-    // listener, journal activity and ownership record, then report the cause.
-    await presentation?.stop().catch(() => {});
-    await poller?.stop().catch(() => {});
+    // Nothing may outlive a failed start: both owned Telegram consumers are fenced
+    // synchronously first, then only this invocation's own listener, journal
+    // activity and ownership record are closed before the cause is reported.
+    const pollerDrain = poller?.stop();
+    const presentationDrain = presentation?.stop();
+    await presentationDrain?.catch(() => {});
+    await pollerDrain?.catch(() => {});
     await schedule?.stop().catch(() => {});
     await server?.close().catch(() => {});
     await broker?.close().catch(() => {});
@@ -138,14 +170,19 @@ export async function startPortableRuntime({
     stop() {
       if (stopPromise !== null) return stopPromise;
       stopping = true;
+      // Both owned Telegram consumers are fenced synchronously, before either drain
+      // is awaited: a held poll turn cannot admit a later scan or send, and a held
+      // receipt write cannot admit a later poll, reply or acknowledgement.
+      const pollerDrain = poller?.stop();
+      const presentationDrain = presentation?.stop();
       stopPromise = (async () => {
-        // Update consumption stops first: it fences new sends, aborts actual
+        // Update consumption drains first: it fences new sends, aborts actual
         // in-flight poll/reply transport and drains its admitted core turn
         // before the authority closes, while scheduling keeps its own drain.
-        await poller?.stop().catch(() => {});
+        await pollerDrain?.catch(() => {});
         // Question display drains next, so an already-admitted send completes and
         // its receipt installs before the authority closes.
-        await presentation?.stop().catch(() => {});
+        await presentationDrain?.catch(() => {});
         // Scheduling stops next, so a queued attempt settles before any close.
         await schedule.stop();
         await server.close().catch(() => {});

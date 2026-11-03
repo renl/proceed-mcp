@@ -44,7 +44,16 @@ function accessibleMessage(value, chatId) {
   return chat.type === 'private' && positive(chat.id) && String(chat.id) === chatId;
 }
 
-export function createPortablePresentationWorker({ broker, telegram, logger = () => {} } = {}) {
+// `traffic` is the process-local Telegram traffic fence shared with the update
+// consumer. A credential rejection observed here, or there, stops all outbound
+// Telegram traffic; local readiness, status, cancellation, waiting and expiry are
+// never part of that fence.
+export function createPortablePresentationWorker({
+  broker,
+  telegram,
+  logger = () => {},
+  traffic = null,
+} = {}) {
   const needed = [
     'presentationWork',
     'preparePresentation',
@@ -65,6 +74,7 @@ export function createPortablePresentationWorker({ broker, telegram, logger = ()
   const { signal } = controller;
   const waiting = new Map(); // request id -> one scheduled retry
   const ladder = new Map(); // request id -> transient failures already completed
+  const blocked = new Set(); // request id -> definitive rejection for this process
   let stopped = false;
   let diagnostic = null;
   let pass = null;
@@ -74,11 +84,9 @@ export function createPortablePresentationWorker({ broker, telegram, logger = ()
 
   // One fixed diagnostic per stopped/blocked condition, logged at most once and
   // never with an exception argument. A failing log callback never changes that
-  // failure scope and never prevents the drain.
-  const end = (line) => {
-    stopped = true;
-    clearSchedule();
-    controller.abort();
+  // failure scope and never prevents the drain. Reporting is not fencing: a
+  // request-scoped rejection reports without withdrawing this worker.
+  const report = (line) => {
     if (diagnostic !== null) return;
     diagnostic = line;
     try {
@@ -86,6 +94,22 @@ export function createPortablePresentationWorker({ broker, telegram, logger = ()
     } catch {
       // A diagnostic callback fault is not a presentation or storage fault.
     }
+  };
+
+  // Terminal fence: no later scan, preparation, send or retry may be admitted.
+  const end = (line) => {
+    stopped = true;
+    clearSchedule();
+    controller.abort();
+    report(line);
+  };
+
+  // A rejected credential is wider than one request, so it also fences the shared
+  // Telegram traffic: no question, reply or acknowledgement leaves this process
+  // until the operator repairs the configuration and restarts.
+  const ceaseCredential = () => {
+    end(CREDENTIAL_STOPPED);
+    traffic?.stop();
   };
 
   const fault = (error) =>
@@ -102,17 +126,19 @@ export function createPortablePresentationWorker({ broker, telegram, logger = ()
 
   // The closed redacted classification of one failed send attempt. A code outside
   // the client's own vocabulary is an unexpected presentation-only failure, and a
-  // cancelled attempt is an abandoned send that supplies no receipt at all.
+  // cancelled attempt is an abandoned send that supplies no receipt at all. Only a
+  // rejected credential is Telegram-wide: a definitive method rejection concerns
+  // the single request it names.
   const FAILURES = new Map([
     ['TELEGRAM_UNAVAILABLE', { code: 'unavailable' }],
     ['TELEGRAM_TIMEOUT', { code: 'unavailable' }],
     ['TELEGRAM_RATE_LIMITED', { code: 'rate_limited' }],
     ['TELEGRAM_REJECTED', { code: 'rejected', blocked: REJECTION_BLOCKED }],
-    ['TOKEN_REJECTED', { code: 'rejected', blocked: CREDENTIAL_STOPPED }],
+    ['TOKEN_REJECTED', { code: 'rejected', credential: true }],
   ]);
 
   // One actual failed attempt: the receipt records only the classification, a
-  // definitive rejection blocks the request until restart, and a classified
+  // definitive rejection blocks its own request until restart, and a classified
   // transient failure joins the per-request ladder.
   const failed = async (requestId, callbackToken, error) => {
     if (error?.code === 'CANCELLED') return;
@@ -131,9 +157,18 @@ export function createPortablePresentationWorker({ broker, telegram, logger = ()
       end(fault(cause));
       return;
     }
-    if (diagnostic !== null) return;
+    // The admitted failure write always drains, but a stop taken while it was held
+    // still fences it: no new timer, scan or send follows that completion.
+    if (stopped) return;
+    if (classification.credential === true) {
+      ceaseCredential();
+      return;
+    }
     if (classification.blocked !== undefined) {
-      end(classification.blocked);
+      // This request stays blocked for this process while its siblings, in this
+      // pass and in later scans, remain eligible for their own attempts.
+      blocked.add(requestId);
+      report(classification.blocked);
       return;
     }
     const completed = ladder.get(requestId) ?? 0;
@@ -206,13 +241,16 @@ export function createPortablePresentationWorker({ broker, telegram, logger = ()
   };
 
   // One sequential pass over one work snapshot: only the request identity is taken
-  // from it, and a request with a scheduled retry is skipped until it is eligible.
+  // from it, and a request with a scheduled retry or a definitive rejection of its
+  // own is skipped until it is eligible again.
   const drain = async () => {
     const work = broker.presentationWork();
     for (const entry of Array.isArray(work?.sends) ? work.sends : []) {
       const requestId = entry?.request_id;
       if (stopped) return;
-      if (typeof requestId !== 'string' || waiting.has(requestId)) continue;
+      if (typeof requestId !== 'string' || blocked.has(requestId) || waiting.has(requestId)) {
+        continue;
+      }
       await send(requestId);
     }
   };
@@ -241,6 +279,11 @@ export function createPortablePresentationWorker({ broker, telegram, logger = ()
     })();
   }
 
+  // A peer consumer's credential rejection reaches this worker as one synchronous
+  // admission fence, exactly like its own; a healthy peer never calls it.
+  const fence = () => ceaseCredential();
+  traffic?.add(fence);
+
   return {
     // Idempotent, and it initiates the first pass immediately.
     start() {
@@ -257,6 +300,7 @@ export function createPortablePresentationWorker({ broker, telegram, logger = ()
       stopped = true;
       clearSchedule();
       controller.abort();
+      traffic?.remove(fence);
       stopPromise = Promise.resolve(pass).then(() => {});
       return stopPromise;
     },
@@ -265,6 +309,8 @@ export function createPortablePresentationWorker({ broker, telegram, logger = ()
       return diagnostic;
     },
 
+    // Reported a stopped or blocked presentation condition. It is not a claim that
+    // local authority, waiting or cancellation changed.
     get failed() {
       return diagnostic !== null;
     },

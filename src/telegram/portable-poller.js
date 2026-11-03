@@ -77,7 +77,12 @@ const rejectedCredential = (error) => ['TOKEN_REJECTED', 'POLLER_CONFLICT'].incl
 const retryAfterMs = (error) =>
   Number.isInteger(error?.retryAfter) && error.retryAfter > 0 ? error.retryAfter * 1000 : 0;
 
-export function createPortableTelegramPoller({ broker, telegram, logger = () => {} } = {}) {
+export function createPortableTelegramPoller({
+  broker,
+  telegram,
+  logger = () => {},
+  traffic = null,
+} = {}) {
   if (
     typeof broker?.telegramCursor !== 'function' ||
     typeof broker?.completePairing !== 'function'
@@ -98,12 +103,16 @@ export function createPortableTelegramPoller({ broker, telegram, logger = () => 
   let stopPromise = null;
 
   // One shared abort covers the long poll, the retry wait and every external UI
-  // call. Every termination is terminal and fixed: a later start cannot undo it.
+  // call. Every termination is terminal and fixed: a later start cannot undo it. A
+  // rejected credential is not just this consumer's problem, so it also fences the
+  // shared Telegram traffic (question display, replies and acknowledgements) while
+  // the local broker keeps serving.
   const end = (line, reason) => {
     logger(line);
     diagnostic ??= reason;
     stopped = true;
     controller.abort();
+    if (reason === 'TOKEN_REJECTED') traffic?.stop();
   };
 
   // A retry wait shares the poll's abortable lifetime, so stop reaches it too.
@@ -270,6 +279,16 @@ export function createPortableTelegramPoller({ broker, telegram, logger = () => 
     }
   };
 
+  // A peer consumer's credential rejection fences this loop synchronously through
+  // the same fixed termination, so the in-flight poll and every later reply or
+  // acknowledgement are aborted at once and nothing new is admitted.
+  const fence = () =>
+    end(
+      'Telegram updates stopped: TOKEN_REJECTED; restart serve after repairing the bot',
+      'TOKEN_REJECTED',
+    );
+  traffic?.add(fence);
+
   return {
     // Idempotent, and refused once stopped or ended.
     start() {
@@ -284,6 +303,7 @@ export function createPortableTelegramPoller({ broker, telegram, logger = () => 
       if (stopPromise !== null) return stopPromise;
       stopped = true;
       controller.abort();
+      traffic?.remove(fence);
       stopPromise = (async () => {
         await loop;
       })();
