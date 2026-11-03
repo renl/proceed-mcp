@@ -1,5 +1,13 @@
 # Tasks
 
+## C3 first callback-core - bounded replay then writer
+
+- [x] P.C3A-tests [Callback replay foundation and sole-source implementation brief](slices/03c3a-callback-replay.md). Baseline `1fca2b175e1e3b8bf99ec24dc222652dc206aee0`, accepted C2 source/breadth present. Tests/owned docs only. Safe ordered replay-foundation then writer split, one existing change/PR, no partial promotion or public decisions.
+- [ ] P.C3A-review ONE combined persisted-journal/decomposition/test-artifact review. Triggers1/4/5YES,2/3NO. No implementation readiness before review and separate source authorization. Sole source `src/broker/portable.js`, ceiling280 gross, packet600 including preparation and verification evidence.
+- [ ] P.C3A-verify Implement and independently verify callback replay before successor writer preparation. Required source-only intermediate keeps public decision unavailability. Exact persisted initial ledger and transaction-entry cursor rules in linked brief.
+- [ ] P.C3B-writer Mandatory separately prepared actual `resolveCallback` writer/flush/cursor/wake/ledger/closure-race proof after verified C3a. No injected human history substitutes. Public activation/Respond/live human acceptance remain separate mandatory gates.
+- Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action combined review. Owned native fixture cleanup only, preserve owner/unknown state, no worktree removal. RED evidence and actual packet accounting in linked brief.
+
 ## C2c-P2 four remaining public proof blockers
 
 - [x] P.C2CP2-breadth [Copy/ledger/expiry/stale-stop packet](slices/03c2c-p2-breadth.md). Baseline `bf1ae43674ef53282908f5ce09245d8250be64a6`, accepted source `8a3b2463` unchanged. Full unfiltered new8/8 and scoped affected4/4 PASS, separate cleanup12/12 PASS. All four blockers executed through actual public/client/producers, no source change or full C2 acceptance.
