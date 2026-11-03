@@ -26,7 +26,8 @@ fs.open = async (...args) => {
   const sync = file.sync.bind(file), write = file.write.bind(file), close = file.close.bind(file);
   file.write = async (...a) => { const result = await write(...a); emit('write', { bytes: bytes() }); return result; };
   file.sync = async () => {
-     if ((consuming && ['hold', 'fail'].includes(mode)) || (consuming === 'sent' && mode === 'receipt-hold')) {
+     if ((consuming && ['hold', 'fail'].includes(mode)) || (consuming === 'sent' && mode === 'receipt-hold')
+       || (consuming === 'controls' && mode === 'controls-hold') || (consuming === 'status' && mode === 'status-hold')) {
       emit('flush-entered', { bytes: bytes() });
       if (mode === 'fail') throw Error('synthetic flush failure');
       await new Promise(done => { release = done; });
@@ -38,7 +39,9 @@ fs.open = async (...args) => {
 };
 const append = Journal.prototype.append;
 Journal.prototype.append = async function (mutations) {
-   consuming = mutations.some(m => m.op === 'telegram.presentation.sent') ? 'sent' : mutations.some(m => m.op === 'pairing.challenge.consume');
+   consuming = mutations.some(m => m.op === 'telegram.presentation.sent') ? 'sent'
+     : mutations.some(m => m.op === 'telegram.controls.retired') ? 'controls'
+       : mutations.some(m => m.op === 'telegram.status.shown') ? 'status' : mutations.some(m => m.op === 'pairing.challenge.consume');
   emit('append-entered', { mutations });
   try { const value = await append.call(this, mutations); emit('committed', { mutations, bytes: bytes() }); return value; }
   finally { consuming = false; }
