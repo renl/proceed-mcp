@@ -8,10 +8,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { managed, bounded } from './managed-spike.mjs';
 import { freePort, completed } from './startup-guards.mjs';
 import { readJournal } from '../../src/journal/framing.js';
+import { catalogPeer, initializeResult } from './catalog-consumer.mjs';
 export const rows = bytes => readJournal(Buffer.from(bytes, 'base64')).transactions.map(t => t.mutations);
 export const update = (id, code) => ({ update_id: id, message: { from: { id: 71, is_bot: false }, chat: { id: 81, type: 'private' }, text: `/pair ${code}` } });
 export const paired = 'Paired. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.';
-export async function publicPoller(work, mode = '') {
+export async function publicPoller(work, mode = '', { mcp = false } = {}) {
   const root = resolve('.scratch/c1-poller-public'); await mkdir(root, { recursive: true });
   let phase;
   const result = await bounded(() => managed(async ctx => {
@@ -23,7 +24,7 @@ export async function publicPoller(work, mode = '') {
     const start = async (args, selectedMode = '') => {
       preload.searchParams.set('mode', selectedMode);
       const r = await ctx.start([process.execPath, '--import', preload.href, executable, ...args, '--state-dir', state]);
-      r.output = ''; resources.push(r);
+       r.output = ''; r.adapter = args[0] === 'mcp'; resources.push(r);
       for (const stream of [r.child.stdout, r.child.stderr]) stream.on('data', b => { r.output += b; });
       r.child.send({ kind: 'go' }); return r;
     };
@@ -39,11 +40,15 @@ export async function publicPoller(work, mode = '') {
       && r.events.filter(x => x.kind === 'request' && x.url.endsWith(`/${method}`)).indexOf(e) === index, `${method} ${index}`);
     const response = (r, req, result, extra = {}) => r.child.send({ kind: 'response', id: req.id, result, ...extra });
     const stop = async r => {
-      if (!r.closed) { r.child.send({ kind: 'stop' }); assert.equal(await completed(r), 0, r.output); }
-      await assert.rejects(access(join(state, 'broker.lock')), { code: 'ENOENT' });
+       if (!r.closed) {
+         if (r.adapter) r.child.stdin.end(); else r.child.send({ kind: 'stop' });
+         assert.equal(await completed(r), 0, r.adapter ? 'adapter EOF' : r.output);
+       }
+       if (!r.adapter) await assert.rejects(access(join(state, 'broker.lock')), { code: 'ENOENT' });
     };
     try {
-      assert.equal((await cli('init')).code, 0);
+       assert.equal((await cli('init')).code, 0);
+       if (mcp) assert.equal((await cli('owner', 'add', 'shared', '--label', 'Public display')).code, 0);
       const path = join(state, 'config.json'), config = JSON.parse(await readFile(path, 'utf8'));
       port = await freePort(); config.broker.port = port; await writeFile(path, JSON.stringify(config));
       const r = await start(['serve'], mode); const initial = await request(r, 'getUpdates');
@@ -52,14 +57,23 @@ export async function publicPoller(work, mode = '') {
       assert.ok(challenge.events.some(e => e.kind === 'local-response' && e.path === '/v1/pairing' && e.status === 201));
       const code = /Pairing code: ([a-f0-9]{32})/.exec(challenge.output)?.[1]; assert.ok(code, 'real public challenge');
       await phase('assertions');
-      await work({ r, initial, code, state, cli, wait, request, response, stop,
-        start: () => start(['serve']), bytes: () => readFile(join(state, 'journal.log')).then(b => b.toString('base64')) });
+       const connect = async () => {
+         assert.ok(mcp, 'MCP setup explicitly enabled');
+         const resource = await start(['mcp', '--owner', 'shared']);
+         const peer = catalogPeer(resource.child);
+         initializeResult(await peer.call('initialize', { protocolVersion: '2025-11-25', capabilities: {},
+           clientInfo: { name: 'public-display-proof', version: '0' } }).outcome);
+         resource.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+         return { resource, peer, call: (name, args, options) => peer.call('tools/call', { name, arguments: args }, options).outcome };
+       };
+       await work({ r, initial, code, state, cli, wait, request, response, stop, connect,
+         start: selectedMode => start(['serve'], selectedMode), bytes: () => readFile(join(state, 'journal.log')).then(b => b.toString('base64')) });
       assert.ok(!r.output.includes(code) && !r.output.includes('offline-synthetic-token'), 'serve diagnostics disclose no challenge/token');
       assert.ok(!(await readFile(join(state, 'journal.log'))).includes(Buffer.from(code)), 'no plaintext public challenge persisted');
     } finally {
       await phase('teardown');
       for (const r of resources.filter(x => !x.closed)) r.child.send({ kind: 'release' });
-      for (const r of resources.filter(x => !x.closed)) await stop(r);
+       for (const r of resources.filter(x => !x.closed).reverse()) await stop(r);
       if (port) {
         const probe = createServer(); await new Promise((done, reject) => { probe.once('error', reject); probe.listen(port, '127.0.0.1', done); });
         await new Promise(done => probe.close(done));

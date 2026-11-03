@@ -46,7 +46,7 @@ export async function telegramFixture() {
         }
         result = updates.filter((update) => update.update_id >= (body.offset ?? 0));
       } else if (method === 'sendMessage') {
-        result = { ...body, message_id: messageId++, chat: { id: 7, type: 'private' } };
+         result = { ...body, message_id: messageId++, date: Math.floor(Date.now() / 1000), chat: { id: 7, type: 'private' } };
         messages.push(result);
       } else if (!['answerCallbackQuery', 'editMessageText', 'editMessageReplyMarkup'].includes(method)) {
         throw Error('unsupported fixture method');

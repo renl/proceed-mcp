@@ -186,6 +186,7 @@ test('PUB-CATALOG: actual initialize/catalog disclose observation and acknowledg
   assert.match(a.init.instructions, /deduplicat[^\n]*request_id[^\n]*decision_id/i);
   for (const text of [a.init.instructions, a.tools.find(t => t.name === 'request_approval').description])
     assert.doesNotMatch(text, /request_approval[^.\n]*(?:ENHANCEMENT_UNAVAILABLE|not (?:yet )?(?:implemented|available|enabled))/i);
-  assert.match(a.init.instructions, /Telegram[^\n]*(?:not (?:yet )?(?:implemented|available|enabled)|unavailable)|(?:no|without)[^\n]*Telegram[^\n]*(?:transport|presentation)/i);
+   assert.match(a.init.instructions, /sends[^\n]*approval question[^\n]*paired private chat[^\n]*Telegram/i);
+   assert.match(a.init.instructions, /Telegram decision capture is not available[^\n]*no approval, rejection or response is recorded/i);
   assert.equal(h.calls.length, 0, 'catalog remains brokerless'); await h.eof(a);
 }));

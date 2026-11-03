@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { managed } from './support/managed-spike.mjs';
 import { portable, success, authority, question, ask, get, until, telegramFixture } from './support/portable-waiting.mjs';
 
@@ -48,7 +49,7 @@ test('PORT-A: preparation and request authority, not labels or agent identity', 
   assert.ok(reserved.frame.result?.isError === true
     && reserved.frame.result.structuredContent?.error?.code === 'NOT_FOUND', 'preparation is not an actionable approval');
   assert.equal(h.fixture.messages.length, before, 'preparation creates no Telegram question');
-  const wait = ask(h.shared, a, 101);
+  const wait = ask(h.shared, a, -101); // Explicit IDs cannot collide with positive automatic polling IDs.
   await until(async () => (await get(h.shared, a)).resolution === 'pending', 'created pending request', h.signal);
   const foreign = await h.connect('foreign');
   const denied = async (connection, name, args) => {
@@ -71,28 +72,29 @@ test('PORT-A: preparation and request authority, not labels or agent identity', 
   assert.ok(missing.frame.result?.isError === true, 'ID alone cannot recover capability');
   assert.equal((await get(h.shared, a)).resolution, 'pending', 'denied cancellation does not mutate');
   // Another RPC context under this SAME principal deliberately receives the key.
-  const cancel = success(await h.shared.call('cancel_approval', authority(a), 102).outcome);
+  const cancel = success(await h.shared.call('cancel_approval', authority(a), -102).outcome);
   assert.equal(cancel.resolution, 'cancelled', 'transferred key authorizes same-principal cancellation');
   const outcome = await wait.outcome;
-  assert.equal(outcome.frame.id, 101, 'authority transfer never redirects original response');
+  assert.equal(outcome.frame.id, -101, 'authority transfer never redirects original response');
   assert.equal(success(outcome).resolution, 'cancelled');
   // Controlled caller-side timeout, NOT an observed OpenCode execution timeout.
   const lost = h.shared.peer.call('tools/call', { name: 'request_approval', arguments: question(b) },
-    { id: 103, ms: 250 });
+    { id: -103, ms: 250 });
   const message = await until(() => h.fixture.messages.find((m) => m.text.includes(b.request_id)
     && m.reply_markup?.inline_keyboard), 'second actionable question', h.signal);
   assert.equal((await lost.outcome).kind, 'timeout', 'caller stops waiting without a human outcome');
   h.shared.resource.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled',
-    params: { requestId: 103, reason: 'cancel approval' } })}\n`);
+    params: { requestId: -103, reason: 'cancel approval' } })}\n`);
   assert.equal((await get(h.shared, b)).resolution, 'pending', 'protocol reason is not business cancellation');
   h.fixture.choose(message, 'a');
   const retained = await until(async () => {
+    await delay(1000); // Bound output within the runner budget while waiting for the same required decision.
     const value = await get(h.shared, b);
     return value.resolution === 'approved' && value;
   }, 'retained key retrieves late human outcome', h.signal);
   assert.ok(/^dec_[a-f0-9]{32}$/.test(retained.decision_id), 'stable terminal identity');
   assert.ok(['unverified', 'unsupported'].includes(retained.event_capability.status), 'no verified Events from fixture');
-  assert.ok(!h.shared.peer.unmatched.some((frame) => frame.id === 103), 'cancelled invocation gets no replacement result');
+  assert.ok(!h.shared.peer.unmatched.some((frame) => frame.id === -103), 'cancelled invocation gets no replacement result');
   const reconnected = await h.restart();
   const recovered = await get(reconnected, b);
   assert.equal(recovered.decision_id, retained.decision_id, 'durable late outcome survives orderly broker restart');
