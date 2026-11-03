@@ -1,5 +1,10 @@
 # Tasks
 
+## C2c-i controls retirement core preparation
+
+- [ ] P.C2CI Review [controls-core brief](slices/03c2c-i-controls-core.md) plus `tests/portable-controls-retirement.test.mjs` in one journal/decomposition/test-artifact pass. Baseline `28b41e27`, accepted receipts `39b25f06`, latest design5/7 C2c clarification. Sole source `src/broker/portable.js`, reserved165-200 gross. Retirement flush precedes status work/live/replay. Status-core and actual public-client edit proof remain mandatory before C2 completion, not deferred to C3.
+- Lifecycle unchanged: active retained worktree/branch/change `add-telegram-approval-opencode-v2`, owner test engineering. Next action combined review, then separately routed implementation. No cleanup/partial promotion or C2/live/human/feature/release claim. Detailed expectedRED, command bounds, source binding and accounting in linked brief.
+
 ## C2b-P2 controlled public question proof
 - [x] P.C2BP2-tests [Public display, faults/lifecycle, fixture/catalog repairs and evidence](slices/03c2b-p2-public-question.md). Baseline `a4ef5637433bb27bf0196dcb3673c668cbff6dd9`, accepted P1 source unchanged. Final unfiltered new21/21 PASS, separate owned cleanup PASS. Actual protected pairing/MCP create -> durable prepare before exact production-client payload -> full Message -> durable sent -> still-pending original -> authorized cancellation/exact original terminal result. No seeded request/resolution/mapping or fake-client send success.
 - [ ] P.C2BP2-review ONE combined boundary/decomposition/test-artifact review, triggers1/3/4/5YES,2NO. Source tree `603dbc93500d593fb28ab29b515071c43c0d9def` unchanged. Native51/87 reused by exact inputs/assertion scope, new public proof is distinct. PORT-A/B reach missing decision/ForceReply with valid Message fixture and remain FAIL. Known CLI prerequisites2 outside packet remain unpassed. No P2/C2/live/human/feature/release acceptance before review.
