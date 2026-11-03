@@ -1,12 +1,12 @@
 # Tasks
 
-## C3h complete activation - executable preparation, combined review pending
+## C3h complete activation - independent conformance FAIL, retained for correction
 
 - [x] P.C3H-tests [All-path source brief, exact bindings, rebindings and RED limits](slices/03c3h-activation.md). Baseline `96dba1b4`, inert prerequisites present. Tests/helpers and owned tasks/slice only, no production edits.
-- [ ] P.C3H-review ONE combined boundary/decomposition/test-artifact review, triggers1/3/4/5YES,2NO. Six-path source forecast/proposed ceiling270gross, complete packet600 including preparation and verification reserve. No partial public activation or copy deferral.
-- [ ] P.C3H-source Separate authorization after review for complete callback/reply/command/prompt runtime and truthful copy activation. Return concrete allocation clarification before exceeding source ceiling or touching another production path.
-- [ ] P.C3H-verify Independent affected verification and full useful PORT-A/B after source. Mandatory P3 partitions in the linked brief, then separately authorized real Telegram/human proof. No C3/live/human/feature/release acceptance.
-- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change same, owner test engineering, active/retain. Next action combined review. Owned-run cleanup and final charges in slice, owner/unknown work preserved. No worktree removal due.
+- [x] P.C3H-review Supplied approved combined review covers triggers1/3/4/5YES,2NO. Six-path source ceiling270gross and packet600 remain. No automatic unchanged Architecture re-review.
+- [x] P.C3H-source Authorized implementation `67ea42b14e2365e6dfa4c4727015cbd2d7d40e3b`, source269gross across6paths. Implemented is not accepted. No partial public activation or copy deferral authorized.
+- [ ] P.C3H-verify [Independent verdict and exact remaining P3](slices/03c3h-activation.md#independent-affected-verification---2026-11-04): primary17/17 PASS, conformance FAIL on silently discarded legitimate `/pair`-containing Respond text. No C3/live/human/feature/release acceptance.
+- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change same, owner test engineering, blocked/retain. Next action coordination assigns the gap and routes pairing-intent clarification and affected test criteria. Owned cleanup PASS, owner/unknown work preserved. No automatic preparation or worktree removal due.
 
 ## C3g P2 maintained faults - remaining native breadth PASS, combined review pending
 
