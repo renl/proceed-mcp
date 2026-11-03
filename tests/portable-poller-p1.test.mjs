@@ -10,10 +10,10 @@ import { readJournal } from '../src/journal/framing.js';
 import { createTelegramClient, TelegramError } from '../src/telegram/client.js';
 import { bounded } from './support/managed-spike.mjs';
 const code = '0123456789abcdef'.repeat(2), opts = { timeout: 15000 };
-const messages = ['Paired. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.',
+const messages = ['Paired. Approval questions can be sent to this chat. Select Approve, Reject or Respond on a request. Respond text is instructions, not approval.',
   'Pairing was not accepted. Ask the operator for a fresh code.',
   'To pair, ask the operator for a pairing code. Send /pair <code> here before it expires.',
-  'You are paired with this local broker. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.'];
+  'You are paired with this local broker. Select Approve, Reject or Respond on an approval request. Respond text is instructions, not approval.'];
 const gate = () => { let release; const promise = new Promise(r => { release = r; }); return { promise, release }; };
 const tick = () => new Promise(r => setImmediate(r));
 const update = (id, text = `/pair ${code}`, from = { id: 71, is_bot: false }, chat = { id: 81, type: 'private' }) =>
@@ -102,10 +102,12 @@ for (const invalid of [null, {}, [update(1), { update_id: -1 }], [update(1), { u
   assert.equal(h.b.telegramCursor(), null); assert.equal(h.b.pairing(), null); assert.equal((await h.rows()).length, 1);
   assert.equal(h.calls.some(c => c[0] === 'send'), false);
 }));
-test('C1P-ACK: neutral callback only after actual cursor flush, no approvals', opts, () => native(async h => {
-  h.queue.push([{ update_id: 8, callback_query: { id: 'opaque', data: 'a:any' } }]); h.start();
+test('C1P-ACK: generic refusal only after actual cursor flush, no approvals', opts, () => native(async h => {
+  h.queue.push([{ update_id: 8, callback_query: { id: 'opaque', data: 'a:any' } }]); const hold = h.hold(); h.start();
+  try { await hold.entered(); assert.equal(h.calls.some(c => c[0] === 'ack'), false); }
+  finally { hold.release(); }
   await h.until(() => h.calls.some(c => c[0] === 'ack'));
-  const ack = h.calls.find(c => c[0] === 'ack'); assert.equal(ack[1].callback_query_id, 'opaque'); assert.ok(!ack[1].text);
+  const ack = h.calls.find(c => c[0] === 'ack'); assert.equal(ack[1].callback_query_id, 'opaque'); assert.equal(ack[1].text, 'This request is not available.');
   assert.deepEqual(ack[3].at(-1), [{ op: 'telegram.cursor', last_update_id: 8 }]); assert.deepEqual(h.b.snapshot().requests, []);
 }));
 test('C1P-HANDLER: unexpected pre-cursor failure terminal, fixed redaction, no skip/retry', opts, () => native(async h => {

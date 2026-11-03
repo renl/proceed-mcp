@@ -91,7 +91,8 @@ test('PORT-CATALOG: schema-2 owner CLI exposes exactly five standard MCP tools w
         const copy = [initialized.instructions, ...tools.map(tool => tool.description)].join('\n');
         assert.doesNotMatch(copy, /No Telegram transport is implemented|no question is presented/i);
         assert.match(copy, /Telegram[\s\S]*(?:display|present|question)/i);
-        assert.match(copy, /(?:approvals|Approve)[\s\S]*(?:not recorded|not available|not implemented)/i);
+        assert.ok(copy.includes('Only an explicit Approve grants approval. Reject records rejection. Respond records request-specific instructions only after valid correlated text. Approval-like words in Respond text never grant approval.'));
+        assert.doesNotMatch(copy, /(?:Approve|decision capture)[^.\n]*(?:not recorded|not available|not implemented)/i);
         for (const { name, inputSchema: schema } of tools) {
           assert.equal(schema.type, 'object');
           assert.equal(schema.additionalProperties, false);

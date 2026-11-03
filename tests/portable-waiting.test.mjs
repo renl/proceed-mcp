@@ -5,6 +5,10 @@ import test from 'node:test';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { readJournal } from '../src/journal/framing.js';
+import { admitCallbackUpdate, admitTextUpdate } from '../src/telegram/portable-admission.js';
 import { managed } from './support/managed-spike.mjs';
 import { portable, success, authority, question, ask, get, until, telegramFixture } from './support/portable-waiting.mjs';
 
@@ -17,6 +21,10 @@ test('FIXTURE: only controlled Telegram transport, listener teardown', async () 
     const value = await response.json();
     assert.equal(value.result[0].message.text, '/pair synthetic');
     assert.equal(value.result[0].message.from.is_bot, false);
+    assert.equal(admitTextUpdate(value.result[0]).status, 'uncorrelated', 'fixture supplies full incoming Message');
+    fixture.choose({ message_id: 500, date: 1, chat: { id: 7, type: 'private' }, reply_markup: { inline_keyboard: [[{ text: 'Approve', callback_data: `a:${'a'.repeat(32)}` }]] } }, 'a');
+    const callbacks = await (await fetch(`${fixture.address}/getUpdates`, { method: 'POST', body: '{}', signal: AbortSignal.timeout(1000) })).json();
+    assert.equal(admitCallbackUpdate(callbacks.result[1]).status, 'callback', 'fixture supplies full accessible callback');
     const abort = new AbortController();
     const pending = fetch(`${fixture.address}/getUpdates`, { method: 'POST', body: '{"offset":999}', signal: abort.signal });
     pending.catch(() => {});
@@ -102,6 +110,12 @@ test('PORT-A: preparation and request authority, not labels or agent identity', 
 }));
 
 test('PORT-B: one shared stdio, concurrent reverse-order actual Approve/Reject/Respond results', { timeout: 65000 }, () => portable(async (h) => {
+  const observed = [];
+  h.fixture.observe(async call => {
+    if (call.method !== 'answerCallbackQuery' || !call.body.text) return;
+    const rows = readJournal(await readFile(join(h.state, 'journal.log'))).transactions.flatMap(t => t.mutations);
+    observed.push({ body: call.body, rows });
+  });
   const prepared = [await h.prepare(), await h.prepare(), await h.prepare()];
   const waits = prepared.map((p, i) => ask(h.shared, p, 200 + i));
   const presentations = await Promise.all(prepared.map((p) => until(() => h.fixture.messages.find((m) =>
@@ -141,5 +155,15 @@ test('PORT-B: one shared stdio, concurrent reverse-order actual Approve/Reject/R
     const ack = success(await h.shared.call('acknowledge_approval', {
       ...authority(prepared[i]), decision_id: original.decision_id }).outcome);
     assert.equal(ack.delivery_state, 'confirmed');
+  }
+  await until(() => observed.length === 2, 'both recorded-choice acknowledgements', h.signal);
+  for (const { body, rows } of observed) {
+    assert.match(body.text, /^(Approval recorded\.|Rejection recorded\. This does not authorize the action\.) /);
+    assert.ok(['Delivery is pending, not confirmed.',
+      'The adapter reported writing the result to the original call. Receipt is not confirmed.',
+      'Receipt acknowledged by a request-capability holder.',
+      'Automatic delivery is unavailable. Authorized retrieval requires the retained request capability.',
+      'Delivery is blocked. Ask the operator to check proceed-mcp status.'].some(suffix => body.text.endsWith(` ${suffix}`)));
+    assert.ok(rows.some(m => m.op === 'request.resolve.telegram' && m.source.callback_query_id === body.callback_query_id), 'recorded copy follows flushed resolution');
   }
 }));

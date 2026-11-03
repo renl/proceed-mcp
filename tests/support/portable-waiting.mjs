@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFile, writeFile, readdir } from 'node:fs/promises';
+import { readFile, writeFile, readdir, appendFile, mkdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -26,6 +26,7 @@ export async function until(check, label, signal) {
 
 export async function telegramFixture() {
   const calls = [], updates = [], messages = [];
+  let observe = async () => {};
   const polls = new Set();
   let updateId = 1, messageId = 100;
   const server = createServer(async (req, res) => {
@@ -35,6 +36,7 @@ export async function telegramFixture() {
       const body = JSON.parse(Buffer.concat(chunks).toString());
       const method = req.url.slice(1);
       calls.push({ method, body });
+      await observe(calls.at(-1));
       let result = true;
       if (method === 'getMe') result = { id: 99, is_bot: true, first_name: 'Fixture', username: 'fixture_bot' };
       else if (method === 'getUpdates') {
@@ -60,14 +62,15 @@ export async function telegramFixture() {
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   const address = `http://127.0.0.1:${server.address().port}`;
   const enqueue = (value) => { updates.push({ update_id: updateId++, ...value }); for (const wake of [...polls]) wake(); };
-  const text = (value, reply) => enqueue({ message: { message_id: messageId++,
+  const text = (value, reply) => enqueue({ message: { message_id: messageId++, date: Math.floor(Date.now() / 1000),
     from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: value,
     ...(reply ? { reply_to_message: { message_id: reply.message_id } } : {}) } });
-  return { calls, messages, address, text,
+  return { calls, messages, address, text, enqueue,
+    observe(value) { observe = value; },
     choose(message, prefix) {
       const button = message.reply_markup.inline_keyboard.flat().find((b) => b.callback_data.startsWith(`${prefix}:`));
       assert.ok(Boolean(button), 'actual Telegram presentation contains choice');
-      enqueue({ callback_query: { id: `callback_${updateId}`, from: { id: 7 },
+      enqueue({ callback_query: { id: `callback_${updateId}`, from: { id: 7, is_bot: false },
         message, data: button.callback_data } });
     },
     async close() {
@@ -97,11 +100,14 @@ export function success(outcome) {
 }
 
 export async function portable(work, { pair = true, strictProtocol = false } = {}) {
+  await mkdir(resolve('.scratch/c3-activation'), { recursive: true });
   const fixture = await telegramFixture();
   const peers = [], connections = [], secrets = [], logs = [];
   let result;
   try {
-    result = await managed(async (context) => {
+    result = await bounded(() => managed(async (context) => {
+      const phase = value => appendFile(resolve('.scratch/c3-activation/progress.log'), `${context.directory.split(/[\\/]/).at(-1)} ${value}\n`);
+      await phase('setup');
       const state = join(context.directory, 'state');
       const executable = resolve('bin/proceed-mcp.js');
       const env = Object.fromEntries(['PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC']
@@ -232,9 +238,11 @@ export async function portable(work, { pair = true, strictProtocol = false } = {
             ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           redirect: 'error', signal: AbortSignal.timeout(1000) });
+      await phase('assertions');
       try { await work({ fixture, shared, connect, prepare, state, broker, start, scan, restart,
         signal: context.signal, cli, http, control }); }
       finally {
+        await phase('teardown');
         for (const { peer, resource } of connections) {
           peer.close?.();
           if (strictProtocol && !resource.closed) {
@@ -245,9 +253,10 @@ export async function portable(work, { pair = true, strictProtocol = false } = {
         }
         await scan();
       }
-    }, { totalMs: 55000, readyMs: 8000 });
+    }, { totalMs: 55000, readyMs: 8000 }), 63000, 'aggregate public setup/assertions/cleanup deadline');
   } finally { await fixture.close(); }
   assert.ifError(result.cleanupError); // Separate resource failure from behavioral RED.
+  await appendFile(resolve('.scratch/c3-activation/progress.log'), `${result.directory.split(/[\\/]/).at(-1)} cleanup-pass: owned process tree and run directory absent, fixture listener released\n`);
   assert.ifError(result.assertionError);
   return result;
 }

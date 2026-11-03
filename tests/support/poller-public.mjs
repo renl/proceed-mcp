@@ -11,7 +11,7 @@ import { readJournal } from '../../src/journal/framing.js';
 import { catalogPeer, initializeResult } from './catalog-consumer.mjs';
 export const rows = bytes => readJournal(Buffer.from(bytes, 'base64')).transactions.map(t => t.mutations);
 export const update = (id, code) => ({ update_id: id, message: { from: { id: 71, is_bot: false }, chat: { id: 81, type: 'private' }, text: `/pair ${code}` } });
-export const paired = 'Paired. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.';
+export const paired = 'Paired. Approval questions can be sent to this chat. Select Approve, Reject or Respond on a request. Respond text is instructions, not approval.';
 export async function publicPoller(work, mode = '', { mcp = false, preloadPath = 'tests/fixtures/poller-public-preload.mjs', totalMs = 16000, aggregateMs = 24000 } = {}) {
   const root = resolve('.scratch/c1-poller-public'); await mkdir(root, { recursive: true });
   let phase;

@@ -178,7 +178,7 @@ test('C2B-STORAGE: actual receipt sync failure retains core fence and fixed diag
   await until(() => w.failed); assert.equal(w.diagnostic(), 'Telegram presentation stopped after a storage failure; stop and restart serve');
   await assert.rejects(h.b.status(), e => e.exitCode === 4); assert.equal(h.b.snapshot().requests[0].telegram_state, 'pending');
 }));
-test('C2B-CLIENT: UI403/404 are generic rejection, polling/ack credential classification unchanged', opts, async () => {
+test('C2B-CLIENT: UI403/404 are generic rejection, polling credential classification unchanged', opts, async () => {
   const original = https.request; let status = 403;
   https.request = (_, options, callback) => { assert.equal(options.method, 'POST'); const request = new EventEmitter();
     request.setTimeout = () => {}; request.destroy = () => {}; request.end = () => {
@@ -187,7 +187,7 @@ test('C2B-CLIENT: UI403/404 are generic rejection, polling/ack credential classi
     }; return request; };
   try { const client = createTelegramClient({ token: 'synthetic-token' });
     for (status of [403, 404]) for (const method of ['sendMessage', 'editMessageText', 'editMessageReplyMarkup', 'updates', 'answerCallbackQuery'])
-      await assert.rejects(client[method]({}), e => e.code === (['updates', 'answerCallbackQuery'].includes(method) ? 'TOKEN_REJECTED' : 'TELEGRAM_REJECTED'));
+      await assert.rejects(client[method]({}), e => e.code === (method === 'updates' ? 'TOKEN_REJECTED' : 'TELEGRAM_REJECTED'));
   } finally { https.request = original; }
 });
 test('C2B-RETRY: only classified transient failures retry, suppression survives scan ticks', opts, t => native(t, async h => {
@@ -215,10 +215,10 @@ test('C2B-EXTRAS-LATE: unknown Message data gives no decision authority after ca
   await until(() => h.b.snapshot().requests[0].telegram_state === 'sent');
   assert.deepEqual(h.b.snapshot().requests[0], { ...before, telegram_state: 'sent' });
 }));
-test('C2B-HELP: exact activation copy without decision availability claim', opts, () => {
+test('C2B-HELP: exact complete activation copy', opts, () => {
   const result = spawnSync(process.execPath, ['bin/proceed-mcp.js', '--help'], { timeout: 3000, encoding: 'utf8', maxBuffer: 65536, windowsHide: true });
   assert.ifError(result.error); assert.equal(result.status, 0);
-  assert.ok(result.stdout.includes('Local waiting and Telegram question display are available. Human approvals, rejections and responses are not recorded in this setup stage yet.'));
+  assert.ok(result.stdout.includes('Local waiting, Telegram question display and paired-human Approve, Reject and Respond are available. Respond text is instructions, not approval.'));
 });
 
 for (const rejected of [false, true]) test(`C2B-REJECTION-001-${rejected ? 'rejected' : 'healthy'}: A does not stop healthy sibling B or later C`, opts, t => native(t, async h => {

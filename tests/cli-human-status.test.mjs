@@ -184,6 +184,13 @@ for (const telegram of ['pending', 'sent', 'failed']) {
       assert.deepEqual(JSON.parse(ok(await h.cli('--json'))), { schema_version: 1, requests: [r] });
       const text = ok(await h.cli('--request', r.request_id)); human(text, r);
       const next = text.split('\n').find(line => /next(?:[ _-]action)?\s*:/i.test(line));
+      const notes = {
+        pending: 'Presentation is still pending: not yet sent, and no decision was recorded.',
+        sent: 'Telegram accepted a question message. Human receipt is not confirmed, and no decision was recorded.',
+        failed: 'A Telegram presentation attempt failed. No successful message mapping is recorded, and no decision was recorded.',
+      };
+      assert.ok(text.includes(notes[telegram]));
+      if (telegram === 'sent') assert.ok(next.includes('wait for the paired human to select Approve, Reject or Respond'));
       assert.match(next, /review|check|wait|pending|presentation|Telegram/i);
       if (r.delivery_error) assert.ok(text.includes('delivery_error=BROKER_UNAVAILABLE: Delivery unavailable'), 'existing redacted error is displayed');
       else assert.doesNotMatch(text, /delivery_error=/);

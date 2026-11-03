@@ -1,5 +1,13 @@
 # Tasks
 
+## C3h complete activation - executable preparation, combined review pending
+
+- [x] P.C3H-tests [All-path source brief, exact bindings, rebindings and RED limits](slices/03c3h-activation.md). Baseline `96dba1b4`, inert prerequisites present. Tests/helpers and owned tasks/slice only, no production edits.
+- [ ] P.C3H-review ONE combined boundary/decomposition/test-artifact review, triggers1/3/4/5YES,2NO. Six-path source forecast/proposed ceiling270gross, complete packet600 including preparation and verification reserve. No partial public activation or copy deferral.
+- [ ] P.C3H-source Separate authorization after review for complete callback/reply/command/prompt runtime and truthful copy activation. Return concrete allocation clarification before exceeding source ceiling or touching another production path.
+- [ ] P.C3H-verify Independent affected verification and full useful PORT-A/B after source. Mandatory P3 partitions in the linked brief, then separately authorized real Telegram/human proof. No C3/live/human/feature/release acceptance.
+- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change same, owner test engineering, active/retain. Next action combined review. Owned-run cleanup and final charges in slice, owner/unknown work preserved. No worktree removal due.
+
 ## C3g P2 maintained faults - remaining native breadth PASS, combined review pending
 
 - [x] P.C3GP2-faults [Remaining maintained matrix](slices/03c3g-p2-prompt-faults.md#remaining-packet-execution---2026-11-04). Unchanged source `5f48f70444e8e8a6cef5e0c82d130c0e838d0f25`, fresh base `99a6bc5a`. Full unfiltered27/27PASS,18 new maintained groups plus9 prior groups. No required remaining native area silently deferred. C3-PROMPT-CREDENTIAL-001 stays CLOSED attempt1. Historical8PASS/1FAIL and correction evidence retained, not overwritten.

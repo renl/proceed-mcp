@@ -48,7 +48,7 @@ for (const method of ['getUpdates', 'sendMessage', 'answerCallbackQuery']) test(
     h.response(h.r, h.initial, method === 'sendMessage' ? [update(7, h.code)] : [{ update_id: 7, callback_query: { id: 'opaque', data: 'a:not-an-approval' } }]);
     active = await h.request(h.r, method); envelope(active, method, 20000);
     if (method === 'sendMessage') atomic(active);
-    else { assert.deepEqual(active.body, { callback_query_id: 'opaque' }); assert.deepEqual(rows(active.bytes).at(-1), [{ op: 'telegram.cursor', last_update_id: 7 }]); }
+    else { assert.deepEqual(active.body, { callback_query_id: 'opaque', text: 'This request is not available.' }); assert.deepEqual(rows(active.bytes).at(-1), [{ op: 'telegram.cursor', last_update_id: 7 }]); }
   }
   h.r.child.send({ kind: 'stop' });
   await h.wait(h.r, e => e.kind === 'destroy' && e.id === active.id, 'actual in-flight transport destroyed');
@@ -131,7 +131,7 @@ for (const method of ['sendMessage', 'answerCallbackQuery']) for (const status o
   const ui = await h.request(h.r, method); const committed = rows(ui.bytes);
   assert.equal(committed.at(-1).at(-1).last_update_id, 7);
   h.response(h.r, ui, null, { status, raw: JSON.stringify({ ok: false, error_code: status, description: 'SYNTHETIC_PRIVATE_DETAIL' }) });
-  const nonfatal = status === 400 || (method === 'sendMessage' && status === 409);
+   const nonfatal = status !== 401;
   if (nonfatal) { const next = await h.request(h.r, 'getUpdates', 1); assert.equal(next.body.offset, 8); assert.deepEqual(rows(next.bytes), committed); }
   else await h.wait(h.r, e => e.kind === 'destroy' && e.id === ui.id, 'fatal UI abort');
   const local = await h.cli('status', '--json'); assert.equal(local.code, 0);
