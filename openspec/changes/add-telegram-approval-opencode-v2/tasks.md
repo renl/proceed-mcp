@@ -1,5 +1,12 @@
 # Tasks
 
+## C3c Respond opening - bounded next checkpoint
+
+- [x] P.C3C-tests [Opening replay/writer exact brief and tests](slices/03c3c-response-opening.md), baseline `054479774fedec5e827e87e7488f9cce199df03a`, accepted callback writer present. Tests and owned docs only. Opening first, prompt receipts/work second, then bound text writers/public proof. No partial promotion.
+- [ ] P.C3C-review ONE combined persisted-journal/decomposition/test-artifact review, triggers1/4/5YES,2/3NO. Sole later source `src/broker/portable.js`, source ceiling280 gross, complete packet600. Separate implementation authorization and independent verification required.
+- Final Node24.22.2 opening21:2 calibration PASS/1 unsupported-op negative PASS/18 expected RED, exit1,0 cancelled/skipped/todo. No opening/prompt conformance. Preparation252 gross/3 paths, source upper280 plus verification50 gives582 under600. Owned run cleanup PASS separately. Exact evidence/blocked assertions in linked slice.
+- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action combined review after final RED/calibration evidence. Owned fixture cleanup separate, no worktree removal or unknown cleanup. Prompt/text/activation/public/live gates remain mandatory, no complete C3/human/feature/release acceptance.
+
 ## C3 first callback-core - bounded replay then writer
 
 - [x] P.C3A-tests [Callback replay foundation and sole-source implementation brief](slices/03c3a-callback-replay.md). Baseline `1fca2b175e1e3b8bf99ec24dc222652dc206aee0`, accepted C2 source/breadth present. Tests/owned docs only. Safe ordered replay-foundation then writer split, one existing change/PR, no partial promotion or public decisions.
