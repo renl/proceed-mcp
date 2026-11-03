@@ -131,13 +131,14 @@ for (const method of ['sendMessage', 'answerCallbackQuery']) for (const status o
   const ui = await h.request(h.r, method); const committed = rows(ui.bytes);
   assert.equal(committed.at(-1).at(-1).last_update_id, 7);
   h.response(h.r, ui, null, { status, raw: JSON.stringify({ ok: false, error_code: status, description: 'SYNTHETIC_PRIVATE_DETAIL' }) });
-  if (status === 400) { const next = await h.request(h.r, 'getUpdates', 1); assert.equal(next.body.offset, 8); assert.deepEqual(rows(next.bytes), committed); }
+  const nonfatal = status === 400 || (method === 'sendMessage' && status === 409);
+  if (nonfatal) { const next = await h.request(h.r, 'getUpdates', 1); assert.equal(next.body.offset, 8); assert.deepEqual(rows(next.bytes), committed); }
   else await h.wait(h.r, e => e.kind === 'destroy' && e.id === ui.id, 'fatal UI abort');
   const local = await h.cli('status', '--json'); assert.equal(local.code, 0);
-  await h.stop(h.r); assert.equal(polls(h.r).length, status === 400 ? 2 : 1);
+  await h.stop(h.r); assert.equal(polls(h.r).length, nonfatal ? 2 : 1);
   assert.equal(h.r.events.filter(e => e.kind === 'request' && !e.url.endsWith('/getUpdates')).length, 1, 'one attempted UI transport, not receipt');
   assert.deepEqual(rows(await h.bytes()), committed); assert.ok(!h.r.output.includes('SYNTHETIC_PRIVATE_DETAIL'));
-  assert.ok(h.r.output.includes(status === 400 ? 'TELEGRAM_REJECTED' : status === 401 ? 'TOKEN_REJECTED' : 'POLLER_CONFLICT'));
+  assert.ok(h.r.output.includes(nonfatal ? 'TELEGRAM_REJECTED' : status === 401 ? 'TOKEN_REJECTED' : 'POLLER_CONFLICT'));
 }));
 // Native actual-client response/error classification. No fake Telegram client or socket.
 test('C1PP-CLIENT: actual response envelopes/errors classify without waiting production deadlines', opts, async t => {
