@@ -1,9 +1,11 @@
 # Tasks
 
-## C3d-ii prompt-failure core - preparation for combined review
+## C3d-ii prompt-failure core - independently verified checkpoint
 
 - [x] P.C3DII-tests [Exact prompt-failure API, runnable tests and sole-source brief](slices/03c3d-ii-prompt-failed.md). Baseline `4140fcf180994030931acba36cafefdb0478aa48`, accepted opening/sent/callback prerequisites present. Preparation only, no production edits or public Respond claim.
 - [x] P.C3DII-PF-UTC-001 [Exact UTC test correction and implementation-ready handoff](slices/03c3d-ii-prompt-failed.md#pf-utc-001-correction-and-implementation-ready-handoff). Combined review `254f7765` otherwise approved, no repeat required. Positive uses zero UTC offset, non-UTC remains negative. Targeted4:2 calibration PASS/2 expected RED, positive replay/writer still blocked. Sole-source ceiling260 and ordered run remain in slice. No public/live acceptance.
+- [x] P.C3DII-verified [Independent affected verdict](slices/03c3d-ii-prompt-failed.md#independent-affected-verdict---2026-11-04): code `7d149ef81b3e80a26021491dd5acef066656eef8`, parent `8646a1b93b98f74bc191396df2de5a18e746f967`. Core PASS, independent15/15 plus shared-fault8/8, current affected428/428 and shared244/244 reused by scope. Source166gross, no public/live acceptance.
+- [ ] P.C3DII-next Reply/command writer binding remains unselected. Preserve the active worktree and select the implementation-owned API before separately authorized test preparation. No automatic activation, C3 completion or promotion.
 - [ ] P.C3DII-review ONE combined normative journal/decomposition/test-artifact review, triggers1/4/5YES,2/3NO. Sole later source `src/broker/portable.js`, exact upper260 gross, full packet hard600 including preparation/verification. No automatic unchanged post-code review or implementation authority.
 - [ ] P.C3DII-source Separate authorization after review for selected `recordPromptFailed({requestId,errorCode}={}) => Promise<null|{request}>`, exact replay/writer, private latest code/time and unchanged responseWork/public state.
 - [ ] P.C3DII-verify Independent affected verification after source. Current15:2 calibration PASS/13 expected RED, exit1, no skipped/cancelled/todo. Missing API/positive decoder blocks conformance, unknown-op rejection is not proof. Evidence and historical fixture correction in linked brief.
