@@ -199,6 +199,21 @@ const SENT_OP = 'telegram.presentation.sent';
 const FAILED_OP = 'telegram.presentation.failed';
 const SENT_FIELDS = ['callback_token', 'chat_id', 'message_id', 'op', 'request_id', 'sent_at'];
 const FAILED_FIELDS = ['callback_token', 'error_code', 'failed_at', 'op', 'request_id'];
+// A Respond opening is the same admitted callback binding without a choice, plus
+// the mapped request tuple it was selected from and the opening instant. It
+// grants a response window only: no prompt, text, decision or receipt.
+const OPEN_OP = 'telegram.response.open';
+const OPEN_FIELDS = [
+  'callback_query_id',
+  'callback_token',
+  'chat_id',
+  'message_id',
+  'op',
+  'opened_at',
+  'request_id',
+  'update_id',
+  'user_id',
+];
 // A controls retirement is one mapped request message and its terminal decision,
 // with no instant: it is a transition, not a timed receipt.
 const RETIRED_OP = 'telegram.controls.retired';
@@ -505,6 +520,35 @@ function callbackFields(input) {
     updateId,
     resolution,
   };
+}
+
+// Respond-opening arguments are the raw callback binding without a choice,
+// validated without coercion before any authority lookup, so a malformed
+// identifier, actor, message, query or update is a caller error that samples no
+// clock and appends nothing. Extra properties may be ignored, but they never
+// supply a value.
+function openFields(input) {
+  if (!isPlainObject(input)) throw invalidArgument(`${OPEN_OP} expects an argument object`);
+  const { requestId, callbackToken, messageId, userId, chatId, callbackQueryId, updateId } = input;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw invalidArgument(`${OPEN_OP} needs a well-formed request identifier`);
+  }
+  if (typeof callbackToken !== 'string' || !CALLBACK_TOKEN_PATTERN.test(callbackToken)) {
+    throw invalidArgument(`${OPEN_OP} needs a well-formed callback token`);
+  }
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw invalidArgument(`${OPEN_OP} needs a positive safe-integer message id`);
+  }
+  if (identityProblem(userId) !== null)
+    throw invalidArgument(`${OPEN_OP} needs a decimal actor id`);
+  if (identityProblem(chatId) !== null) throw invalidArgument(`${OPEN_OP} needs a decimal chat id`);
+  if (typeof callbackQueryId !== 'string' || callbackQueryId.length === 0) {
+    throw invalidArgument(`${OPEN_OP} needs a nonempty callback query id`);
+  }
+  if (!usableUpdateId(updateId)) {
+    throw invalidArgument(`${OPEN_OP} needs a nonnegative safe-integer update id`);
+  }
+  return { requestId, callbackToken, messageId, userId, chatId, callbackQueryId, updateId };
 }
 
 // A chat message is one durable address across every role, so its two raw values
@@ -1156,6 +1200,53 @@ function readResolve(mutation) {
   };
 }
 
+// A response opening decodes from exactly its nine persisted fields and binds to
+// staged state afterwards in array order. It is a pending request's own mapped
+// request message, the exact allocated token and the paired actor, and it is an
+// instant inside that request's lifetime, never a resolution.
+function readOpen(mutation) {
+  exactFields(mutation, OPEN_FIELDS);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw integrity(`${OPEN_OP} has a malformed request id`);
+  }
+  if (
+    typeof mutation.callback_token !== 'string' ||
+    !CALLBACK_TOKEN_PATTERN.test(mutation.callback_token)
+  ) {
+    throw integrity(`${OPEN_OP} has a malformed callback token`);
+  }
+  if (identityProblem(mutation.user_id) !== null)
+    throw integrity(`${OPEN_OP} has a malformed actor`);
+  if (identityProblem(mutation.chat_id) !== null) {
+    throw integrity(`${OPEN_OP} has a malformed chat id`);
+  }
+  if (!Number.isSafeInteger(mutation.message_id) || mutation.message_id <= 0) {
+    throw integrity(`${OPEN_OP} needs a positive safe-integer message id`);
+  }
+  if (typeof mutation.callback_query_id !== 'string' || mutation.callback_query_id.length === 0) {
+    throw integrity(`${OPEN_OP} needs a nonempty callback query id`);
+  }
+  if (!usableUpdateId(mutation.update_id)) {
+    throw integrity(`${OPEN_OP} needs a raw nonnegative update id with a safe next offset`);
+  }
+  const openedAt = readInstant(mutation.opened_at);
+  if (openedAt === null) throw integrity(`${OPEN_OP} has a malformed opening time`);
+  return {
+    kind: 'open',
+    record: {
+      request_id: requestId,
+      callback_token: mutation.callback_token,
+      chat_id: mutation.chat_id,
+      message_id: mutation.message_id,
+      user_id: mutation.user_id,
+      callback_query_id: mutation.callback_query_id,
+      update_id: mutation.update_id,
+      openedAt,
+    },
+  };
+}
+
 // One Telegram update id is stored exactly as delivered: a raw nonnegative safe
 // integer whose next offset is also safe, so no string, fraction or coercion can
 // become an offset. The same predicate guards the writer and the replay decoder,
@@ -1203,6 +1294,8 @@ function readMutation(mutation) {
       return readEvidence(mutation, 'returned');
     case PREPARE_OP:
       return readPresentation(mutation);
+    case OPEN_OP:
+      return readOpen(mutation);
     case SENT_OP:
       return readSent(mutation);
     case FAILED_OP:
@@ -1284,6 +1377,28 @@ function applyResolveCursor(resolveRecords, cursorRecords, entryCursor) {
   }
   if (entryCursor !== null && updateId <= entryCursor) {
     throw integrity(`${RESOLVE_OP} is not newer than the committed cursor`);
+  }
+}
+
+// A response opening is a human source consumer of its update exactly as a
+// resolution is: the same transaction advances exactly its update id, only while
+// newer than the cursor committed before the transaction, and one update never
+// authorizes both an opening and a resolution. Either cursor array position is
+// valid, so the matching cursor never makes its own opening look stale.
+function applyOpenCursor(openRecords, resolveRecords, cursorRecords, entryCursor) {
+  if (openRecords.length === 0) return;
+  if (openRecords.length + resolveRecords.length > 1) {
+    throw integrity(`one update authorizes more than one ${OPEN_OP} or ${RESOLVE_OP}`);
+  }
+  if (cursorRecords.length !== 1) {
+    throw integrity(`${OPEN_OP} needs exactly one cursor in its transaction`);
+  }
+  const updateId = openRecords[0].update_id;
+  if (cursorRecords[0].last_update_id !== updateId) {
+    throw integrity(`${OPEN_OP} does not match its transaction cursor`);
+  }
+  if (entryCursor !== null && updateId <= entryCursor) {
+    throw integrity(`${OPEN_OP} is not newer than the committed cursor`);
   }
 }
 
@@ -1372,6 +1487,7 @@ function stageCreate(record, staged, pairing, reservedNow) {
     pairing_snapshot: { ...record.snapshot },
     callback_token: null,
     preparedAt: null,
+    openedAt: null,
     mapped: false,
     lastFailureAt: null,
     lastFailureCode: null,
@@ -1609,6 +1725,50 @@ function stageResolve(record, staged, pairing) {
   };
 }
 
+// A response opening applies in array order against staged state: it names one
+// committed pending request with no prior opening, the exact allocated token, the
+// actor and chat of both the committed pairing and that request's immutable
+// snapshot, and that request's own mapped request message. The recorded instant
+// lies inside the request lifetime, so a fractional spelling compares as written
+// and no rounding can widen it. It opens one response window and changes no
+// public value: no resolution, decision, mapping, ledger or wake is created.
+function stageOpen(record, staged, pairing) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${OPEN_OP} names no committed request`);
+  if (request.resolution !== 'pending') {
+    throw integrity(`${OPEN_OP} targets an already resolved request`);
+  }
+  if (request.openedAt !== null) throw integrity(`${OPEN_OP} repeats an opening`);
+  if (request.callback_token !== record.callback_token) {
+    throw integrity(`${OPEN_OP} does not match the allocated token`);
+  }
+  if (
+    pairing === null ||
+    pairing.user_id !== record.user_id ||
+    pairing.chat_id !== record.chat_id
+  ) {
+    throw integrity(`${OPEN_OP} does not match the committed pairing`);
+  }
+  if (
+    request.pairing_snapshot.user_id !== record.user_id ||
+    request.pairing_snapshot.chat_id !== record.chat_id
+  ) {
+    throw integrity(`${OPEN_OP} does not match the request snapshot`);
+  }
+  const mapping = staged.mappings.get(mappingKey(record.chat_id, record.message_id));
+  if (mapping === undefined) throw integrity(`${OPEN_OP} names no mapped request message`);
+  if (mapping.role !== 'request' || mapping.request_id !== record.request_id) {
+    throw integrity(`${OPEN_OP} names another request's message`);
+  }
+  if (
+    compareInstants(record.openedAt, request.createdAt) < 0 ||
+    compareInstants(record.openedAt, request.expiresAt) >= 0
+  ) {
+    throw integrity(`${OPEN_OP} lies outside the request lifetime`);
+  }
+  request.openedAt = record.openedAt;
+}
+
 // First evidence is recorded once per kind against one known terminal request
 // and its already recorded decision identity: it never resolves or re-identifies
 // anything. The recorded time is bounded only by the resolution, and the two
@@ -1730,7 +1890,13 @@ class PortableBroker {
     this.#generateDecisionId = generateDecisionId;
     this.#generatePairingCode = generatePairingCode;
     this.#generateCallbackToken = generateCallbackToken;
-    this.#startedAt = utcTimestamp(clock());
+    // The start instant is display metadata, not a business time: an unusable
+    // reading leaves it absent rather than failing construction or inventing one.
+    try {
+      this.#startedAt = utcTimestamp(clock());
+    } catch {
+      this.#startedAt = null;
+    }
     // The turnover is a private observation window, never public configuration.
     this.#waiters = createWaiterRegistry({ timeoutMs: waitTurnoverMs });
   }
@@ -1791,6 +1957,7 @@ class PortableBroker {
       const pairingRecords = [];
       const cursorRecords = [];
       const resolveRecords = [];
+      const openRecords = [];
       for (const record of records) {
         if (record.kind === 'reservation') stageReservation(record.record, staged, reservedNow);
         else if (record.kind === 'create') stageCreate(record.record, staged, pairing, reservedNow);
@@ -1799,6 +1966,9 @@ class PortableBroker {
         else if (record.kind === 'resolve') {
           stageResolve(record.record, staged, pairing);
           resolveRecords.push(record.record);
+        } else if (record.kind === 'open') {
+          stageOpen(record.record, staged, pairing);
+          openRecords.push(record.record);
         } else if (record.kind === 'acknowledge' || record.kind === 'returned') {
           stageEvidence(record, staged);
         } else if (record.kind === 'presentation') stagePresentation(record.record, staged);
@@ -1809,6 +1979,7 @@ class PortableBroker {
         else if (record.kind === 'cursor') cursorRecords.push(record);
         else pairingRecords.push(record);
       }
+      applyOpenCursor(openRecords, resolveRecords, cursorRecords, cursor);
       applyResolveCursor(resolveRecords, cursorRecords, cursor);
       pairing = applyPairing(pairingRecords, challenges, pairing);
       cursor = applyCursor(cursorRecords, cursor);
@@ -2130,6 +2301,21 @@ class PortableBroker {
       const fields = callbackFields(input);
       this.#receiptAdmission();
       return this.#enqueue(() => this.#resolve(fields));
+    });
+  }
+
+  // Records one explicit, already correlated Respond selection for one identified
+  // request (design section 5, C3 opening checkpoint). The raw identifiers, actor,
+  // mapped message and processed update are validated before the queue, so no
+  // malformed or coerced input samples time or appends, and every condition naming
+  // stored state is rechecked inside the serialized turn. This opens the durable
+  // response window those instructions will later arrive through; it resolves
+  // nothing, sends no prompt and enables no public dispatch.
+  openResponse(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = openFields(input);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#open(fields));
     });
   }
 
@@ -2589,6 +2775,7 @@ class PortableBroker {
       pairing_snapshot: { ...this.#pairing },
       callback_token: null,
       preparedAt: null,
+      openedAt: null,
       mapped: false,
       lastFailureAt: null,
       lastFailureCode: null,
@@ -3013,6 +3200,90 @@ class PortableBroker {
     this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
     this.#logger('portable.request.resolved', { request_id: requestId, resolution });
     return { result: 'recorded', request: requestView(request) };
+  }
+
+  // One serialized Respond-opening turn (design section 5, C3 opening checkpoint).
+  // The whole admitted binding is rechecked against installed state before any
+  // deadline or identity work, so an unknown, foreign, cross-request or unmapped
+  // tuple is a silent refusal that samples nothing, and a fully bound update at or
+  // below the committed cursor is stale. A pending target samples once: at or after
+  // its deadline the existing expiry writer commits with this update's cursor
+  // instead, while a terminal target retains its recorded outcome without sampling.
+  // Otherwise the first opening commits its record and cursor in one flushed
+  // transaction before the window is installed, and a repeat commits only its
+  // cursor. Nothing here resolves the request, wakes a wait or changes its public
+  // Telegram or delivery state, so Approve and Reject stay available.
+  async #open(fields) {
+    const { requestId, callbackToken, messageId, userId, chatId, callbackQueryId, updateId } =
+      fields;
+    const request = this.#requests.get(requestId);
+    if (request === undefined || request.callback_token !== callbackToken) return RESOLVE_REFUSED;
+    const snapshot = request.pairing_snapshot;
+    if (snapshot.user_id !== userId || snapshot.chat_id !== chatId) return RESOLVE_REFUSED;
+    if (this.#pairing === null) return RESOLVE_REFUSED;
+    if (this.#pairing.user_id !== userId || this.#pairing.chat_id !== chatId) {
+      return RESOLVE_REFUSED;
+    }
+    const mapping = this.#mappings.get(mappingKey(chatId, messageId));
+    if (mapping === undefined || mapping.role !== 'request' || mapping.request_id !== requestId) {
+      return RESOLVE_REFUSED;
+    }
+    if (this.#cursor !== null && updateId <= this.#cursor) return RESOLVE_STALE;
+    // The update id and its durable consequences share one transaction, so either
+    // mutation order replays and the cursor never advances past an uncommitted
+    // opening. Nothing is installed until that frame has flushed.
+    const cursorMutation = { op: CURSOR_OP, last_update_id: updateId };
+    const advance = async (mutations, requestIds) => {
+      await this.#commitFor(mutations, requestIds);
+      this.#cursor = updateId;
+    };
+    if (request.resolution !== 'pending') {
+      await advance([cursorMutation], []);
+      return { result: 'retained', request: requestView(request) };
+    }
+    const sampled = turnTime(this.#clock, 'opening a response', 'response opening');
+    if (isDue(request, sampled.milliseconds)) {
+      const mutation = {
+        op: EXPIRE_OP,
+        request_id: requestId,
+        decision_id: this.#nextDecisionId(new Set()),
+        resolved_at: sampled.text,
+        delivery_state: this.#waiters.live(requestId) ? 'pending' : 'unavailable',
+      };
+      await advance([mutation, cursorMutation], [requestId]);
+      this.#installClosure(mutation, 'expired');
+      this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
+      return { result: 'expired', request: requestView(request) };
+    }
+    // A recorded time before creation cannot describe this request's lifetime, so
+    // it is the existing storage failure rather than a caller error.
+    if (compareInstants(sampled.instant, request.createdAt) < 0) {
+      throw storageFailure(`${OPEN_OP} would precede its request creation`, 'STORAGE_FAILURE');
+    }
+    if (request.openedAt !== null) {
+      await advance([cursorMutation], []);
+      return { result: 'open', request: requestView(request) };
+    }
+    await advance(
+      [
+        {
+          op: OPEN_OP,
+          request_id: requestId,
+          callback_token: callbackToken,
+          chat_id: chatId,
+          message_id: messageId,
+          user_id: userId,
+          callback_query_id: callbackQueryId,
+          update_id: updateId,
+          opened_at: sampled.text,
+        },
+        cursorMutation,
+      ],
+      [requestId],
+    );
+    request.openedAt = sampled.instant;
+    this.#logger('portable.response.opened', { request_id: requestId });
+    return { result: 'opened', request: requestView(request) };
   }
 
   // One serialized wait admission (design section 3, G3). A queued call whose
