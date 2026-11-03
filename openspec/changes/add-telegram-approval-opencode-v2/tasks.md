@@ -1,5 +1,12 @@
 # Tasks
 
+## C2 message-method409 correction - C2-MESSAGE-409-001 OPEN attempt0
+
+- [x] P.C2-message409-tests [Corrective tests, source-only brief and RED evidence](slices/03c2-message409-correction.md). Baseline `2acded565f78caf5a6658243034c53cc70ac2e83`. Necessary existing C2 correctness, separate from C3 activation. No production edits or retroactive withdrawal of earlier C2 acceptance scopes.
+- [ ] P.C2-message409-source Sole `src/telegram/client.js`, forecast20-65 gross, hard100. Full preparation/source/verification hard600. Select only three UI-message methods for409, preserve polling conflict and credential/rate/server precedence. Acknowledgement policy remains separately pending, not bundled or passed.
+- [ ] P.C2-message409-verify Native8:1PASS/7expectedRED, public11:8PASS/3expectedRED, both exit1, no cancelled/skipped/todo. Initial status fixture sequencing error corrected and historical failure retained. HTTP409 composition remains blocked, API409 composition controls PASS but raw-client privacy remains RED. Exact runs, cleanup and limits in linked slice.
+- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action sole-client corrective implementation through coordination, then independent affected verification. Owned runner cleanup PASS, ignored evidence retained, no unknown/owner cleanup or worktree removal. No C3/live/human/feature/release acceptance.
+
 ## C3e-B text writers - C3-TEXT-CONTEXT-001 CLOSED attempt1
 
 - [x] P.C3EB-context-tests [Corrected positive fixture, privacy regressions and exact corrective handoff](slices/03c3e-b-text-writers.md#c3-text-context-001-attempt0---corrective-handoff). Failed candidate `cdebbbcdd55819ef7533eccbf90818ebce79fcf9` remains unaccepted. Fresh contract interpretation requires full present command context before stale AND retained outcome. No design/product amendment or repeated Architecture gate.

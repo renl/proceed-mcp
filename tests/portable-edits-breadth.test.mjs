@@ -90,11 +90,12 @@ async function ack(h, q) {
     q.current = value;
   } finally { observer.close(); }
 }
-for (const code of [403, 404, 401]) test(`C2EB-COPIES-${code}: independently produced mapped siblings and scoped cessation`, opts, () => run(async h => {
+for (const code of [403, 404, 401, 409, 'api409']) test(`C2EB-COPIES-${code}: independently produced mapped siblings and scoped cessation`, opts, () => run(async h => {
   const q = await pending(h, true); await cancel(h, q);
   // Insertion order is established by actual send completions, not seeded tuples.
   const first = await wire(h, q, controls, 0, h.r, 701);
-  h.response(h.r, first, null, { status: code, raw: JSON.stringify({ ok: false, error_code: code }) });
+  h.response(h.r, first, null, { status: code === 'api409' ? 200 : code,
+    raw: JSON.stringify({ ok: false, error_code: code === 'api409' ? 409 : code, description: 'PRIVATE_409' }) });
   if (code === 401) {
     await h.wait(h.r, e => e.kind === 'destroy' && e.id === q.poll.id, 'global credential abort');
     const count = h.r.events.filter(e => e.kind === 'request').length;
@@ -107,9 +108,37 @@ for (const code of [403, 404, 401]) test(`C2EB-COPIES-${code}: independently pro
     await delay(1100);
     const bytes = await h.bytes();
     exactReceipts(bytes, q, ['returned']);
+    assert.equal(records(bytes, retired).some(m => m.message_id === 701), false);
+    assert.equal(calls(h.r, status).some(c => c.body.message_id === 701), false, 'failed retirement never unlocks status');
     assert.equal(calls(h.r, controls).length, 2); assert.equal(calls(h.r, status).length, 1);
     assert.match(h.r.output, /blocked after rejection/); assert.ok(!h.r.output.includes('credential rejection'));
+    if (code === 409 || code === 'api409') {
+      h.response(h.r, q.poll, [{ update_id: 8 }]);
+      assert.equal((await h.request(h.r, 'getUpdates', 2)).body.offset, 9);
+      assert.equal(h.r.output.split('Telegram question presentation blocked after rejection; repair Telegram access and restart serve').length - 1, 1);
+    }
   }
+  assert.ok(!h.r.output.includes('PRIVATE_409'));
+  assert.deepEqual(success(await q.a.call('get_approval', q.key)), q.current); await q.close();
+}));
+for (const code of [409, 'api409', 'healthy']) test(`C2EB-STATUS-${code}: actual client rejection isolates mapped tuple and preserves polling`, opts, () => run(async h => {
+  const q = await pending(h, true); await cancel(h, q);
+  await accept(h, await wire(h, q, controls, 0, h.r, 701), retired);
+  await accept(h, await wire(h, q, controls, 1), retired);
+  const first = await wire(h, q, status, 0, h.r, 701);
+  if (code === 'healthy') await accept(h, first, shown);
+  else h.response(h.r, first, null, { status: code === 'api409' ? 200 : 409,
+    raw: JSON.stringify({ ok: false, error_code: 409, description: 'PRIVATE_409' }) });
+  await accept(h, await wire(h, q, status, 1), shown);
+  h.response(h.r, q.poll, [{ update_id: 8 }]);
+  assert.equal((await h.request(h.r, 'getUpdates', 2)).body.offset, 9);
+  await delay(1200);
+  const bytes = await h.bytes();
+  assert.deepEqual(records(bytes, shown).map(m => m.message_id), code === 'healthy' ? [701, 700] : [700]);
+  assert.deepEqual(records(bytes, retired).map(m => m.message_id), [701, 700]);
+  assert.equal(calls(h.r, status).length, 2);
+  assert.equal(h.r.output.split('Telegram question presentation blocked after rejection; repair Telegram access and restart serve').length - 1, code === 'healthy' ? 0 : 1);
+  assert.ok(!/PRIVATE_409|processing stopped|credential rejection/.test(h.r.output));
   assert.deepEqual(success(await q.a.call('get_approval', q.key)), q.current); await q.close();
 }));
 for (const transition of ['returned', 'ack']) test(`C2EB-STALE-${transition}: actual captured status rejected after real ledger commit`, opts, () => run(async h => {

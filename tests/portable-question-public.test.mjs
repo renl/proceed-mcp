@@ -106,6 +106,29 @@ for (const status of [403, 404]) test(`C2PP-REJECT-${status}: request-local reje
   const retry = await h.request(r, 'sendMessage'); envelope(retry); assert.deepEqual(retry.body, q.send.body);
   await sent(h, q, r, retry); await cancelRecovered(h, q); await h.stop(r);
 }));
+for (const status of [409, 200]) test(`C2PP-MESSAGE409-${status}: actual client refusal blocks A only, B and polling continue`, opts, () => run(async h => {
+  const q = await setup(h);
+  h.response(h.r, q.send, null, { status, raw: JSON.stringify({ ok: false, error_code: 409, description: 'PRIVATE_409' }) });
+  const failed = await h.wait(h.r, e => e.kind === 'committed' && e.mutations.some(m => m.op === 'telegram.presentation.failed'), '409 attempt failure');
+  assert.equal(failed.mutations[0].error_code, 'rejected');
+  const a = await q.view(); assert.equal(a.telegram_state, 'failed'); assert.equal(a.resolution, 'pending');
+  assert.equal(a.decision_id, null); assert.equal(q.settled(), false);
+  h.response(h.r, q.poll, [{ update_id: 8 }]);
+  assert.equal((await h.request(h.r, 'getUpdates', 2)).body.offset, 9);
+  const p = success(await q.a.call('prepare_approval', { session_label: 'healthy sibling' }));
+  const pending = q.a.call('request_approval', { request_handle: p.request_handle, request_capability: p.request_capability,
+    client_request_id: 'sibling', action: 'B?', context: '', expires_in_seconds: 60 }, { id: 'sibling', ms: 14000 });
+  const sibling = await h.request(h.r, 'sendMessage', 2); h.response(h.r, sibling, { ...message, message_id: 701 });
+  await h.wait(h.r, e => e.kind === 'committed' && e.mutations.some(m => m.op === 'telegram.presentation.sent'), 'sibling mapping');
+  await delay(1200); assert.equal(sends(h.r).length, 3);
+  assert.deepEqual(receipts(await h.bytes()).map(m => m.request_id), [p.request_id]);
+  assert.equal(h.r.output.split('Telegram question presentation blocked after rejection; repair Telegram access and restart serve').length - 1, 1);
+  assert.ok(!/PRIVATE_409|processing stopped|credential rejection/.test(h.r.output));
+  const key = { request_id: p.request_id, request_capability: p.request_capability };
+  assert.equal(success(await q.a.call('cancel_approval', key)).resolution, 'cancelled');
+  assert.equal(success(await pending).resolution, 'cancelled'); await q.cancel();
+  await h.stop(q.a.resource); q.a.peer.assertComplete();
+}));
 test('C2PP-INVALID: ok:true malformed Message never supplies mapping and local cancellation still works', opts, () => run(async h => {
   const q = await setup(h); h.response(h.r, q.send, { message_id: 700, chat: message.chat });
   const failed = await h.wait(h.r, e => e.kind === 'committed' && e.mutations.some(m => m.op === 'telegram.presentation.failed'), 'invalid Message receipt');
