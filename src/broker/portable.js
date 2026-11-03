@@ -253,6 +253,10 @@ const STATUS_DISPLAY_STATES = new Set([
 // The two resolutions a callback can record. Respond vocabulary needs its real
 // opening and prompt history first, so it stays fail-closed here.
 const CALLBACK_RESOLUTIONS = new Set(['approved', 'rejected']);
+// A valid but non-matching callback binding and an already processed update are
+// both silent: neither result carries a request, actor, token or outcome detail.
+const RESOLVE_REFUSED = Object.freeze({ result: 'refused' });
+const RESOLVE_STALE = Object.freeze({ result: 'stale' });
 // One human resolution persists eleven fields: the target, its decision and
 // resolution, the exact text, the human instant, the actor, the processed update,
 // the correlated source and the writer's initial delivery selection.
@@ -450,6 +454,57 @@ function statusShownFields(input) {
     );
   }
   return { requestId, chatId, messageId, decisionId, deliveryState };
+}
+
+// Raw callback arguments are validated without coercion before any authority
+// lookup, so a malformed identifier, actor, message, update or choice is a caller
+// error that samples no clock, allocates no identity and appends nothing. Extra
+// properties may be ignored, but they never supply a value.
+function callbackFields(input) {
+  if (!isPlainObject(input)) throw invalidArgument(`${RESOLVE_OP} expects an argument object`);
+  const {
+    requestId,
+    callbackToken,
+    messageId,
+    userId,
+    chatId,
+    callbackQueryId,
+    updateId,
+    resolution,
+  } = input;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw invalidArgument(`${RESOLVE_OP} needs a well-formed request identifier`);
+  }
+  if (typeof callbackToken !== 'string' || !CALLBACK_TOKEN_PATTERN.test(callbackToken)) {
+    throw invalidArgument(`${RESOLVE_OP} needs a well-formed callback token`);
+  }
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw invalidArgument(`${RESOLVE_OP} needs a positive safe-integer message id`);
+  }
+  if (identityProblem(userId) !== null) {
+    throw invalidArgument(`${RESOLVE_OP} needs a decimal actor id`);
+  }
+  if (identityProblem(chatId) !== null)
+    throw invalidArgument(`${RESOLVE_OP} needs a decimal chat id`);
+  if (typeof callbackQueryId !== 'string' || callbackQueryId.length === 0) {
+    throw invalidArgument(`${RESOLVE_OP} needs a nonempty callback query id`);
+  }
+  if (!usableUpdateId(updateId)) {
+    throw invalidArgument(`${RESOLVE_OP} needs a nonnegative safe-integer update id`);
+  }
+  if (typeof resolution !== 'string' || !CALLBACK_RESOLUTIONS.has(resolution)) {
+    throw invalidArgument(`${RESOLVE_OP} needs one of ${[...CALLBACK_RESOLUTIONS].join(', ')}`);
+  }
+  return {
+    requestId,
+    callbackToken,
+    messageId,
+    userId,
+    chatId,
+    callbackQueryId,
+    updateId,
+    resolution,
+  };
 }
 
 // A chat message is one durable address across every role, so its two raw values
@@ -2063,6 +2118,21 @@ class PortableBroker {
     return this.#enqueue(() => this.#cancel(target.request_id));
   }
 
+  // Records one explicit, already correlated human callback choice (design section
+  // 5, C3 callback-core checkpoint). The raw identifiers, actor, mapped message,
+  // processed update and approved/rejected choice are validated before the queue,
+  // so no malformed, coerced or unrepresentable input samples time, allocates an
+  // identity or appends; every condition naming stored state is rechecked inside
+  // the serialized turn. This is the private seam for a future poller, not raw
+  // Telegram admission, public dispatch or Respond support.
+  resolveCallback(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = callbackFields(input);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#resolve(fields));
+    });
+  }
+
   // Attached wait for one committed request's outcome (design sections 3, 4 and 7,
   // G1/G3). Authority, the unused-reservation denial and the request lookup are
   // settled before the queue, so a denial samples no clock and appends nothing. The
@@ -2615,8 +2685,9 @@ class PortableBroker {
     };
   }
 
-  // Receipt turns share the ordinary admission and recovery gates, so a fenced,
-  // closed or unrecovered instance refuses before any clock sample or append.
+  // Receipt and callback-resolution turns share the ordinary admission and
+  // recovery gates, so a fenced, closed or unrecovered instance refuses before any
+  // clock sample or append.
   #receiptAdmission() {
     const refusal = this.#admissionRefusal();
     if (refusal !== null) throw refusal;
@@ -2840,6 +2911,108 @@ class PortableBroker {
     this.#waiters.wake(request.request_id, { state: 'terminal', request: requestView(request) });
     this.#logger('portable.request.cancelled', { request_id: request.request_id });
     return requestView(request);
+  }
+
+  // One serialized callback-resolution turn (design section 5, C3 callback-core
+  // checkpoint). The whole admitted binding is rechecked against installed state
+  // before any deadline or identity work, so an unknown, foreign, cross-request or
+  // unmapped tuple is a silent refusal that samples nothing. A fully bound update at
+  // or below the committed cursor is stale; a newer one on an already terminal
+  // target commits only its cursor and retains the exact outcome without sampling
+  // time or allocating an identity. A pending target samples once: at or after its
+  // deadline the existing expiry writer commits with this update's cursor instead,
+  // otherwise the human choice commits with its source, initial ledger and stable
+  // decision in one flushed transaction, and only then is the matching original
+  // wait woken with that committed representation.
+  async #resolve(fields) {
+    const {
+      requestId,
+      callbackToken,
+      messageId,
+      userId,
+      chatId,
+      callbackQueryId,
+      updateId,
+      resolution,
+    } = fields;
+    const request = this.#requests.get(requestId);
+    if (request === undefined || request.callback_token !== callbackToken) return RESOLVE_REFUSED;
+    const snapshot = request.pairing_snapshot;
+    if (snapshot.user_id !== userId || snapshot.chat_id !== chatId) return RESOLVE_REFUSED;
+    if (this.#pairing === null) return RESOLVE_REFUSED;
+    if (this.#pairing.user_id !== userId || this.#pairing.chat_id !== chatId)
+      return RESOLVE_REFUSED;
+    const mapping = this.#mappings.get(mappingKey(chatId, messageId));
+    if (mapping === undefined || mapping.role !== 'request' || mapping.request_id !== requestId) {
+      return RESOLVE_REFUSED;
+    }
+    if (this.#cursor !== null && updateId <= this.#cursor) return RESOLVE_STALE;
+    // The update id and its durable consequences share one transaction, so either
+    // mutation order replays and the cursor never advances past an uncommitted
+    // decision. Nothing is installed until that frame has flushed.
+    const cursorMutation = { op: CURSOR_OP, last_update_id: updateId };
+    const advance = async (mutations, requestIds) => {
+      await this.#commitFor(mutations, requestIds);
+      this.#cursor = updateId;
+    };
+    if (request.resolution !== 'pending') {
+      await advance([cursorMutation], []);
+      return { result: 'retained', request: requestView(request) };
+    }
+    const sampled = turnTime(this.#clock, 'recording a callback resolution', 'resolution');
+    // Reachability is selected while the mutation is constructed, so a later
+    // registration loss changes no committed ledger and no second write repairs it.
+    const delivery_state = this.#waiters.live(requestId) ? 'pending' : 'unavailable';
+    if (isDue(request, sampled.milliseconds)) {
+      const mutation = {
+        op: EXPIRE_OP,
+        request_id: requestId,
+        decision_id: this.#nextDecisionId(new Set()),
+        resolved_at: sampled.text,
+        delivery_state,
+      };
+      await advance([mutation, cursorMutation], [requestId]);
+      this.#installClosure(mutation, 'expired');
+      this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
+      return { result: 'expired', request: requestView(request) };
+    }
+    // A recorded time before creation cannot describe this request's lifetime, so
+    // it is the existing storage failure rather than a caller error.
+    if (compareInstants(sampled.instant, request.createdAt) < 0) {
+      throw storageFailure(`${RESOLVE_OP} would precede its request creation`, 'STORAGE_FAILURE');
+    }
+    const mutation = {
+      op: RESOLVE_OP,
+      request_id: requestId,
+      decision_id: this.#nextDecisionId(new Set()),
+      resolution,
+      response_text: null,
+      resolved_at: sampled.text,
+      user_id: userId,
+      chat_id: chatId,
+      update_id: updateId,
+      source: {
+        kind: 'callback',
+        message_id: messageId,
+        callback_query_id: callbackQueryId,
+        callback_token: callbackToken,
+        reply_prompt_id: null,
+      },
+      delivery_state,
+    };
+    await advance([mutation, cursorMutation], [requestId]);
+    this.#installClosure(mutation, resolution);
+    request.response_text = null;
+    request.delivery_error = null;
+    request.resolution_source = {
+      user_id: userId,
+      chat_id: chatId,
+      update_id: updateId,
+      ...mutation.source,
+    };
+    this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
+    this.#logger('portable.request.resolved', { request_id: requestId, resolution });
+    return { result: 'recorded', request: requestView(request) };
   }
 
   // One serialized wait admission (design section 3, G3). A queued call whose
