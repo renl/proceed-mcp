@@ -1702,7 +1702,9 @@ function stageCreate(record, staged, pairing, reservedNow) {
 
 // An allocation is its own mutation, applied in array order against staged state:
 // it targets one pending request that has no token yet, is journal-wide unique,
-// and lies inside that request's own lifetime. A second allocation for the same
+// and is what the committed token-to-request index retains for every later stage,
+// so a mapped, prompted or terminal request stays correlateable. It lies inside
+// that request's own lifetime. A second allocation for the same
 // request, a reused token or a terminal/early/late target is invalid history, not
 // an idempotent repeat.
 function stagePresentation(record, staged) {
@@ -1723,7 +1725,7 @@ function stagePresentation(record, staged) {
   if (compareInstants(record.preparedAt, request.expiresAt) >= 0) {
     throw integrity(`${PREPARE_OP} must precede the request deadline`);
   }
-  staged.tokens.add(record.callback_token);
+  staged.tokens.set(record.callback_token, record.request_id);
   request.callback_token = record.callback_token;
   // The allocation's own instant is retained for exact receipt lower bounds, so
   // no receipt ever compares against a recovery or retry time instead.
@@ -2107,7 +2109,10 @@ class PortableBroker {
 
   #decisions = new Set();
 
-  #tokens = new Set();
+  // The committed token-to-request index: every allocation, including those of
+  // mapped, prompted and terminal requests, so correlation never depends on
+  // pending work.
+  #tokens = new Map();
 
   #mappings = new Map();
 
@@ -2204,7 +2209,7 @@ class PortableBroker {
       requests: new Map(),
       created: new Set(),
       decisions: new Set(),
-      tokens: new Set(),
+      tokens: new Map(),
       mappings: new Map(),
     };
     const challenges = new Map();
@@ -2576,6 +2581,44 @@ class PortableBroker {
           request: requestView(request),
         })),
     };
+  }
+
+  // Correlates one raw callback token with the committed allocation that bound it
+  // (design section 5, C3 G1b). Only the recovered token-to-request index is
+  // consulted, so a mapped, prompted or terminal request resolves exactly like a
+  // pending one, and an unknown, malformed or non-object input is the same silent
+  // null. It samples no clock, queues nothing, appends nothing and grants no
+  // authority: the result is fresh on every call and the token itself stays
+  // private to this module.
+  correlateCallbackToken(input) {
+    if (!isPlainObject(input)) return null;
+    const callbackToken = input.callbackToken;
+    if (typeof callbackToken !== 'string' || !CALLBACK_TOKEN_PATTERN.test(callbackToken)) {
+      return null;
+    }
+    const requestId = this.#tokens.get(callbackToken);
+    return requestId === undefined ? null : { request_id: requestId };
+  }
+
+  // Serialized admission for one response-prompt send attempt (design section 5,
+  // C3 G1). The request id is the only admitted input: a malformed, non-object or
+  // missing one is a caller error refused before the queue, and any caller chat or
+  // request representation is ignored rather than trusted. Inside the turn the
+  // committed target, its durable opening, the absence of a successful prompt
+  // mapping and the immutable snapshot binding are rechecked, and only a still
+  // eligible pending target samples time. At or after the deadline the existing
+  // expiry writer commits instead and no payload is returned. Before it, the exact
+  // snapshot chat and an independent common request copy are returned, and no
+  // token, decision, mapping or cursor is created here.
+  prepareResponsePrompt(input = {}) {
+    return Promise.resolve().then(() => {
+      const requestId = isPlainObject(input) ? input.requestId : undefined;
+      if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+        throw invalidArgument('prepareResponsePrompt expects a request id');
+      }
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#admitPrompt(requestId));
+    });
   }
 
   // Redacted view: the capability verifier and pairing snapshot stay
@@ -3214,7 +3257,9 @@ class PortableBroker {
     ]);
     request.callback_token = token;
     request.preparedAt = sampled.instant;
-    this.#tokens.add(token);
+    // Installed only after the same flush that made the allocation durable, so
+    // correlation never observes a token the history does not hold.
+    this.#tokens.set(token, request.request_id);
     this.#logger('portable.presentation.prepared', { request_id: request.request_id });
     return this.#preparedView(request);
   }
@@ -3227,6 +3272,52 @@ class PortableBroker {
       callback_token: request.callback_token,
       request: requestView(request),
     };
+  }
+
+  // One serialized prompt-admission turn (design section 5, C3 G1). The target and
+  // its retained opening are re-read from installed state, so an unknown,
+  // reservation-only, unopened, already prompted or terminal request, a missing
+  // snapshot and a pairing that no longer matches that snapshot are all the same
+  // clock-free null. A turn queued before a stop still rechecks close, and the
+  // ordinary fence and latch are refused by admission itself, so no queued attempt
+  // bypasses a failure installed before it. An eligible target samples exactly
+  // once: at or after its deadline the existing expiry writer commits with its own
+  // decision, initial ledger, flush and wake rules, and no payload is returned.
+  // Before it, the exact snapshot chat and a fresh common copy leave serialization
+  // with nothing written. No Telegram update is consumed here, so no cursor is
+  // appended, invented or advanced.
+  async #admitPrompt(requestId) {
+    if (this.#closing || this.#closed) {
+      throw storageFailure('the portable broker is closed', 'STORAGE_FAILURE');
+    }
+    const request = this.#requests.get(requestId);
+    if (request === undefined || request.resolution !== 'pending') return null;
+    if (request.openedAt === null || request.callback_token === null) return null;
+    if (typeof request.pairing_snapshot?.chat_id !== 'string') return null;
+    if (this.#pairing === null) return null;
+    if (request.pairing_snapshot.user_id !== this.#pairing.user_id) return null;
+    if (request.pairing_snapshot.chat_id !== this.#pairing.chat_id) return null;
+    for (const mapping of this.#mappings.values()) {
+      if (mapping.role === 'prompt' && mapping.request_id === requestId) return null;
+    }
+    const sampled = turnTime(
+      this.#clock,
+      'admitting a response prompt',
+      'response prompt admission',
+    );
+    // A recorded time before creation cannot describe this request's lifetime, so
+    // it is the existing storage failure rather than a caller error.
+    if (compareInstants(sampled.instant, request.createdAt) < 0) {
+      throw storageFailure(
+        'response prompt admission would precede its request creation',
+        'STORAGE_FAILURE',
+      );
+    }
+    if (isDue(request, sampled.milliseconds)) {
+      await this.#commitExpiry(sampled.milliseconds, [request]);
+      return null;
+    }
+    return { chat_id: request.pairing_snapshot.chat_id, request: requestView(request) };
   }
 
   // Receipt and callback-resolution turns share the ordinary admission and
