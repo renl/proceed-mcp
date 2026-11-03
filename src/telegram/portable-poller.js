@@ -102,17 +102,30 @@ export function createPortableTelegramPoller({
   let loop = null;
   let stopPromise = null;
 
+  // A diagnostic is evidence, never authority. A failing log callback is not a
+  // storage, processing, refusal or business outcome of its own, so it can neither
+  // widen the failure scope nor withdraw the termination it accompanies.
+  const log = (line) => {
+    try {
+      logger(line);
+    } catch {
+      // A diagnostic callback fault is contained here and is never reclassified.
+    }
+  };
+
   // One shared abort covers the long poll, the retry wait and every external UI
   // call. Every termination is terminal and fixed: a later start cannot undo it. A
   // rejected credential is not just this consumer's problem, so it also fences the
   // shared Telegram traffic (question display, replies and acknowledgements) while
-  // the local broker keeps serving.
+  // the local broker keeps serving. The terminal state and the shared fence are
+  // installed before the diagnostic runs, so a throwing or slow log callback cannot
+  // leave this consumer admitting a later poll, reply or acknowledgement.
   const end = (line, reason) => {
-    logger(line);
     diagnostic ??= reason;
     stopped = true;
     controller.abort();
     if (reason === 'TOKEN_REJECTED') traffic?.stop();
+    log(line);
   };
 
   // A retry wait shares the poll's abortable lifetime, so stop reaches it too.
@@ -154,7 +167,7 @@ export function createPortableTelegramPoller({
         end(`Telegram updates stopped: ${code}; restart serve after repairing the bot`, code);
         return false;
       }
-      logger(`Telegram reply was not delivered: ${codeOf(error)}`);
+      log(`Telegram reply was not delivered: ${codeOf(error)}`);
       return true;
     }
   };
@@ -256,7 +269,7 @@ export function createPortableTelegramPoller({
       if (updates === null) {
         // A malformed envelope fails this poll attempt without advancing any
         // cursor and without becoming an empty successful batch.
-        logger(BATCH_REJECTED);
+        log(BATCH_REJECTED);
         await backoff(null);
         continue;
       }
