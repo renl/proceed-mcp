@@ -2661,8 +2661,9 @@ class PortableBroker {
   // the caller named (design section 5, C3e-B). Command grammar, the raw update
   // envelope and text extraction stay with the future consumer; this seam takes
   // the parsed request id, the declared reply context and the extracted payload
-  // only. A present context is validated against this request's own stored prompt
-  // and never falls back to command routing.
+  // only. A present context is part of the admitted binding, so it is validated
+  // against this request's own stored prompt before stale or terminal
+  // classification and never falls back to command routing.
   resolveCommand(input = {}) {
     return Promise.resolve().then(() => {
       const fields = commandFields(input);
@@ -3747,15 +3748,16 @@ class PortableBroker {
   // work: a reply derives its only target from the stored same-chat response
   // prompt it quotes, while a command uses its explicit request. A request-message
   // tuple, an unknown target, a foreign actor/chat or a request without its
-  // durable opening is a silent refusal that samples nothing. A bound update at or
-  // below the committed cursor is stale; a newer one on an already terminal target
-  // commits only its cursor and retains the exact outcome without sampling time or
-  // allocating an identity. Only a pending target rechecks the command's declared
-  // prompt context, then samples once: at or after its deadline the existing expiry
-  // writer commits with this update's cursor instead, otherwise the exact
-  // instructions commit as responded with their source, initial ledger and stable
-  // decision in one flushed transaction, and only then is the matching original
-  // wait woken with that committed representation.
+  // durable opening is a silent refusal that samples nothing. That binding decides
+  // stale and terminal classification too, including a command's declared context.
+  // A bound update at or below the committed cursor is stale; a newer one on an
+  // already terminal target commits only its cursor and retains the exact outcome
+  // without sampling time or allocating an identity. Only a pending target samples
+  // once: at or after its deadline the existing expiry writer commits with this
+  // update's cursor instead, otherwise the exact instructions commit as responded
+  // with their source, initial ledger and stable decision in one flushed
+  // transaction, and only then is the matching original wait woken with that
+  // committed representation.
   async #recordText(fields) {
     const { kind, messageId, userId, chatId, updateId, text } = fields;
     let requestId = fields.requestId;
@@ -3773,6 +3775,15 @@ class PortableBroker {
       return RESOLVE_REFUSED;
     }
     if (request.openedAt === null) return RESOLVE_REFUSED;
+    // A declared reply context is a second correlation for a command, never a
+    // fallback: it must already be this same request's prompt in this same chat.
+    // It belongs to the admitted binding, so it is decided here, before the cursor
+    // classification and before a terminal outcome is disclosed.
+    if (kind === 'command' && fields.replyPromptId !== null) {
+      const prompt = this.#mappings.get(mappingKey(chatId, fields.replyPromptId));
+      if (prompt === undefined || prompt.role !== 'prompt') return RESOLVE_REFUSED;
+      if (prompt.request_id !== requestId) return RESOLVE_REFUSED;
+    }
     if (this.#cursor !== null && updateId <= this.#cursor) return RESOLVE_STALE;
     // The update id and its durable consequences share one transaction, so either
     // mutation order replays and the cursor never advances past an uncommitted
@@ -3785,15 +3796,6 @@ class PortableBroker {
     if (request.resolution !== 'pending') {
       await advance([cursorMutation], []);
       return { result: 'retained', request: requestView(request) };
-    }
-    // Declared reply context is a second correlation for a command, never a
-    // fallback: it must already be this same request's prompt in this same chat.
-    // It gates only a new resolution, so a stale or retained update is settled
-    // without it and no input ever routes by request id alone.
-    if (kind === 'command' && fields.replyPromptId !== null) {
-      const prompt = this.#mappings.get(mappingKey(chatId, fields.replyPromptId));
-      if (prompt === undefined || prompt.role !== 'prompt') return RESOLVE_REFUSED;
-      if (prompt.request_id !== requestId) return RESOLVE_REFUSED;
     }
     const sampled = turnTime(this.#clock, 'recording a text response', 'resolution');
     // Reachability is selected while the mutation is constructed, so a later
