@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { access, mkdir, mkdtemp, open, readFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { Journal } from '../src/journal/journal.js';
 import { readJournal } from '../src/journal/framing.js';
 import { createPortableBroker } from '../src/broker/portable.js';
@@ -113,8 +114,8 @@ for (const kind of ['reply', 'command']) {
     assert.deepEqual(row.find(m => m.op === 'telegram.cursor'), cursor(10)); privateAbsent(h, [r, h.logs]);
     assert.equal((await h.b.status()).requests[0].response_text, text); r.request.event_capability.status = 'evil'; r.request.response_text = 'evil';
     const bytes = await h.bytes(); await h.reopen(); assert.deepEqual(h.b.snapshot().requests[0], saved); assert.deepEqual(await h.bytes(), bytes);
-    h.now = NaN; await unchanged(h, async () => assert.deepEqual(await h.call(kind), { result: 'stale' }));
-    const counts = h.count(); assert.deepEqual(await h.call(kind, { updateId: 11 }), { result: 'retained', request: saved });
+    h.now = NaN; await unchanged(h, async () => assert.deepEqual(await h.call(kind, { replyPromptId: context }), { result: 'stale' }));
+    const counts = h.count(); assert.deepEqual(await h.call(kind, { replyPromptId: context, updateId: 11 }), { result: 'retained', request: saved });
     assert.deepEqual(h.count().slice(0, 2), counts.slice(0, 2)); assert.deepEqual((await h.rows()).at(-1), [cursor(11)]);
     await unchanged(h, async () => assert.deepEqual(await h.call(kind, { userId: '71', updateId: 12 }), { result: 'refused' }));
   }));
@@ -171,6 +172,23 @@ for (const kind of ['reply', 'command']) {
     assert.deepEqual((await h.rows()).at(-1), [cursor(10)]); await unchanged(h, async () => assert.deepEqual(await h.call(kind), { result: 'stale' }));
   }));
 }
+for (const stage of ['pending-stale', 'terminal-stale', 'terminal-newer']) for (const [context, replyPromptId] of [['unknown', 99], ['request-role', 7], ['wrong-request', 71]])
+  test(`TW-CONTEXT-${stage}-${context}: full command binding before classification or outcome`, opts, () => native(async h => {
+    await h.create(); await h.create(); h.ready();
+    if (stage !== 'pending-stale') await h.b.cancelRequest(h.keys[0]);
+    h.now = NaN; const bytes = await h.bytes(), view = h.b.snapshot(), n = h.count();
+    const result = await h.call('command', { replyPromptId, updateId: stage === 'terminal-newer' ? 10 : 3 });
+    assert.deepEqual({ result, journalUnchanged: bytes.equals(await h.bytes()), stateUnchanged: isDeepStrictEqual(h.b.snapshot(), view), n: h.count() },
+      { result: { result: 'refused' }, journalUnchanged: true, stateUnchanged: true, n });
+  }));
+for (const replyPromptId of [null, 70]) test(`TW-CONTROL-command-${replyPromptId}: fully bound stale and terminal`, opts, () => native(async h => {
+  await h.create(true, replyPromptId !== null); h.ready(); h.now = NaN;
+  await unchanged(h, async () => assert.deepEqual(await h.call('command', { replyPromptId, updateId: 2 }), { result: 'stale' }));
+  h.now = at + 2000; const saved = await h.b.cancelRequest(h.keys[0]); h.now = NaN; const n = h.count();
+  assert.deepEqual(await h.call('command', { replyPromptId, updateId: 10 }), { result: 'retained', request: saved });
+  assert.deepEqual(h.count().slice(0, 2), n.slice(0, 2)); assert.deepEqual((await h.rows()).at(-1), [cursor(10)]);
+  await unchanged(h, async () => assert.deepEqual(await h.call('command', { replyPromptId, updateId: 10 }), { result: 'stale' }));
+}));
 for (const producer of ['cancel', 'expiry', 'callback', 'reply', 'command']) test(`TW-ID-${producer}: actual global source history blocks both text writers`, opts, () => native(async h => {
   await h.create(); await h.create(); h.ready(); h.generate = () => dec(88);
   if (producer === 'cancel') await h.b.cancelRequest(h.keys[0]);

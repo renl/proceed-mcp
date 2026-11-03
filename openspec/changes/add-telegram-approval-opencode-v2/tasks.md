@@ -1,11 +1,17 @@
 # Tasks
 
-## C3e-B text writers - bounded preparation
+## C3e-B text writers - C3-TEXT-CONTEXT-001 attempt0 OPEN
+
+- [x] P.C3EB-context-tests [Corrected positive fixture, privacy regressions and exact corrective handoff](slices/03c3e-b-text-writers.md#c3-text-context-001-attempt0---corrective-handoff). Failed candidate `cdebbbcdd55819ef7533eccbf90818ebce79fcf9` remains unaccepted. Fresh contract interpretation requires full present command context before stale AND retained outcome. No design/product amendment or repeated Architecture gate.
+- [ ] P.C3EB-context-source Sole later source `src/broker/portable.js`, move present-context binding before stale/terminal inside serialization and remove contrary comments. API/grammar/fences unchanged. Source forecast30-50 gross, separate corrective packet hard600. Next owner implementation correction through coordination, then independent affected verification.
+- Current targeted Node24 RED14:5 positive controls PASS/9 privacy FAIL, exit1, no cancelled/skipped/todo. Unknown/request-role/wrong-request contexts at pending-stale, terminal-stale and terminal-newer require exact refused with unchanged journal/state/cursor/clock/ID. Cleanup and cheap static/scoped policy checks PASS separately. Worktree retained active, test engineering owner, next action corrective source then independent verification. No C3/live/human/feature/release acceptance.
+
+### Historical preparation (not current acceptance)
 
 - [x] P.C3EB-tests [Exact reply/command writer tests and sole-source brief](slices/03c3e-b-text-writers.md). Baseline `f9dcb80f1b74c2ca9cf3b180ddb5be6182b554e5`, accepted text replay `e7eebae0794f52c32fc8ebe62e62d01b532fc123` present. Real producers and Journal barriers, no production edits.
 - [ ] P.C3EB-review ONE combined persisted-contract/decomposition/test-artifact review requested. Triggers1/4/5YES,2/3NO. Sole later source `src/broker/portable.js`, SOURCE CEILING230 gross, complete packet hard600 including preparation and independent verification. No automatic implementation authorization.
 - [ ] P.C3EB-source Selected `resolveReply` / `resolveCommand` and exact result union in linked brief. Reply derives request only from prompt, command requires explicit null/positive context, no unknown-context fallback. Shared private implementation optional. No raw consumer, prompt delivery, HTTP route, Events or B delivery changes.
-- [ ] P.C3EB-verify Independent affected writer/storage verification after separately authorized source. Missing APIs currently block all text-writer assertions. Raw admission/grammar, ForceReply worker/client, public original-call outcomes and separately authorized Telegram/live-human first use remain mandatory.
+- [ ] P.C3EB-verify Independent affected writer/storage verification after corrective source. Historical missing-API RED below predates implementation. Current authority-order failure above blocks acceptance. Raw admission/grammar, ForceReply worker/client, public original-call outcomes and separately authorized Telegram/live-human first use remain mandatory.
 - Final preparation:40 tests,2 calibration PASS/38 expected RED, exit1,0 cancelled/skipped/todo. Missing APIs block downstream proof. Preparation276 gross/3 paths plus source upper230 =506, with verification22 reserve gives528 under600. Owned native run cleanup, cheap static/format policy, links and whitespace PASS separately. Evidence/limits in linked slice.
 - Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action combined review after preparation evidence below. Owned native run cleanup separate from assertions, no worktree removal, preserve owner/unknown work. No C3/live/human/feature/release acceptance.
 
