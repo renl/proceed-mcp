@@ -1,10 +1,10 @@
 # Tasks
 
-## C3g P2 maintained faults - credential correction PASS, breadth remains blocked
+## C3g P2 maintained faults - remaining native breadth PASS, combined review pending
 
-- [ ] P.C3GP2-faults [Maintained fault breadth, historical defect and current correction](slices/03c3g-p2-prompt-faults.md#credential-correction-attempt1-independent-verdict---2026-11-04). C3-PROMPT-CREDENTIAL-001 CLOSED attempt1 at `5f48f70444e8e8a6cef5e0c82d130c0e838d0f25`. Independent formerly failed composed control1/1 and supplementary lifecycle controls4/4 PASS. Author full9/9 reused, not full P2 acceptance. Historical8PASS/1FAIL retained.
+- [x] P.C3GP2-faults [Remaining maintained matrix](slices/03c3g-p2-prompt-faults.md#remaining-packet-execution---2026-11-04). Unchanged source `5f48f70444e8e8a6cef5e0c82d130c0e838d0f25`, fresh base `99a6bc5a`. Full unfiltered27/27PASS,18 new maintained groups plus9 prior groups. No required remaining native area silently deferred. C3-PROMPT-CREDENTIAL-001 stays CLOSED attempt1. Historical8PASS/1FAIL and correction evidence retained, not overwritten.
 - [ ] P.C3GP2-review One combined owning test-artifact/boundary/decomposition review after correction and mandatory breadth. Exact remaining matrix is retained in the linked slice. P1 remains foundation-only, no worker/C3/live/human/feature/release acceptance.
-- Lifecycle: existing worktree/branch/change and test-engineering ownership retained, active/blocked on exact remaining P2 matrix in slice. Next owner coordination for separately authorized maintained breadth, no automatic preparation. Owned native cleanup PASS separately, ignored evidence retained, owner/unknown files preserved. No worktree cleanup due.
+- Lifecycle: existing worktree/branch/change and test-engineering ownership retained, active/retain for one combined owning review. Owned native cleanup PASS separately, ignored evidence retained, owner/unknown files preserved. Listener limitation requires explicit owner review, not a foreign-listener recovery claim. No worktree cleanup due or worker/C3/public/live/human/feature/release acceptance.
 
 ## C3g P1 inert prompt worker - bounded foundation PASS, P2 mandatory
 
