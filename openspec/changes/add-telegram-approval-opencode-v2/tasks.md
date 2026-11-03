@@ -1,5 +1,13 @@
 # Tasks
 
+## C3d-ii prompt-failure core - preparation for combined review
+
+- [x] P.C3DII-tests [Exact prompt-failure API, runnable tests and sole-source brief](slices/03c3d-ii-prompt-failed.md). Baseline `4140fcf180994030931acba36cafefdb0478aa48`, accepted opening/sent/callback prerequisites present. Preparation only, no production edits or public Respond claim.
+- [ ] P.C3DII-review ONE combined normative journal/decomposition/test-artifact review, triggers1/4/5YES,2/3NO. Sole later source `src/broker/portable.js`, exact upper260 gross, full packet hard600 including preparation/verification. No automatic unchanged post-code review or implementation authority.
+- [ ] P.C3DII-source Separate authorization after review for selected `recordPromptFailed({requestId,errorCode}={}) => Promise<null|{request}>`, exact replay/writer, private latest code/time and unchanged responseWork/public state.
+- [ ] P.C3DII-verify Independent affected verification after source. Current15:2 calibration PASS/13 expected RED, exit1, no skipped/cancelled/todo. Missing API/positive decoder blocks conformance, unknown-op rejection is not proof. Evidence and historical fixture correction in linked brief.
+- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, test engineering owner, active/retain. Next action ONE combined review. Cleanup PASS for owned native run directories, ignored logs retained, no worktree removal or unknown cleanup. Actual text writers, prompt worker/client/public activation and live/human outcome remain mandatory, no C3/feature/release acceptance.
+
 ## C3d-i prompt-sent role/work core - bounded next checkpoint
 
 - [x] P.C3DI-tests [Prompt-sent exact selected API, executable tests and sole-source brief](slices/03c3d-i-prompt-sent.md). Baseline `05477f63dc3dd98758e7ca451a67dc0a39fa2237`, accepted opening/restoration present. Sent/role/work first, failure next, then text and activation. No invariant dropped or full Respond claim.
@@ -7,7 +15,7 @@
 - [x] P.C3DI-source Sole source `src/broker/portable.js` at `c3e58913ba15bdf273768ddec90e9dd5470fca6a`, selected `recordPromptSent` and `responseWork` plus existing request-receipt role check. Actual prompt producer proves callback/edit role exclusion. No public activation or prompt-failure support.
 - [x] P.C3DI-verify Bounded core PASS. Independent17/17 prompt tests and201/201 critical controls, exit0. Broader author536/536 is reused summary/exit evidence only, not reviewed full TAP. [Verdict, provenance, cleanup and limits](slices/03c3d-i-prompt-sent.md#independent-affected-verdict---2026-11-04).
 - Lifecycle active/retain, test engineering owns the existing change worktree/branch. Fixture cleanup PASS separately. Next action report verdict and mandatory prompt-failure prerequisites, not automatic preparation or C3/feature/release acceptance. Preserve all owner/unknown work.
-- [ ] P.C3DII-failure Mandatory unprepared/unexecuted `recordPromptFailed` replay/writer and private redacted failure state, before text/public completion. Exact contract and remaining gates in linked brief.
+- [ ] P.C3DII-failure Mandatory replay/writer now prepared above, still unimplemented/unverified, before text/public completion. Exact contract and remaining gates in linked brief.
 - Preparation Node24.22.2 final17:2 calibration PASS/15 expected RED, exit1,0 cancelled/skipped/todo. Missing APIs/op block downstream proof. Actual256 gross/3 paths, source upper280 plus verification40 totals576 under600. Cheap gates/links and owned run cleanup PASS separately. Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action ONE combined review, not automatic implementation. Preserve owner/unknown work. No C3/live/human/feature/release acceptance.
 
 ## C3c Respond opening - bounded next checkpoint
