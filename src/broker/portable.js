@@ -1890,13 +1890,7 @@ class PortableBroker {
     this.#generateDecisionId = generateDecisionId;
     this.#generatePairingCode = generatePairingCode;
     this.#generateCallbackToken = generateCallbackToken;
-    // The start instant is display metadata, not a business time: an unusable
-    // reading leaves it absent rather than failing construction or inventing one.
-    try {
-      this.#startedAt = utcTimestamp(clock());
-    } catch {
-      this.#startedAt = null;
-    }
+    this.#startedAt = utcTimestamp(clock());
     // The turnover is a private observation window, never public configuration.
     this.#waiters = createWaiterRegistry({ timeoutMs: waitTurnoverMs });
   }
