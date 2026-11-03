@@ -1,11 +1,17 @@
 # Tasks
 
-## C2 message-method409 correction - C2-MESSAGE-409-001 OPEN attempt0
+## C2 message-method409 correction - C2-MESSAGE-409-001 CLOSED attempt1
 
 - [x] P.C2-message409-tests [Corrective tests, source-only brief and RED evidence](slices/03c2-message409-correction.md). Baseline `2acded565f78caf5a6658243034c53cc70ac2e83`. Necessary existing C2 correctness, separate from C3 activation. No production edits or retroactive withdrawal of earlier C2 acceptance scopes.
-- [ ] P.C2-message409-source Sole `src/telegram/client.js`, forecast20-65 gross, hard100. Full preparation/source/verification hard600. Select only three UI-message methods for409, preserve polling conflict and credential/rate/server precedence. Acknowledgement policy remains separately pending, not bundled or passed.
-- [ ] P.C2-message409-verify Native8:1PASS/7expectedRED, public11:8PASS/3expectedRED, both exit1, no cancelled/skipped/todo. Initial status fixture sequencing error corrected and historical failure retained. HTTP409 composition remains blocked, API409 composition controls PASS but raw-client privacy remains RED. Exact runs, cleanup and limits in linked slice.
-- Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action sole-client corrective implementation through coordination, then independent affected verification. Owned runner cleanup PASS, ignored evidence retained, no unknown/owner cleanup or worktree removal. No C3/live/human/feature/release acceptance.
+- [x] P.C2-message409-source Sole client correction `6861b0c24ecffae042a523cd6f5c14ea18a1d0c3`, 34gross. Three message methods only, acknowledgement activation remains pending. Initial RED history retained in slice.
+- [x] P.C2-message409-verify [Independent bounded PASS, separate cleanup PASS](slices/03c2-message409-correction.md#independent-attempt1-verdict---2026-11-04). Native8/public11/C1controls8 plus critical probes executed. Current affected14 reused. Stale send409 control repaired at `d59376ac568a6571eb2eff3d3c5d8ddfa24f14ca`, initial5/6 failure retained. No live/human/feature/release acceptance.
+
+## C3 inert raw admission - bounded PASS, no activation
+
+- [x] P.C3FA-tests [Raw admission binding and approved combined packet](slices/03c3f-a-raw-admission.md). Preparation215gross. No public consumer or human-outcome proof.
+- [x] P.C3FA-source Sole new `src/telegram/portable-admission.js` at `94f2fa731a0e8f2edaecdd9ccc7ad9350496e770`, parent client correction, 139gross. Exactly two inert exports.
+- [x] P.C3FA-verify [Independent native14/14 and critical controls PASS](slices/03c3f-a-raw-admission.md#independent-inert-verdict---2026-11-04). Initial author13/14 missing-text failure then same-blob14/14 disclosed. No prompt worker, consumer, C3/live/human/feature/release acceptance or automatic next preparation.
+- Shared lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action coordination acceptance of the two bounded verdicts only. Cleanup PASS, ignored evidence retained. No automatic next preparation, unknown/owner cleanup, removal or C3/live/human/feature/release acceptance.
 
 ## C3e-B text writers - C3-TEXT-CONTEXT-001 CLOSED attempt1
 
