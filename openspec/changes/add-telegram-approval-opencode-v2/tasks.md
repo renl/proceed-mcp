@@ -1,5 +1,12 @@
 # Tasks
 
+## C2c-ii status display core preparation
+
+- [x] P.C2CII-tests [Sole-source binding, exact status journal, serialization races and mandatory public remainder](slices/03c2c-ii-status-core.md). Baseline `0aa6b85e562f4853e95f949344bbf4fbf4955d17`, accepted retirement `3a16fb7f` present. Tests and owned brief/index only, no production edit.
+- [ ] P.C2CII-review ONE combined journal/decomposition/test-artifact review, triggers1/4/5YES,2/3NO. Review-ready only, not implementation-ready. Sole source `src/broker/portable.js`, forecast155-190 gross, full packet ceiling600. Latest design retirement-before-status and serialized flush-race rules control.
+- Final Windows Node24.22.2 new18:6PASS/12expectedRED, exit1, zero cancelled/skipped/todo. CalibrationPASS,5 unknown-op history negatives NOT decoder proof. Remaining assertions blocked by absent status API/work/positive replay. Cheap gates and owned run cleanup PASS separately. Exact charge/evidence in linked brief. No C2/live/human/feature/release acceptance.
+- Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action combined review then separate source authorization. Cleanup evidence: owned Journal fixtures drained and run directories absent, worktree not cleanup-ready. Worker/client/public edit proof mandatory BEFORE complete C2, C3 prompt exclusion requires its real producer. Unknown CLI prerequisites/C3/live proof remain unpassed. Other-owner/unknown work preserved.
+
 ## C2c-i controls retirement core
 
 - [x] P.C2CI Approved review followed by [independent bounded core PASS](slices/03c2c-i-controls-core.md#independent-affected-verdict---2026-11-03). Code `3a16fb7f8b203f67f1faac57ce3c116438f41a7c`, parent `57995f1b5e765e66a2dfcb743c9a2d1f149dd3c2`. Executed critical6/6, reused current author15/15 and affected322/322 after revision/assertion review. Cheap gates and run cleanup PASS separately. Source197 gross (188 additions +9 deletions), preparation180, combined377 before verification docs. Source upper200 remains forecast, not hard cap. Status-core and actual public-client edits remain mandatory before C2, not deferred to C3.
