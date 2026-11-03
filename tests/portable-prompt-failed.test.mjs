@@ -148,7 +148,7 @@ for (const phase of ['writing', 'syncing']) test(`PF-FAULT-${phase}: no partial 
 test('PF-REPLAY-POS: ordered opening/failures, exact offset/fraction equality, latest bound and clock-free recovery', opts, () => native(async h => {
   await h.create(); const before = visible(h), rows = await h.rows(), opening = rows.pop();
   const t = '2026-11-04T00:00:01.000000002Z'; opening.find(m => m.op === 'telegram.response.open').opened_at = t;
-  const first = failed(h, { failed_at: '2026-11-04T01:00:01.000000002+01:00' });
+  const first = failed(h, { failed_at: '2026-11-04T00:00:01.000000002+00:00' });
   await h.replace([...rows, [...opening, first, { ...first, error_code: 'rejected' }], [failed(h, { failed_at: '2026-11-04T00:00:01.000000003Z', error_code: 'rate_limited' })]]);
   h.now = NaN; const n = h.count().slice(0, 3), bytes = await h.bytes(); await h.b.recover(); assert.deepEqual(h.count().slice(0, 3), n);
   assert.deepEqual(await h.bytes(), bytes); assert.deepEqual(visible(h), before); await h.reopen();
@@ -160,7 +160,7 @@ test('PF-REPLAY-STRICT: exact schema/raw code/time/history, staged order and who
   const changes = [...Object.keys(r).flatMap(k => [v => { delete v[k]; }, ...[null, [r[k]], {}, false, 1].map(value => v => { v[k] = value; })]),
     v => { v.extra = true; }, ...[{ request_id: unknown }, { request_id: 'bad' }, { error_code: 'SECRET' },
       ...['Unavailable', '', ' rejected', 'rejected '].map(error_code => ({ error_code })),
-      ...['2026-02-30T00:00:00Z', '2026-11-04T00:00:01-00:00', '2026-11-04T00:00:00.999999999Z', 1].map(failed_at => ({ failed_at }))].map(e => v => Object.assign(v, e))];
+       ...['2026-02-30T00:00:00Z', '2026-11-04T00:00:01-00:00', '2026-11-04T01:00:01.000000002+01:00', '2026-11-04T00:00:00.999999999Z', 1].map(failed_at => ({ failed_at }))].map(e => v => Object.assign(v, e))];
   for (const change of changes) { const v = structuredClone(r); change(v); await rejectHistory(h, [...base, [v]]); }
   const opening = base.at(-1), prefix = base.slice(0, -1);
   for (const rows of [[...prefix, [r]], [...prefix, [r, ...opening]],
