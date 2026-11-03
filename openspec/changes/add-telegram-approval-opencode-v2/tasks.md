@@ -1,11 +1,11 @@
 # Tasks
 
-## C2c-iii terminal edits - preparation
+## C2c-iii terminal edits - bounded P1 PASS
 
-- [ ] P.C2CIII-review [Worker/client/runtime tests and implementation brief](slices/03c2c-iii-terminal-edits.md). Baseline `67db10e07bbeefd3ca7e7629faecd31f6104a7df`, accepted retirement/status and C2b prerequisites present. One combined boundary/decomposition/test-artifact review required before implementation readiness.
-- [ ] P.C2CIII-implement Implement only the three selected source files after accepted review, preserve C2b and validate affected tests independently. Preparation is tests/docs only. No full C2 claim.
+- [x] P.C2CIII-review [Worker/client/runtime tests and implementation brief](slices/03c2c-iii-terminal-edits.md). Baseline `67db10e07bbeefd3ca7e7629faecd31f6104a7df`, accepted retirement/status and C2b prerequisites present. Approved combined boundary/decomposition/test-artifact review supplied with verification authority. No material contract delta requiring another unchanged review.
+- [x] P.C2CIII-implement Independent bounded P1 PASS at `8a3b24631728a0c3eebddf946401e3e9f70aa6c7`, parent `7f80fc4dbf9d720a34b9b3e5c89ab05ffff41037`. Three selected source paths only. Executed critical17/17, composition4/4 and supplementary diagnostics2/2. Reviewed/reused current author terminal75/send51/public-question21/core33 by revision and assertion scope. [Conformance, charges, separate cleanup and proof limits](slices/03c2c-iii-terminal-edits.md#independent-affected-verdict---2026-11-03). No full C2 claim.
 - [ ] P.C2CIII-public Mandatory dependent P2 actual public fixed-origin client proof for BOTH edits, per-copy receipts/fault/stop/restart/stale cases in linked brief, before full C2. Not deferred to C3.
-- Lifecycle: existing path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action combined review. Preparation 294 gross plus source upper 240 gives 534 against 600. Final expected-RED run: 75 tests, 3 PASS / 72 RED, no cancelled/skipped. Assertion limits and separate cleanup in brief. No cleanup due, existing owner/unknown work preserved.
+- Lifecycle: existing path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action report bounded P1 verdict, no automatic P2 preparation. Actual preparation294 plus source204 =498 gross/10 paths before verification docs, within source306 and packet600 ceilings. Historical expected-RED evidence retained below. Owned fixture cleanup PASS separately, no worktree cleanup due. Existing owner/unknown work preserved. Mandatory uncreated P2 blocks full C2, C3/live/human/feature/release remain unpassed.
 
 ## C2c-ii status display core - bounded PASS
 
