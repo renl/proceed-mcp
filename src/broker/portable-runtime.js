@@ -134,9 +134,14 @@ export async function startPortableRuntime({
       poller = createPortableTelegramPoller({ broker, telegram, logger, traffic });
       poller.start();
       // Question display is equally a private transport concern: it starts after
-      // the same local readiness and only when the client can actually send. Its
-      // own failures never withdraw local readiness.
-      if (typeof telegram.sendMessage === 'function') {
+      // the same local readiness and only when the client can actually send and
+      // perform both terminal edits. Its own failures never withdraw local readiness,
+      // and an incomplete UI client leaves the broker in local-only operation.
+      if (
+        typeof telegram.sendMessage === 'function' &&
+        typeof telegram.editMessageReplyMarkup === 'function' &&
+        typeof telegram.editMessageText === 'function'
+      ) {
         presentation = createPortablePresentationWorker({ broker, telegram, logger, traffic });
         presentation.start();
       }

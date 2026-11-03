@@ -125,12 +125,14 @@ export function createTelegramClient({ token, timeoutMs = TELEGRAM_REQUEST_TIMEO
       return call('answerCallbackQuery', payload, timeoutMs, signal);
     },
 
-    async editMessageText(payload) {
-      return call('editMessageText', payload);
+    // Both terminal edit methods carry the worker's abort signal like a send, so a
+    // stop reaches a retirement or status request that is already in flight.
+    async editMessageText(payload, { signal } = {}) {
+      return call('editMessageText', payload, timeoutMs, signal);
     },
 
-    async editMessageReplyMarkup(payload) {
-      return call('editMessageReplyMarkup', payload);
+    async editMessageReplyMarkup(payload, { signal } = {}) {
+      return call('editMessageReplyMarkup', payload, timeoutMs, signal);
     },
   };
 }

@@ -1,8 +1,10 @@
 // Portable Telegram approval-question presentation (design section 5, C2). This
-// worker displays one eligible pending request per mapped question and records
-// only presentation receipts: it never records a human decision, never edits a
-// message and grants no new authority. Every send uses a freshly serialized
-// preparation for the identity the scan selected, never other snapshot data.
+// worker displays one eligible pending request per mapped question, retires the
+// controls of each terminal copy and shows that copy's captured terminal status.
+// It records only presentation evidence: it never records a human decision and
+// grants no new authority. Every send uses a freshly serialized preparation for
+// the identity the scan selected, never other snapshot data, and every terminal
+// edit is derived from the committed work entry it was admitted for.
 import { renderPortableRequestMessage } from './portable-render.js';
 
 const SCAN_INTERVAL_MS = 1000;
@@ -34,14 +36,32 @@ const keyboard = (token) => ({
 
 const positive = (value) => Number.isSafeInteger(value) && value > 0;
 
+// A platform object is plain data: an array, a Date or any other prototype-bearing
+// instance is not a Message or a chat, whatever fields it happens to carry.
+const plain = (value) =>
+  value !== null &&
+  typeof value === 'object' &&
+  (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+
+// Work scopes: a send belongs to one request, while each terminal edit belongs to
+// one mapped request-message tuple, so a blocked or retrying copy never delays or
+// releases a sibling copy of the same request.
+const sendScope = (requestId) => `send:${requestId}`;
+const editScope = (requestId, chatId, messageId) => `edit:${requestId}:${chatId}:${messageId}`;
+
 // A send result is admitted only as a complete accessible Message whose private
 // numeric chat equals the snapshot chat; extra fields carry no authority.
 function accessibleMessage(value, chatId) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!plain(value) || !plain(value.chat)) return false;
   if (!positive(value.message_id) || !positive(value.date)) return false;
   const chat = value.chat;
-  if (chat === null || typeof chat !== 'object' || Array.isArray(chat)) return false;
   return chat.type === 'private' && positive(chat.id) && String(chat.id) === chatId;
+}
+
+// A terminal edit must answer for the tuple it addressed, not merely for its chat:
+// a valid Message for another copy is neither a retirement nor a display.
+function accessibleEdit(value, chatId, messageId) {
+  return accessibleMessage(value, chatId) && value.message_id === messageId;
 }
 
 // `traffic` is the process-local Telegram traffic fence shared with the update
@@ -54,16 +74,25 @@ export function createPortablePresentationWorker({
   logger = () => {},
   traffic = null,
 } = {}) {
+  // Both selected writers and both edit methods are construction requirements: a
+  // worker that could not retire controls or show a status would leave terminal
+  // copies actionable forever.
   const needed = [
     'presentationWork',
     'preparePresentation',
     'recordPresentationSent',
     'recordPresentationFailed',
+    'recordControlsRetired',
+    'recordStatusShown',
   ];
   if (needed.some((name) => typeof broker?.[name] !== 'function')) {
     throw new TypeError('a presentation worker needs a recovered portable broker');
   }
-  if (typeof telegram?.sendMessage !== 'function') {
+  if (
+    typeof telegram?.sendMessage !== 'function' ||
+    typeof telegram?.editMessageReplyMarkup !== 'function' ||
+    typeof telegram?.editMessageText !== 'function'
+  ) {
     throw new TypeError('a presentation worker needs a Telegram client');
   }
   if (typeof logger !== 'function') {
@@ -72,9 +101,9 @@ export function createPortablePresentationWorker({
 
   const controller = new AbortController();
   const { signal } = controller;
-  const waiting = new Map(); // request id -> one scheduled retry
-  const ladder = new Map(); // request id -> transient failures already completed
-  const blocked = new Set(); // request id -> definitive rejection for this process
+  const waiting = new Map(); // work scope -> one scheduled retry
+  const ladder = new Map(); // work scope -> transient failures already completed
+  const blocked = new Set(); // work scope -> definitive rejection for this process
   let stopped = false;
   let diagnostic = null;
   let pass = null;
@@ -137,53 +166,53 @@ export function createPortablePresentationWorker({
     ['TOKEN_REJECTED', { code: 'rejected', credential: true }],
   ]);
 
-  // One actual failed attempt: the receipt records only the classification, a
-  // definitive rejection blocks its own request until restart, and a classified
-  // transient failure joins the per-request ladder.
-  const failed = async (requestId, callbackToken, error) => {
+  // One actual failed attempt for one work scope: `receipt` is the presentation
+  // failure record a send attempt owns, and it is absent for an edit, which never
+  // writes presentation or delivery state. A definitive rejection blocks only its
+  // own scope until restart and a classified transient failure joins that scope's
+  // ladder, so sibling tuples and requests stay independently eligible.
+  const failed = async (scope, error, receipt) => {
     if (error?.code === 'CANCELLED') return;
     const classification = FAILURES.get(error?.code);
     if (classification === undefined) {
       end(PROCESSING_STOPPED);
       return;
     }
-    try {
-      await broker.recordPresentationFailed({
-        requestId,
-        callbackToken,
-        errorCode: classification.code,
-      });
-    } catch (cause) {
-      end(fault(cause));
-      return;
+    if (receipt !== null) {
+      try {
+        await broker.recordPresentationFailed({ ...receipt, errorCode: classification.code });
+      } catch (cause) {
+        end(fault(cause));
+        return;
+      }
     }
     // The admitted failure write always drains, but a stop taken while it was held
-    // still fences it: no new timer, scan or send follows that completion.
+    // still fences it: no new timer, scan or attempt follows that completion.
     if (stopped) return;
     if (classification.credential === true) {
       ceaseCredential();
       return;
     }
     if (classification.blocked !== undefined) {
-      // This request stays blocked for this process while its siblings, in this
+      // This scope stays blocked for this process while its siblings, in this
       // pass and in later scans, remain eligible for their own attempts.
-      blocked.add(requestId);
+      blocked.add(scope);
       report(classification.blocked);
       return;
     }
-    const completed = ladder.get(requestId) ?? 0;
-    ladder.set(requestId, completed + 1);
+    const completed = ladder.get(scope) ?? 0;
+    ladder.set(scope, completed + 1);
     const rung = LADDER_MS[Math.min(completed, LADDER_MS.length - 1)];
     const floor =
       Number.isInteger(error?.retryAfter) && error.retryAfter >= 0 ? error.retryAfter * 1000 : 0;
     const timer = setTimeout(
       () => {
-        waiting.delete(requestId);
+        waiting.delete(scope);
         scan();
       },
       Math.max(rung, floor),
     );
-    waiting.set(requestId, timer);
+    waiting.set(scope, timer);
   };
 
   // One admitted attempt for one selected request: a fresh serialized preparation
@@ -218,7 +247,7 @@ export function createPortablePresentationWorker({
         { signal },
       );
     } catch (error) {
-      await failed(requestId, callbackToken, error);
+      await failed(sendScope(requestId), error, { requestId, callbackToken });
       return;
     }
     const errorCode = accessibleMessage(message, chatId) ? null : 'invalid_response';
@@ -240,18 +269,96 @@ export function createPortablePresentationWorker({
     if (errorCode !== null) end(INVALID_RESPONSE);
   };
 
-  // One sequential pass over one work snapshot: only the request identity is taken
-  // from it, and a request with a scheduled retry or a definitive rejection of its
-  // own is skipped until it is eligible again.
+  // One admitted terminal edit for one copied request-message tuple (design section
+  // 5, C2c). The copied entry decides the method, the exact payload and the captured
+  // receipt, so no attempt can retire another copy or claim a pair the ledger no
+  // longer holds. A failure of either kind leaves this copy's receipts unfinished and
+  // never rewrites presentation or delivery state.
+  const edit = async (entry) => {
+    const requestId = entry?.request_id;
+    const chatId = entry?.chat_id;
+    const messageId = entry?.message_id;
+    const decisionId = entry?.decision_id;
+    const isStatus = entry?.kind === 'status';
+    if (
+      typeof requestId !== 'string' ||
+      typeof chatId !== 'string' ||
+      !positive(messageId) ||
+      typeof decisionId !== 'string' ||
+      (isStatus ? typeof entry.delivery_state !== 'string' : entry?.kind !== 'controls')
+    ) {
+      end(PROCESSING_STOPPED);
+      return;
+    }
+    if (stopped) return;
+    // The captured entry is the whole rendering input: the payload carries only the
+    // addressed tuple and, for a status, the exact portable rendering of the copied
+    // request this admission was derived from.
+    const payload = isStatus
+      ? {
+          chat_id: chatId,
+          message_id: messageId,
+          text: renderPortableRequestMessage(entry.request),
+        }
+      : { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } };
+    let result;
+    try {
+      result = isStatus
+        ? await telegram.editMessageText(payload, { signal })
+        : await telegram.editMessageReplyMarkup(payload, { signal });
+    } catch (error) {
+      await failed(editScope(requestId, chatId, messageId), error, null);
+      return;
+    }
+    if (!accessibleEdit(result, chatId, messageId)) {
+      // An obtained but unusable success result proves nothing about this copy: it
+      // stays unfinished and only this tuple is blocked for this process.
+      blocked.add(editScope(requestId, chatId, messageId));
+      report(INVALID_RESPONSE);
+      return;
+    }
+    // A valid result still enters its own writer after a stop, and the core decides
+    // whether the captured pair is current. A discarded, repeated or unmatched
+    // observation is not completion: the next scan rederives work from committed state.
+    try {
+      if (isStatus) {
+        await broker.recordStatusShown({
+          requestId,
+          chatId,
+          messageId,
+          decisionId,
+          deliveryState: entry.delivery_state,
+        });
+      } else {
+        await broker.recordControlsRetired({ requestId, chatId, messageId, decisionId });
+      }
+    } catch (error) {
+      end(fault(error));
+    }
+  };
+
+  // One sequential pass over one work snapshot: only the identity of a send and the
+  // copied entry of an edit are taken from it, and work whose own scope has a
+  // scheduled retry or a definitive rejection is skipped until it is eligible again.
   const drain = async () => {
     const work = broker.presentationWork();
-    for (const entry of Array.isArray(work?.sends) ? work.sends : []) {
+    const sends = Array.isArray(work?.sends) ? work.sends : [];
+    const edits = Array.isArray(work?.edits) ? work.edits : [];
+    for (const entry of sends) {
       const requestId = entry?.request_id;
       if (stopped) return;
-      if (typeof requestId !== 'string' || blocked.has(requestId) || waiting.has(requestId)) {
-        continue;
-      }
+      if (typeof requestId !== 'string') continue;
+      const scope = sendScope(requestId);
+      if (blocked.has(scope) || waiting.has(scope)) continue;
       await send(requestId);
+    }
+    // Terminal edits follow the sends of the same pass, so no send and no edit of
+    // another copy overlaps one admitted edit, and a copy is never offered both kinds.
+    for (const entry of edits) {
+      if (stopped) return;
+      const scope = editScope(entry?.request_id, entry?.chat_id, entry?.message_id);
+      if (blocked.has(scope) || waiting.has(scope)) continue;
+      await edit(entry);
     }
   };
 
