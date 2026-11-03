@@ -8,10 +8,17 @@ import { admitCallbackUpdate, admitTextUpdate } from './portable-admission.js';
 import { renderPortableHumanOutcome } from './portable-render.js';
 
 const PAIR = /^\/pair ([0-9a-f]{32})$/;
-// A pairing attempt that fails the exact grammar is still intent: the doubled space,
-// trailing data or newline, bot suffix, uppercase code, tab and prefixed form stay
-// silent instead of falling through as response text.
-const PAIR_INTENT = /\/pair/;
+// Pairing intent is a command-position classification of the whole raw message, not a
+// search for `/pair` anywhere in its content: after any initial Unicode White_Space the
+// first delimited token must be exactly `/pair` or begin `/pair@`. A doubled space,
+// trailing data or newline, bot suffix or uppercase code still reads as intent and stays
+// silent, while a later line, path, prefix or near token stays ordinary content.
+const FIRST_TOKEN = /^\p{White_Space}*([^\p{White_Space}]*)/u;
+const pairIntent = (text) => {
+  if (typeof text !== 'string') return false;
+  const token = FIRST_TOKEN.exec(text)[1];
+  return token === '/pair' || token.startsWith('/pair@');
+};
 const START = '/start';
 // Exact product copy (proposal C3 Product-Copy Annex) for this surface.
 const PAIRED =
@@ -304,9 +311,10 @@ export function createPortableTelegramPoller({
     }
 
     const grammar = typeof text === 'string' ? PAIR.exec(text) : null;
-    // A malformed pairing attempt keeps its own state undisclosed and never falls
-    // through as response text, so this position is consumed alone.
-    if (grammar === null && typeof text === 'string' && PAIR_INTENT.test(text)) {
+    // A command-position pairing attempt that fails the exact grammar still keeps its
+    // own state undisclosed and never falls through as response text, even when the
+    // message carries a valid response-prompt mapping, so it is consumed alone.
+    if (grammar === null && pairIntent(text)) {
       await broker.advanceCursor(id);
       return true;
     }
