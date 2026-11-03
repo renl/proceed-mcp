@@ -37,7 +37,7 @@ async function native(work) {
       b = createPortableBroker({ journal: j, owners: [{ owner_id: 'a', label: 'A' }], port: 43189,
         clock: () => { h.clocks++; if (h.now instanceof Error) throw h.now; return h.now; },
         generateDecisionId: () => 'dec_' + (++h.ids).toString(16).padStart(32, '0'), logger: (...a) => h.logs.push(a) }); },
-    async reopen() { await h.close(); await h.start(); const c = h.clocks; await b.recover(); assert.equal(h.clocks, c); },
+    async reopen(beforeRecover = () => {}) { await h.close(); await h.start(); beforeRecover(); const c = h.clocks; await b.recover(); assert.equal(h.clocks, c); },
     async replace(rows) { await h.close(); await rm(path); const writer = await Journal.open(path);
       try { for (const row of rows) await writer.append(row); } finally { await writer.close(); } await h.start(); },
     async create(mapped = true) { const key = await b.reserveHandle({ ownerId: 'a' });
@@ -65,6 +65,12 @@ async function unchanged(h, action) { const bytes = await h.bytes(), view = h.b.
 async function rejectHistory(h, rows) { await h.replace(rows); const bytes = await h.bytes(), before = h.b.snapshot(), work = h.b.presentationWork(), n = h.count();
   await assert.rejects(h.b.recover(), invalid); assert.deepEqual(h.b.snapshot(), before); assert.deepEqual(await h.bytes(), bytes);
   assert.deepEqual(h.count(), n); assert.deepEqual(h.b.presentationWork(), work); privateAbsent(h, h.logs); }
+test('RO-STARTUP: required initialization timestamp cannot be replaced by null', opts, () => native(async h => {
+  assert.equal((await h.b.status()).broker.started_at, iso(at));
+  let unexpected;
+  try { assert.throws(() => { unexpected = createPortableBroker({ journal: h.j, owners: [{ owner_id: 'a', label: 'A' }],
+    port: 43189, clock: () => NaN }); }, Error); } finally { await unexpected?.close(); }
+}));
 for (const phase of ['writing', 'syncing']) test(`RO-CAL-${phase}: actual producers, flush/fault, wait cleanup and recovery`, opts, () => native(async h => {
   await h.create(); const wait = capture(() => h.b.waitRequest(h.keys[0])); await tick();
   const before = h.b.snapshot(), held = h.hold(phase); let done = false;
@@ -171,9 +177,11 @@ for (const first of [false, true]) test(`RO-REPLAY-POS-cursorFirst=${first}: ent
   const r = record(h, { opened_at: first ? '2026-11-04T00:01:00.999999999Z' : '2026-11-04T00:00:01.000000001+00:00' });
   await h.replace([...prior, first ? [cursor(2), receipt, r] : [receipt, r, cursor(2)]]); h.now = NaN;
   const n = h.count(), bytes = await h.bytes(); await h.b.recover(); assert.equal(h.clocks, n[0]); assert.equal(h.ids, n[1]);
-  assert.equal(h.b.telegramCursor(), 2); assert.deepEqual(await h.bytes(), bytes); await h.reopen();
-  assert.equal(h.b.snapshot().requests[0].resolution, 'pending');
-  if (!first) { h.now = at + 2000; assert.equal((await h.call({ updateId: 3 })).result, 'open'); }
+  assert.equal(h.b.telegramCursor(), 2); assert.deepEqual(await h.bytes(), bytes); const before = h.b.snapshot().requests;
+  h.now = at + 2000; await h.reopen(() => { h.now = NaN; });
+  assert.deepEqual(h.b.snapshot().requests, before); assert.equal(h.b.telegramCursor(), 2);
+  assert.deepEqual(await h.bytes(), bytes); assert.equal(h.b.snapshot().requests[0].resolution, 'pending');
+  h.now = at + 2000; assert.equal((await h.call({ updateId: 3 })).result, 'open');
 }));
 test('RO-REPLAY-EXACT: all fields/raw types, identity/actor/token/tuple and strict recorded time', opts, () => native(async h => {
   await h.create(); const base = await h.rows(), r = record(h);
