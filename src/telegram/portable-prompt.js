@@ -81,17 +81,22 @@ export function createPortablePromptWorker({
   let ticker = null;
   let stopPromise = null;
 
-  // One fixed diagnostic per stopped or blocked condition, logged at most once and
-  // never with an exception argument. A failing log callback never changes that
-  // failure scope and never prevents the drain.
-  const report = (line) => {
-    if (diagnostic !== null) return;
-    diagnostic = line;
+  // A failing log callback never changes the failure scope and never prevents the
+  // drain: the fault is contained at the one place a diagnostic can be written.
+  const log = (line) => {
     try {
       logger(line);
     } catch {
       // A diagnostic callback fault is not a prompt or storage fault.
     }
+  };
+
+  // One fixed diagnostic per stopped or blocked condition, logged at most once and
+  // never with an exception argument.
+  const report = (line) => {
+    if (diagnostic !== null) return;
+    diagnostic = line;
+    log(line);
   };
 
   function clearSchedule() {
@@ -117,11 +122,42 @@ export function createPortablePromptWorker({
 
   // A rejected credential is wider than one prompt, so the shared traffic fence is
   // pulled synchronously here, before the fallible diagnostic log and independently
-  // of whether the failure receipt can be recorded. Local service is preserved.
-  const ceaseCredential = () => {
+  // of whether the failure receipt can be recorded. Local service is preserved. That
+  // fence visits its listeners in registration order, so this worker's own callback
+  // can re-enter the cessation below while later peer transports are still armed:
+  // the diagnostic is installed at once, but its callback waits until the fanout
+  // which reached this worker has finished, so no diagnostic runs ahead of a fence.
+  let pending = false; // credential diagnostic installed, callback not yet attempted
+
+  const announce = () => {
+    if (!pending) return;
+    pending = false;
+    log(CREDENTIAL_STOPPED);
+  };
+
+  const ceaseCredential = (reentrant = false) => {
     halt();
-    traffic?.stop();
-    report(CREDENTIAL_STOPPED);
+    if (diagnostic === null) {
+      diagnostic = CREDENTIAL_STOPPED;
+      pending = true;
+    }
+    if (reentrant) {
+      // Reached through the shared fence itself: its fanout returns synchronously, so
+      // the next microtask is already past every remaining peer listener.
+      queueMicrotask(announce);
+      return;
+    }
+    let orderly = true;
+    try {
+      traffic?.stop();
+    } catch (error) {
+      // Another listener faulted, so this fanout was not shown to finish.
+      orderly = false;
+      throw error;
+    } finally {
+      if (orderly) announce();
+      else queueMicrotask(announce);
+    }
   };
 
   const fault = (error) =>
@@ -293,7 +329,7 @@ export function createPortablePromptWorker({
 
   // A peer consumer's credential rejection reaches this worker as one synchronous
   // admission fence, exactly like its own; a healthy peer never calls it.
-  const fence = () => ceaseCredential();
+  const fence = () => ceaseCredential(true);
   traffic?.add(fence);
 
   return {
