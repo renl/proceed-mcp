@@ -7,6 +7,8 @@ import { Journal } from '../src/journal/journal.js';
 import { readJournal } from '../src/journal/framing.js';
 import { createPortableBroker } from '../src/broker/portable.js';
 import { renderPortableReplyPrompt } from '../src/telegram/portable-render.js';
+import { createPortablePresentationWorker } from '../src/telegram/portable-presentation.js';
+import { createPortableTelegramPoller } from '../src/telegram/portable-poller.js';
 
 const at = Date.parse('2026-11-04T00:00:00Z'), opts = { timeout: 10000 };
 const realTimer = setTimeout, realClear = clearTimeout, turn = () => new Promise(r => setImmediate(r));
@@ -17,38 +19,41 @@ async function native(t, work, load = true) {
   const factory = load ? (await import('../src/telegram/portable-prompt.js')).createPortablePromptWorker : null;
   const root = resolve('.scratch/c3-prompt-worker'); await mkdir(root, { recursive: true });
   const dir = await mkdtemp(join(root, 'run-')), path = join(dir, 'journal.log');
-  let b, j, file, worker, deadline; const releases = [], calls = [], logs = [];
-  const h = { factory, calls, logs, now: at, sync: async () => {}, get b() { return b; },
+  let b, j, file, worker, deadline, sequence = 0; const releases = [], calls = [], logs = [], workers = [];
+  const h = { factory, calls, logs, now: at, sync: async () => {}, write: async (...a) => file.write(...a), get b() { return b; },
+    own(w) { workers.push(w); return w; },
     rows: async () => readJournal(await readFile(path)).transactions.flatMap(x => x.mutations),
     defer() { let release; const promise = new Promise(r => { release = r; }); releases.push(release); return { promise, release }; },
     holdSync() { const entered = h.defer(), held = h.defer();
       h.sync = async () => { entered.release(); await held.promise; }; return { entered: entered.promise, release: held.release }; },
-    async create(opened = true) { const k = await b.reserveHandle({ ownerId: 'a' });
+    async create(opened = true, presented = true) { const index = ++sequence, k = await b.reserveHandle({ ownerId: 'a' });
       h.key = { ownerId: 'a', requestId: k.request_id, capability: k.request_capability };
       await b.createRequest({ ownerId: 'a', requestHandle: k.request_handle, capability: k.request_capability,
-        clientRequestId: 'question', action: 'Question? <&>', context: '', expiresInSeconds: 60 });
+         clientRequestId: 'question', action: 'Question? <&>', context: '', expiresInSeconds: 60 });
+      if (!presented) return b.snapshot().requests.find(r => r.request_id === k.request_id);
       const p = await b.preparePresentation({ requestId: k.request_id });
-      await b.recordPresentationSent({ requestId: k.request_id, callbackToken: p.callback_token, chatId: '81', messageId: 7 });
+      await b.recordPresentationSent({ requestId: k.request_id, callbackToken: p.callback_token, chatId: '81', messageId: 6 + index });
       if (opened) await b.openResponse({ requestId: k.request_id, callbackToken: p.callback_token,
-        chatId: '81', messageId: 7, userId: '71', callbackQueryId: 'private-query', updateId: 2 });
-      return b.snapshot().requests[0]; },
-    start(send = async () => message(), broker = b) {
+        chatId: '81', messageId: 6 + index, userId: '71', callbackQueryId: `private-query-${index}`, updateId: 1 + index });
+      return b.snapshot().requests.find(r => r.request_id === k.request_id); },
+    start(send = async () => message(), broker = b, extra = {}) {
       t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: at });
       worker = factory({ broker, telegram: { sendMessage: (payload, options) => {
-        calls.push({ payload, ...options }); return send(payload, options); } }, logger: line => logs.push(line) });
+         calls.push({ payload, ...options }); return send(payload, options); } }, logger: line => logs.push(line), ...extra });
+      workers.push(worker);
       assert.equal(worker.diagnostic(), null); assert.equal(worker.failed, false);
       assert.equal(worker.start(), undefined); return worker;
     } };
   try {
     j = await Journal.open(path); await j.close(); file = await open(path, 'a');
-    j = new Journal(path, { write: (...a) => file.write(...a), sync: async () => { await h.sync(); await file.sync(); }, close: () => file.close() }, 0);
+    j = new Journal(path, { write: (...a) => h.write(...a), sync: async () => { await h.sync(); await file.sync(); }, close: () => file.close() }, 0);
     b = createPortableBroker({ journal: j, owners: [{ owner_id: 'a', label: 'A' }], port: 43189, clock: () => h.now });
     await b.recover(); const c = await b.pairingChallenge();
     await b.completePairing({ code: c.code, userId: '71', chatId: '81', updateId: 1 }); h.now = at + 1000;
     await Promise.race([work(h), new Promise((_, reject) => { deadline = realTimer(() => reject(Error('fixture deadline')), 7000); })]);
   } finally {
     releases.forEach(release => release()); h.sync = async () => {};
-    try { if (worker) { const p = worker.stop(); assert.equal(worker.stop(), p); await p; assert.equal(worker.stop(), p); } }
+    try { for (const w of workers) { const p = w.stop(); assert.equal(w.stop(), p); await p; assert.equal(w.stop(), p); } }
     finally { t.mock.timers.reset(); realClear(deadline); await b?.close(); await j?.close(); await file?.close().catch(() => {});
       await rm(dir, { recursive: true, force: true }); await assert.rejects(access(dir), { code: 'ENOENT' }); }
   }
@@ -119,4 +124,55 @@ test('PW-DRAIN: admitted valid late Message persists after terminal/stop and wai
   assert.equal(drained, false); assert.deepEqual(h.b.snapshot(), view); held.release(); await stopped;
   assert.equal((await h.rows()).at(-1).op, 'telegram.prompt.sent'); assert.deepEqual(h.b.snapshot(), view);
   t.mock.timers.tick(30000); await turn(); assert.equal(h.calls.length, 1); assert.equal(h.b.telegramCursor(), 2);
+}));
+
+// Test-only replica of the runtime's private one-way fence, with listener accounting.
+// It changes no worker contract and exposes no production testing interface.
+function sharedTraffic() {
+  const listeners = new Set(); let stopped = false;
+  return {
+    get size() { return listeners.size; },
+    stop() { if (stopped) return; stopped = true;
+      for (const listener of [...listeners]) listener(); listeners.clear(); },
+    add(listener) { if (stopped) listener(); else listeners.add(listener); },
+    remove(listener) { listeners.delete(listener); }
+  };
+}
+const cancelled = () => Object.assign(Error('private transport text'), { code: 'CANCELLED' });
+test('PW-CREDENTIAL-ORDER: all real peers fenced before own throwing logger despite actual failed receipt append', opts, t => native(t, async h => {
+  await h.create(); await h.create(false, false);
+  const traffic = sharedTraffic(), sent = h.defer(), peerSignals = [], logStates = [], peerCalls = [];
+  const pendingPeer = (kind, signal) => new Promise((resolve, reject) => {
+    peerCalls.push(kind); peerSignals.push(signal);
+    signal.addEventListener('abort', () => reject(cancelled()), { once: true });
+  });
+  // Deliberately register prompt first. Correct global cessation must not depend
+  // on construction order or defer peer abortion until after this logger runs.
+  const w = h.start(() => sent.promise, h.b, { traffic, logger: (...args) => {
+    logStates.push({ args, aborted: peerSignals.map(signal => signal.aborted) });
+    throw Error('logger must not interrupt global cessation');
+  } });
+  const presentation = h.own(createPortablePresentationWorker({ broker: h.b, traffic,
+    telegram: { sendMessage: (_payload, { signal }) => pendingPeer('presentation', signal),
+      editMessageText() { assert.fail('unexpected edit'); }, editMessageReplyMarkup() { assert.fail('unexpected edit'); } } }));
+  const poller = h.own(createPortableTelegramPoller({ broker: h.b, traffic,
+    telegram: { updates: (_offset, { signal }) => pendingPeer('poller', signal) } }));
+  presentation.start(); poller.start();
+  await until(() => h.calls.length === 1 && peerSignals.length === 2);
+  assert.equal(traffic.size, 3); assert.deepEqual(peerSignals.map(signal => signal.aborted), [false, false]);
+  const before = h.b.snapshot(), rows = await h.rows(); let writeAttempts = 0;
+  h.write = async () => { writeAttempts++; throw Error('actual receipt file write failure'); };
+  sent.release(Promise.reject(Object.assign(Error('secret token URL must not log'), { code: 'TOKEN_REJECTED' })));
+  await until(() => writeAttempts === 1 && peerSignals.every(signal => signal.aborted));
+  const stopped = w.stop(); assert.equal(w.stop(), stopped); await stopped;
+  await presentation.stop(); await poller.stop();
+  assert.equal(h.calls[0].signal.aborted, true); assert.equal(traffic.size, 0);
+  assert.deepEqual(h.b.snapshot(), before); assert.deepEqual(await h.rows(), rows);
+  // Actual storage failure fences local service, unlike credential rejection alone.
+  await assert.rejects(h.b.status(), error => error.code === 'STORAGE_FAILURE');
+  t.mock.timers.tick(120000); await turn(); w.start(); presentation.start(); poller.start();
+  assert.equal(h.calls.length, 1); assert.equal(peerCalls.length, 2); assert.equal(writeAttempts, 1);
+  assert.equal(logStates.length, 1);
+  assert.deepEqual(logStates[0].args, ['Telegram presentation stopped after credential rejection; repair configuration and restart serve']);
+  assert.deepEqual(logStates[0].aborted, [true, true], 'credential fanout MUST finish before fallible own logging, regardless of registration order');
 }));
