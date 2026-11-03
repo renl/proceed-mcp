@@ -36,7 +36,7 @@ export async function telegramFixture() {
       const body = JSON.parse(Buffer.concat(chunks).toString());
       const method = req.url.slice(1);
       calls.push({ method, body });
-      await observe(calls.at(-1));
+      if (await observe(calls.at(-1), res)) return;
       let result = true;
       if (method === 'getMe') result = { id: 99, is_bot: true, first_name: 'Fixture', username: 'fixture_bot' };
       else if (method === 'getUpdates') {
@@ -103,7 +103,7 @@ export function success(outcome) {
   return value;
 }
 
-export async function portable(work, { pair = true, strictProtocol = false, controlledClock = false } = {}) {
+export async function portable(work, { pair = true, strictProtocol = false, controlledClock = false, journalFaults = false } = {}) {
   await mkdir(resolve('.scratch/c3-activation'), { recursive: true });
   const fixture = await telegramFixture();
   const peers = [], connections = [], secrets = [], logs = [];
@@ -161,8 +161,10 @@ export async function portable(work, { pair = true, strictProtocol = false, cont
       preload.searchParams.set('fixture', fixture.address);
       const clockPreload = pathToFileURL(resolve('tests/fixtures/portable-clock-preload.mjs'));
       clockPreload.searchParams.set('clock', clockPath);
+      const faultPreload = pathToFileURL(resolve('tests/fixtures/portable-faults-preload.mjs'));
       const start = (...args) => context.start([process.execPath, '--import', preload.href,
         ...(controlledClock && args[0] === 'serve' ? ['--import', clockPreload.href] : []),
+        ...(journalFaults && args[0] === 'serve' ? ['--import', faultPreload.href] : []),
         executable, ...args, '--state-dir', state]);
       let broker = await start('serve');
       broker.child.stderr.on('data', (b) => logs.push(String(b)));
