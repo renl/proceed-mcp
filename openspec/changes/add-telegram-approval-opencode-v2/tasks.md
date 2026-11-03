@@ -1,5 +1,12 @@
 # Tasks
 
+## C2c-iii terminal edits - preparation
+
+- [ ] P.C2CIII-review [Worker/client/runtime tests and implementation brief](slices/03c2c-iii-terminal-edits.md). Baseline `67db10e07bbeefd3ca7e7629faecd31f6104a7df`, accepted retirement/status and C2b prerequisites present. One combined boundary/decomposition/test-artifact review required before implementation readiness.
+- [ ] P.C2CIII-implement Implement only the three selected source files after accepted review, preserve C2b and validate affected tests independently. Preparation is tests/docs only. No full C2 claim.
+- [ ] P.C2CIII-public Mandatory dependent P2 actual public fixed-origin client proof for BOTH edits, per-copy receipts/fault/stop/restart/stale cases in linked brief, before full C2. Not deferred to C3.
+- Lifecycle: existing path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action combined review. Preparation 294 gross plus source upper 240 gives 534 against 600. Final expected-RED run: 75 tests, 3 PASS / 72 RED, no cancelled/skipped. Assertion limits and separate cleanup in brief. No cleanup due, existing owner/unknown work preserved.
+
 ## C2c-ii status display core - bounded PASS
 
 - [x] P.C2CII-tests [Sole-source binding, exact status journal, serialization races and mandatory public remainder](slices/03c2c-ii-status-core.md). Baseline `0aa6b85e562f4853e95f949344bbf4fbf4955d17`, accepted retirement `3a16fb7f` present. Tests and owned brief/index only, no production edit.

@@ -48,7 +48,9 @@ export async function telegramFixture() {
       } else if (method === 'sendMessage') {
          result = { ...body, message_id: messageId++, date: Math.floor(Date.now() / 1000), chat: { id: 7, type: 'private' } };
         messages.push(result);
-      } else if (!['answerCallbackQuery', 'editMessageText', 'editMessageReplyMarkup'].includes(method)) {
+       } else if (['editMessageText', 'editMessageReplyMarkup'].includes(method)) {
+         result = { message_id: body.message_id, date: Math.floor(Date.now() / 1000), chat: { id: 7, type: 'private' } };
+       } else if (method !== 'answerCallbackQuery') {
         throw Error('unsupported fixture method');
       }
       res.writeHead(200, { 'content-type': 'application/json' });

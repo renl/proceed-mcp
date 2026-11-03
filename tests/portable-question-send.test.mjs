@@ -34,7 +34,9 @@ async function native(t, work, load = true) {
         clientRequestId: 'x', action: 'Question? <&>', context: '', expiresInSeconds: 60 })).request; },
     start(send = async () => message(), broker = b) {
       t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: at });
-      worker = factory({ broker, telegram: { sendMessage: (payload, options) => { calls.push({ payload, ...options }); return send(payload, options); } }, logger: x => logs.push(x) });
+      const inertEdit = async () => { throw new TelegramError('CANCELLED', 'send-only fixture'); };
+      worker = factory({ broker, telegram: { editMessageReplyMarkup: inertEdit, editMessageText: inertEdit,
+        sendMessage: (payload, options) => { calls.push({ payload, ...options }); return send(payload, options); } }, logger: x => logs.push(x) });
       assert.equal(worker.diagnostic(), null); assert.equal(worker.failed, false); assert.equal(worker.start(), undefined); return worker;
     } };
   try {
@@ -70,8 +72,8 @@ test('C2B-CAL-TIMERS: native mock covers both scheduling primitives and Date', o
 });
 test('C2B-DEPENDENCIES: selected factory rejects missing dependencies', opts, async () => {
   const { createPortablePresentationWorker: factory } = await import('../src/telegram/portable-presentation.js');
-  const broker = Object.fromEntries(['presentationWork', 'preparePresentation', 'recordPresentationSent', 'recordPresentationFailed'].map(k => [k, () => {}]));
-  for (const name of Object.keys(broker)) assert.throws(() => factory({ broker: { ...broker, [name]: null }, telegram: { sendMessage() {} } }), TypeError);
+  const broker = Object.fromEntries(['presentationWork', 'preparePresentation', 'recordPresentationSent', 'recordPresentationFailed', 'recordControlsRetired', 'recordStatusShown'].map(k => [k, () => {}]));
+  for (const name of ['presentationWork', 'preparePresentation', 'recordPresentationSent', 'recordPresentationFailed']) assert.throws(() => factory({ broker: { ...broker, [name]: null }, telegram: { sendMessage() {}, editMessageReplyMarkup() {}, editMessageText() {} } }), TypeError);
   for (const args of [undefined, {}, { broker }, { broker, telegram: {} }]) assert.throws(() => factory(args), TypeError);
 });
 test('C2B-SEND: prepare flush before exact payload, one admitted send, receipt is not approval', opts, t => native(t, async h => {
@@ -126,7 +128,8 @@ for (const throws of [false, true]) test(`C2B-CREDENTIAL-001-diagnostic-${throws
 test('C2B-FRESH: snapshot only selects request_id, preparation supplies all actual send data', opts, t => native(t, async h => {
   const request = await h.create(); let scans = 0;
   const broker = { presentationWork() { scans++; return { sends: [{ request_id: request.request_id, chat_id: 'evil', callback_token: 'evil', request: {} }] }; },
-    preparePresentation: a => h.b.preparePresentation(a), recordPresentationSent: a => h.b.recordPresentationSent(a), recordPresentationFailed: a => h.b.recordPresentationFailed(a) };
+    preparePresentation: a => h.b.preparePresentation(a), recordPresentationSent: a => h.b.recordPresentationSent(a), recordPresentationFailed: a => h.b.recordPresentationFailed(a),
+    recordControlsRetired: a => h.b.recordControlsRetired(a), recordStatusShown: a => h.b.recordStatusShown(a) };
   h.start(undefined, broker); await until(() => h.calls.length === 1); assert.equal(h.calls[0].payload.chat_id, '81');
   assert.match(h.calls[0].payload.text, /Question\? <&>/); await until(() => h.b.snapshot().requests[0].telegram_state === 'sent');
   assert.equal(scans, 1);

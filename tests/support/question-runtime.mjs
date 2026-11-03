@@ -35,6 +35,8 @@ export async function questionRuntime(work) {
       defer() { let release; const promise = new Promise(r => { release = r; }); releases.push(release); return { promise, release }; },
       sync(fn) { syncHook = fn; },
       async start(telegram, logger = () => {}) {
+        if (telegram !== null) telegram = { editMessageReplyMarkup: async () => { throw Object.assign(new Error('send-only fixture'), { code: 'CANCELLED' }); },
+          editMessageText: async () => { throw Object.assign(new Error('send-only fixture'), { code: 'CANCELLED' }); }, ...telegram };
         runtime = await startPortableRuntime({ paths, config, telegram, logger: line => { logs.push(line); logger(line); } });
         const b = runtime.broker, c = await b.pairingChallenge();
         await b.completePairing({ code: c.code, userId: '71', chatId: '81', updateId: 1 });
