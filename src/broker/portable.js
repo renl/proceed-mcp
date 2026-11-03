@@ -61,6 +61,14 @@
 // truthful without rewriting the decision, and a repeated identical tuple is an
 // observation rather than another append.
 //
+// A controls retirement is the first durable per-copy terminal edit fact: one
+// mapped request message is marked as having had its keyboard removed, bound to
+// the immutable terminal decision and carrying no instant, deadline or ledger
+// change. It is derived as work only for a terminal request's mapped request
+// messages whose own retirement is absent, so a copy is offered once, a repeat
+// is an observation, and a later status receipt must build on it. Recovery
+// replays it as a per-tuple transition of the committed history.
+//
 // A wait is an attached, non-durable observation of one request: admission,
 // duplicate refusal and the deadline check share the serialized turn, but the
 // turn is released before a future outcome is awaited. Every terminal writer
@@ -174,6 +182,10 @@ const SENT_OP = 'telegram.presentation.sent';
 const FAILED_OP = 'telegram.presentation.failed';
 const SENT_FIELDS = ['callback_token', 'chat_id', 'message_id', 'op', 'request_id', 'sent_at'];
 const FAILED_FIELDS = ['callback_token', 'error_code', 'failed_at', 'op', 'request_id'];
+// A controls retirement is one mapped request message and its terminal decision,
+// with no instant: it is a transition, not a timed receipt.
+const RETIRED_OP = 'telegram.controls.retired';
+const RETIRED_FIELDS = ['chat_id', 'decision_id', 'message_id', 'op', 'request_id'];
 // A failure is reported only as one of these redacted classes, never as a
 // platform description.
 const FAILURE_CODES = new Set(['unavailable', 'rate_limited', 'rejected', 'invalid_response']);
@@ -325,10 +337,45 @@ function failedFields(input) {
   return { requestId, callbackToken, errorCode };
 }
 
+// The retirement arguments are the raw tuple plus the immutable decision, each
+// validated without coercion before admission: a chat is the existing lossless
+// decimal identity, a message id is a positive safe integer, and the two
+// identifiers are the committed spellings, never trimmed or repaired.
+function retiredFields(input) {
+  if (!isPlainObject(input)) throw invalidArgument(`${RETIRED_OP} expects an argument object`);
+  const { requestId, chatId, messageId, decisionId } = input;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw invalidArgument(`${RETIRED_OP} needs a well-formed request identifier`);
+  }
+  if (identityProblem(chatId) !== null)
+    throw invalidArgument(`${RETIRED_OP} needs a decimal chat id`);
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw invalidArgument(`${RETIRED_OP} needs a positive safe-integer message id`);
+  }
+  if (typeof decisionId !== 'string' || !DECISION_ID_PATTERN.test(decisionId)) {
+    throw invalidArgument(`${RETIRED_OP} needs a well-formed decision identifier`);
+  }
+  return { requestId, chatId, messageId, decisionId };
+}
+
 // A chat message is one durable address across every role, so its two raw values
 // are joined by a separator neither admitted domain can contain.
 function mappingKey(chatId, messageId) {
   return `${chatId}:${messageId}`;
+}
+
+// One mapped chat message and the role it plays for that request. A request
+// message is the only role so far, and a response prompt is a later, separate
+// role, so no retirement can target a tuple that is not the request's own
+// message. The per-copy retirement flag is the durable transition itself.
+function requestMapping(requestId, chatId, messageId) {
+  return {
+    request_id: requestId,
+    role: 'request',
+    chat_id: chatId,
+    message_id: messageId,
+    retired: false,
+  };
 }
 
 // The common request representation of design section 3, rebuilt as a fresh
@@ -744,6 +791,37 @@ function readFailed(mutation) {
   };
 }
 
+// A retirement decodes from exactly its five persisted fields: the mapped tuple,
+// its terminal request and that request's recorded decision. It has no instant of
+// its own, so no recovery clock can be derived for it or compared against it.
+function readRetired(mutation) {
+  exactFields(mutation, RETIRED_FIELDS);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw integrity(`${RETIRED_OP} has a malformed request id`);
+  }
+  if (identityProblem(mutation.chat_id) !== null) {
+    throw integrity(`${RETIRED_OP} has a malformed chat id`);
+  }
+  const messageId = mutation.message_id;
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw integrity(`${RETIRED_OP} needs a positive safe-integer message id`);
+  }
+  const decisionId = mutation.decision_id;
+  if (typeof decisionId !== 'string' || !DECISION_ID_PATTERN.test(decisionId)) {
+    throw integrity(`${RETIRED_OP} has a malformed decision id`);
+  }
+  return {
+    kind: 'retired',
+    record: {
+      request_id: requestId,
+      chat_id: mutation.chat_id,
+      message_id: messageId,
+      decision_id: decisionId,
+    },
+  };
+}
+
 // A closure decodes from exactly its five persisted fields: only the window and
 // the installed resolution differ between expiry and cancellation.
 function readClosure(mutation, op) {
@@ -857,6 +935,8 @@ function readMutation(mutation) {
       return readSent(mutation);
     case FAILED_OP:
       return readFailed(mutation);
+    case RETIRED_OP:
+      return readRetired(mutation);
     default:
       throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
   }
@@ -1055,7 +1135,7 @@ function stageSent(record, staged) {
   if (staged.mappings.has(key)) {
     throw integrity(`${SENT_OP} maps an already mapped chat message`);
   }
-  staged.mappings.set(key, record.request_id);
+  staged.mappings.set(key, requestMapping(record.request_id, record.chat_id, record.message_id));
   request.mapped = true;
   request.telegram_state = 'sent';
 }
@@ -1082,6 +1162,27 @@ function stageFailed(record, staged) {
   request.lastFailureAt = record.failedAt;
   request.lastFailureCode = record.error_code;
   if (!request.mapped) request.telegram_state = 'failed';
+}
+
+// A retirement applies in array order against staged state: it names one
+// committed terminal request with that recorded decision and one of that
+// request's own mapped request messages, and it happens once per tuple. It
+// never resolves, re-identifies or re-ledgers the request.
+function stageRetired(record, staged) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${RETIRED_OP} names no committed request`);
+  if (request.resolution === 'pending') throw integrity(`${RETIRED_OP} targets a pending request`);
+  if (request.decision_id !== record.decision_id) {
+    throw integrity(`${RETIRED_OP} does not match the recorded decision`);
+  }
+  const mapping = staged.mappings.get(mappingKey(record.chat_id, record.message_id));
+  if (mapping === undefined) throw integrity(`${RETIRED_OP} names no mapped request message`);
+  if (mapping.role !== 'request') throw integrity(`${RETIRED_OP} targets a non-request tuple`);
+  if (mapping.request_id !== record.request_id) {
+    throw integrity(`${RETIRED_OP} names another request's message`);
+  }
+  if (mapping.retired) throw integrity(`${RETIRED_OP} is recorded twice`);
+  mapping.retired = true;
 }
 
 // A closure resolves one pending request and spends its decision identity once
@@ -1306,6 +1407,7 @@ class PortableBroker {
         } else if (record.kind === 'presentation') stagePresentation(record.record, staged);
         else if (record.kind === 'sent') stageSent(record.record, staged);
         else if (record.kind === 'failed') stageFailed(record.record, staged);
+        else if (record.kind === 'retired') stageRetired(record.record, staged);
         else if (record.kind === 'cursor') cursorRecords.push(record);
         else pairingRecords.push(record);
       }
@@ -1475,6 +1577,22 @@ class PortableBroker {
     });
   }
 
+  // Records one successful keyboard retirement for one mapped request message
+  // (design section 5, C2c). The raw tuple and decision are validated before
+  // admission, while the binding — a committed terminal request with that recorded
+  // decision, that exact mapped request message and that mapping's own request — is
+  // decided inside the serialized turn. An unknown, stale, pending, foreign,
+  // non-request or already retired binding is a non-disclosing result that samples
+  // no clock and appends nothing. A new retirement flushes before it is installed,
+  // and nothing here expires, re-ledgers or re-identifies the request.
+  recordControlsRetired(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = retiredFields(input);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#recordRetired(fields));
+    });
+  }
+
   // Allocates one durable presentation token for a committed request (design
   // section 5, C2a-i). A malformed, unknown or unused-reservation id is the same
   // non-disclosing null as an absent one, and no argument matrix is invented for
@@ -1497,11 +1615,13 @@ class PortableBroker {
   }
 
   // Synchronous copied view of the committed presentation work (design section 5,
-  // C2a-i/ii): one send per unresolved request that has no mapping yet, carrying
-  // its frozen snapshot chat, its allocated token, the latest failure class and a
-  // fresh request copy. A mapped or terminal request contributes nothing, because a
-  // message already known to be delivered is exactly what routine sending must not
-  // repeat. It samples no clock and owns no edit work at this cut.
+  // C2a-i/ii and C2c). Sends cover one send per unresolved request that has no
+  // mapping yet, carrying its frozen snapshot chat, its allocated token, the latest
+  // failure class and a fresh request copy. Controls edits cover one retirement per
+  // mapped request message of a terminal request whose own retirement receipt is
+  // still absent, so a copy is offered once and copied state can never be
+  // mistaken for committed work. No status work exists at this cut, so no tuple is
+  // ever offered both kinds. It samples no clock.
   presentationWork() {
     return {
       sends: [...this.#requests.values()]
@@ -1513,7 +1633,22 @@ class PortableBroker {
           request: requestView(request),
           last_failure_code: request.lastFailureCode,
         })),
-      edits: [],
+      edits: [...this.#mappings.values()]
+        .filter((mapping) => mapping.role === 'request' && !mapping.retired)
+        .flatMap((mapping) => {
+          const request = this.#requests.get(mapping.request_id);
+          if (request === undefined || request.resolution === 'pending') return [];
+          return [
+            {
+              kind: 'controls',
+              request_id: request.request_id,
+              chat_id: mapping.chat_id,
+              message_id: mapping.message_id,
+              decision_id: request.decision_id,
+              request: requestView(request),
+            },
+          ];
+        }),
     };
   }
 
@@ -2124,7 +2259,7 @@ class PortableBroker {
     if (request.pairing_snapshot.chat_id !== chatId) return null;
     const key = mappingKey(chatId, messageId);
     const owner = this.#mappings.get(key);
-    if (owner !== undefined) return owner === requestId ? requestView(request) : null;
+    if (owner !== undefined) return owner.request_id === requestId ? requestView(request) : null;
     const sampled = sentTime(this.#clock);
     if (request.preparedAt === null || compareInstants(sampled.instant, request.preparedAt) < 0) {
       throw storageFailure(`${SENT_OP} would precede its allocation`, 'STORAGE_FAILURE');
@@ -2139,7 +2274,7 @@ class PortableBroker {
         sent_at: sampled.text,
       },
     ]);
-    this.#mappings.set(key, requestId);
+    this.#mappings.set(key, requestMapping(requestId, chatId, messageId));
     request.mapped = true;
     request.telegram_state = 'sent';
     this.#logger('portable.presentation.sent', { request_id: requestId });
@@ -2190,6 +2325,50 @@ class PortableBroker {
       if (error?.code === 'STORAGE_FAILURE') throw error;
       throw storageFailure(
         'the presentation receipt could not be committed',
+        'STORAGE_FAILURE',
+        error,
+      );
+    }
+  }
+
+  // One serialized retirement turn (design section 5, C2c). The target, its
+  // terminal decision, the tuple role and the tuple's owning request are re-read
+  // from installed state, so a caller's claim can neither adopt another request's
+  // message nor retire a pending one. A retired tuple is the current copied
+  // request without an append or a clock sample; a new one appends exactly one
+  // clock-free mutation and installs the transition only after its flush.
+  async #recordRetired({ requestId, chatId, messageId, decisionId }) {
+    const request = this.#requests.get(requestId);
+    if (request === undefined || request.resolution === 'pending') return null;
+    if (request.decision_id !== decisionId) return null;
+    const mapping = this.#mappings.get(mappingKey(chatId, messageId));
+    if (mapping === undefined || mapping.role !== 'request') return null;
+    if (mapping.request_id !== requestId) return null;
+    if (mapping.retired) return { retired: false, request: requestView(request) };
+    await this.#appendControlsRetired([
+      {
+        op: RETIRED_OP,
+        request_id: requestId,
+        chat_id: chatId,
+        message_id: messageId,
+        decision_id: decisionId,
+      },
+    ]);
+    mapping.retired = true;
+    this.#logger('portable.controls.retired', { request_id: requestId });
+    return { retired: true, request: requestView(request) };
+  }
+
+  // A retirement's only write path: #append has already installed the fence for an
+  // uncertain commit, and a failure without the storage classification is wrapped
+  // so no caller can mistake it for a refusal it may retry.
+  async #appendControlsRetired(mutations) {
+    try {
+      await this.#append(mutations);
+    } catch (error) {
+      if (error?.code === 'STORAGE_FAILURE') throw error;
+      throw storageFailure(
+        'the controls retirement could not be committed',
         'STORAGE_FAILURE',
         error,
       );
