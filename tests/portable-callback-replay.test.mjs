@@ -152,7 +152,7 @@ const badRecords = [
   ['early', r => { r.resolved_at = iso(at); }], ['deadline-equal', r => { r.resolved_at = iso(at + 61000); }],
   ['text-on-callback', r => { r.response_text = 'yes'; }], ['responded-callback', r => { r.resolution = 'responded'; r.response_text = 'yes'; }],
   ['bad-delivery', r => { r.delivery_state = 'returned'; }],
-  ...['reply', 'command', 'unknown'].map(kind => [`unsupported-${kind}`, r => { r.source.kind = kind; }]),
+  ...['reply', 'command', 'unknown'].map(kind => [`invalid-${kind}-with-approved-callback-fields`, r => { r.source.kind = kind; }]),
 ];
 test('CR-EXACT: schema, raw types, UTC lifetime, actor and source binding', opts, () => native(async h => {
   await h.create(); const base = await h.rows();
