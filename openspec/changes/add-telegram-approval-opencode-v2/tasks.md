@@ -1,5 +1,13 @@
 # Tasks
 
+## C3d-i prompt-sent role/work core - bounded next checkpoint
+
+- [x] P.C3DI-tests [Prompt-sent exact selected API, executable tests and sole-source brief](slices/03c3d-i-prompt-sent.md). Baseline `05477f63dc3dd98758e7ca451a67dc0a39fa2237`, accepted opening/restoration present. Sent/role/work first, failure next, then text and activation. No invariant dropped or full Respond claim.
+- [ ] P.C3DI-review ONE combined normative-journal/role-work, decomposition and test-artifact review. Triggers1/4/5YES,2/3NO. Source upper280 gross, complete packet hard600 including preparation and independent evidence. Separate implementation authorization required.
+- [ ] P.C3DI-source Sole source `src/broker/portable.js`, selected `recordPromptSent` and `responseWork` only, plus necessary existing request-receipt role check. Actual prompt producer must prove callback/edit role exclusion. No public activation or prompt-failure support.
+- [ ] P.C3DII-failure Mandatory unprepared/unexecuted `recordPromptFailed` replay/writer and private redacted failure state, before text/public completion. Exact contract and remaining gates in linked brief.
+- Preparation Node24.22.2 final17:2 calibration PASS/15 expected RED, exit1,0 cancelled/skipped/todo. Missing APIs/op block downstream proof. Actual256 gross/3 paths, source upper280 plus verification40 totals576 under600. Cheap gates/links and owned run cleanup PASS separately. Lifecycle: existing `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action ONE combined review, not automatic implementation. Preserve owner/unknown work. No C3/live/human/feature/release acceptance.
+
 ## C3c Respond opening - bounded next checkpoint
 
 - Independent opening assertions PASS at `9af0c54be61847f4e201fcff8b81c3002c62b192`, complete candidate BLOCKED by nullable startup metadata conflicting with design3. Executed21/21 opening and64/64 critical controls, current author21/21 and affected512/512 reviewed/reused. [Exact deviation, correction route, evidence and limits](slices/03c3c-response-opening.md#independent-affected-verdict---2026-11-04).
