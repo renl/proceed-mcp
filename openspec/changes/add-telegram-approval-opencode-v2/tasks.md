@@ -3,10 +3,10 @@
 ## C3 first callback-core - bounded replay then writer
 
 - [x] P.C3A-tests [Callback replay foundation and sole-source implementation brief](slices/03c3a-callback-replay.md). Baseline `1fca2b175e1e3b8bf99ec24dc222652dc206aee0`, accepted C2 source/breadth present. Tests/owned docs only. Safe ordered replay-foundation then writer split, one existing change/PR, no partial promotion or public decisions.
-- [ ] P.C3A-review ONE combined persisted-journal/decomposition/test-artifact review. Triggers1/4/5YES,2/3NO. No implementation readiness before review and separate source authorization. Sole source `src/broker/portable.js`, ceiling280 gross, packet600 including preparation and verification evidence.
-- [ ] P.C3A-verify Implement and independently verify callback replay before successor writer preparation. Required source-only intermediate keeps public decision unavailability. Exact persisted initial ledger and transaction-entry cursor rules in linked brief.
+- [x] P.C3A-review Combined persisted-journal/decomposition/test-artifact approval supplied with independent-verification authority. Triggers1/4/5YES,2/3NO. Sole source `src/broker/portable.js`, ceiling280 gross, packet600 including preparation and verification evidence. No material contract drift found requiring repeated review.
+- [x] P.C3A-verify Independent replay-foundation PASS at `6c48e74e3679adf62adff91d20d95259dbf98061`, parent `ac2afed92d21d19391187fd117fe2ae97901ee31`. Executed18/18, reviewed/reused author18/18 and affected422/422. [Conformance, failure disclosure, cleanup and limits](slices/03c3a-callback-replay.md#independent-affected-verdict---2026-11-04). Decoder only, no callback writer or human-outcome acceptance.
 - [ ] P.C3B-writer Mandatory separately prepared actual `resolveCallback` writer/flush/cursor/wake/ledger/closure-race proof after verified C3a. No injected human history substitutes. Public activation/Respond/live human acceptance remain separate mandatory gates.
-- Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action combined review. Owned native fixture cleanup only, preserve owner/unknown state, no worktree removal. RED evidence and actual packet accounting in linked brief.
+- Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action separately authorized C3b writer/wake preparation against verified C3a. Owned native fixture cleanup PASS, preserve owner/unknown state, no worktree removal. No automatic preparation, activation, archive or promotion.
 
 ## C2c-P2 four remaining public proof blockers
 
