@@ -1,5 +1,14 @@
 # Tasks
 
+## C3e-B text writers - bounded preparation
+
+- [x] P.C3EB-tests [Exact reply/command writer tests and sole-source brief](slices/03c3e-b-text-writers.md). Baseline `f9dcb80f1b74c2ca9cf3b180ddb5be6182b554e5`, accepted text replay `e7eebae0794f52c32fc8ebe62e62d01b532fc123` present. Real producers and Journal barriers, no production edits.
+- [ ] P.C3EB-review ONE combined persisted-contract/decomposition/test-artifact review requested. Triggers1/4/5YES,2/3NO. Sole later source `src/broker/portable.js`, SOURCE CEILING230 gross, complete packet hard600 including preparation and independent verification. No automatic implementation authorization.
+- [ ] P.C3EB-source Selected `resolveReply` / `resolveCommand` and exact result union in linked brief. Reply derives request only from prompt, command requires explicit null/positive context, no unknown-context fallback. Shared private implementation optional. No raw consumer, prompt delivery, HTTP route, Events or B delivery changes.
+- [ ] P.C3EB-verify Independent affected writer/storage verification after separately authorized source. Missing APIs currently block all text-writer assertions. Raw admission/grammar, ForceReply worker/client, public original-call outcomes and separately authorized Telegram/live-human first use remain mandatory.
+- Final preparation:40 tests,2 calibration PASS/38 expected RED, exit1,0 cancelled/skipped/todo. Missing APIs block downstream proof. Preparation276 gross/3 paths plus source upper230 =506, with verification22 reserve gives528 under600. Owned native run cleanup, cheap static/format policy, links and whitespace PASS separately. Evidence/limits in linked slice.
+- Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next action combined review after preparation evidence below. Owned native run cleanup separate from assertions, no worktree removal, preserve owner/unknown work. No C3/live/human/feature/release acceptance.
+
 ## C3e-A text replay - bounded preparation
 
 - [x] P.C3EA-tests [Exact replay-only tests and sole-source brief](slices/03c3e-a-text-replay.md). Baseline8004c8c7, accepted callback/open/prompt through7d149ef8 present. Implementation-owned future reply/command bindings recorded, NOT tested or implemented in A.
