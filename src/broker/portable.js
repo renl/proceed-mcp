@@ -214,6 +214,11 @@ const OPEN_FIELDS = [
   'update_id',
   'user_id',
 ];
+// A successful response prompt is the admitted tuple of one sent prompt message:
+// the request whose window it serves, the frozen snapshot chat, that message and
+// its own instant. It adds a prompt role and never a resolution or public state.
+const PROMPT_SENT_OP = 'telegram.prompt.sent';
+const PROMPT_SENT_FIELDS = ['chat_id', 'message_id', 'op', 'request_id', 'sent_at'];
 // A controls retirement is one mapped request message and its terminal decision,
 // with no instant: it is a transition, not a timed receipt.
 const RETIRED_OP = 'telegram.controls.retired';
@@ -551,6 +556,24 @@ function openFields(input) {
   return { requestId, callbackToken, messageId, userId, chatId, callbackQueryId, updateId };
 }
 
+// Prompt-receipt arguments are the raw tuple only: the owning request, the
+// frozen snapshot chat and the returned prompt message. Validation happens
+// before the queue, so a malformed value is a caller error that samples no clock
+// and appends nothing.
+function promptFields(input) {
+  if (!isPlainObject(input)) throw invalidArgument(`${PROMPT_SENT_OP} expects an argument object`);
+  const { requestId, chatId, messageId } = input;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw invalidArgument(`${PROMPT_SENT_OP} needs a well-formed request identifier`);
+  }
+  if (identityProblem(chatId) !== null)
+    throw invalidArgument(`${PROMPT_SENT_OP} needs a decimal chat id`);
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw invalidArgument(`${PROMPT_SENT_OP} needs a positive safe-integer message id`);
+  }
+  return { requestId, chatId, messageId };
+}
+
 // A chat message is one durable address across every role, so its two raw values
 // are joined by a separator neither admitted domain can contain.
 function mappingKey(chatId, messageId) {
@@ -571,6 +594,14 @@ function requestMapping(requestId, chatId, messageId) {
     retired: false,
     shown: null,
   };
+}
+
+// A response prompt is the second role of one chat-scoped address: it maps one
+// sent prompt message to the request whose response window it serves. It is
+// never a request message, so no retirement, display or decision can target it,
+// and it carries no retirement or display marker of its own.
+function promptMapping(requestId, chatId, messageId) {
+  return { request_id: requestId, role: 'prompt', chat_id: chatId, message_id: messageId };
 }
 
 // The marker a status receipt leaves on one copy: the last pair this tuple is
@@ -1247,6 +1278,37 @@ function readOpen(mutation) {
   };
 }
 
+// A prompt receipt decodes from exactly its five persisted fields: the owning
+// request, the frozen snapshot chat, the returned prompt message and its instant.
+// It has no token and no decision, and the binding to an opened response window
+// is validated against staged state.
+function readPromptSent(mutation) {
+  exactFields(mutation, PROMPT_SENT_FIELDS);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw integrity(`${PROMPT_SENT_OP} has a malformed request id`);
+  }
+  if (identityProblem(mutation.chat_id) !== null) {
+    throw integrity(`${PROMPT_SENT_OP} has a malformed chat id`);
+  }
+  const messageId = mutation.message_id;
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw integrity(`${PROMPT_SENT_OP} needs a positive safe-integer message id`);
+  }
+  const sentAt = readInstant(mutation.sent_at);
+  if (sentAt === null) throw integrity(`${PROMPT_SENT_OP} has a malformed receipt time`);
+  return {
+    kind: 'prompt',
+    record: {
+      request_id: requestId,
+      chat_id: mutation.chat_id,
+      message_id: messageId,
+      sent_at: mutation.sent_at,
+      sentAt,
+    },
+  };
+}
+
 // One Telegram update id is stored exactly as delivered: a raw nonnegative safe
 // integer whose next offset is also safe, so no string, fraction or coercion can
 // become an offset. The same predicate guards the writer and the replay decoder,
@@ -1296,6 +1358,8 @@ function readMutation(mutation) {
       return readPresentation(mutation);
     case OPEN_OP:
       return readOpen(mutation);
+    case PROMPT_SENT_OP:
+      return readPromptSent(mutation);
     case SENT_OP:
       return readSent(mutation);
     case FAILED_OP:
@@ -1769,6 +1833,29 @@ function stageOpen(record, staged, pairing) {
   request.openedAt = record.openedAt;
 }
 
+// A prompt receipt applies in array order against staged state: it names one
+// committed request whose own opening is already in this history, the frozen
+// snapshot chat, and a chat-scoped tuple no role has mapped yet. Its instant is
+// at or after that retained opening and is never bounded by the deadline, so an
+// admitted late result is durable without reopening the window. It adds the
+// prompt role only: no resolution, decision, public state or request flag moves.
+function stagePromptSent(record, staged) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${PROMPT_SENT_OP} names no committed request`);
+  if (request.openedAt === null) throw integrity(`${PROMPT_SENT_OP} precedes its response opening`);
+  if (request.pairing_snapshot.chat_id !== record.chat_id) {
+    throw integrity(`${PROMPT_SENT_OP} does not match the snapshot chat`);
+  }
+  if (compareInstants(record.sentAt, request.openedAt) < 0) {
+    throw integrity(`${PROMPT_SENT_OP} precedes its response opening`);
+  }
+  const key = mappingKey(record.chat_id, record.message_id);
+  if (staged.mappings.has(key)) {
+    throw integrity(`${PROMPT_SENT_OP} maps an already mapped chat message`);
+  }
+  staged.mappings.set(key, promptMapping(record.request_id, record.chat_id, record.message_id));
+}
+
 // First evidence is recorded once per kind against one known terminal request
 // and its already recorded decision identity: it never resolves or re-identifies
 // anything. The recorded time is bounded only by the resolution, and the two
@@ -1967,6 +2054,7 @@ class PortableBroker {
           stageEvidence(record, staged);
         } else if (record.kind === 'presentation') stagePresentation(record.record, staged);
         else if (record.kind === 'sent') stageSent(record.record, staged);
+        else if (record.kind === 'prompt') stagePromptSent(record.record, staged);
         else if (record.kind === 'failed') stageFailed(record.record, staged);
         else if (record.kind === 'retired') stageRetired(record.record, staged);
         else if (record.kind === 'status') stageStatusShown(record.record, staged);
@@ -2174,6 +2262,23 @@ class PortableBroker {
     });
   }
 
+  // Records one actual successful prompt send for an opened response window
+  // (design section 5, C3d). The raw tuple is validated before admission, while
+  // the binding is decided inside the serialized turn: an unknown or unopened
+  // request, a foreign snapshot chat and a tuple already held by another request
+  // or by the request role are all the same non-disclosing null that samples no
+  // clock and appends nothing. Repeating this request's own prompt tuple is that
+  // request's current copy without an append. A new prompt samples once, must not
+  // precede the retained opening, flushes before its mapping exists, and neither
+  // resolves the request nor changes its public Telegram or delivery state.
+  recordPromptSent(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = promptFields(input);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#recordPromptSent(fields));
+    });
+  }
+
   // Allocates one durable presentation token for a committed request (design
   // section 5, C2a-i). A malformed, unknown or unused-reservation id is the same
   // non-disclosing null as an absent one, and no argument matrix is invented for
@@ -2246,6 +2351,34 @@ class PortableBroker {
           last_failure_code: request.lastFailureCode,
         })),
       edits: [...controls, ...statuses],
+    };
+  }
+
+  // Synchronous copied view of the response windows that still need a prompt
+  // (design section 5, C3d). One logical item is derived per opened, still-pending
+  // request with no successful prompt mapping, carrying that request's frozen
+  // snapshot chat and a fresh common copy; terminal and already prompted requests
+  // contribute nothing and no private failure state is exposed. It samples no
+  // clock and is not network admission: the external send must recheck deadline,
+  // health and snapshot inside serialization before it sends.
+  responseWork() {
+    const prompted = new Set();
+    for (const mapping of this.#mappings.values()) {
+      if (mapping.role === 'prompt') prompted.add(mapping.request_id);
+    }
+    return {
+      prompts: [...this.#requests.values()]
+        .filter(
+          (request) =>
+            request.resolution === 'pending' &&
+            request.openedAt !== null &&
+            !prompted.has(request.request_id),
+        )
+        .map((request) => ({
+          request_id: request.request_id,
+          chat_id: request.pairing_snapshot.chat_id,
+          request: requestView(request),
+        })),
     };
   }
 
@@ -2879,16 +3012,21 @@ class PortableBroker {
 
   // One serialized sent-receipt turn (design section 5, C2a-ii). An unknown or
   // unallocated target, a mismatched token or a foreign snapshot chat is a
-  // non-disclosing null, and an already mapped identical tuple is the current copied
-  // view without a clock sample or append. A new tuple samples once, must not
-  // precede the allocation, and installs its mapping and state only after the flush.
+  // non-disclosing null, and an already mapped identical request tuple is the
+  // current copied view without a clock sample or append; a tuple this request
+  // does not hold as its request message is never adopted. A new tuple samples
+  // once, must not precede the allocation, and installs its mapping and state
+  // only after the flush.
   async #recordSent({ requestId, callbackToken, chatId, messageId }) {
     const request = this.#requests.get(requestId);
     if (request === undefined || request.callback_token !== callbackToken) return null;
     if (request.pairing_snapshot.chat_id !== chatId) return null;
     const key = mappingKey(chatId, messageId);
     const owner = this.#mappings.get(key);
-    if (owner !== undefined) return owner.request_id === requestId ? requestView(request) : null;
+    if (owner !== undefined) {
+      const mine = owner.role === 'request' && owner.request_id === requestId;
+      return mine ? requestView(request) : null;
+    }
     const sampled = sentTime(this.#clock);
     if (request.preparedAt === null || compareInstants(sampled.instant, request.preparedAt) < 0) {
       throw storageFailure(`${SENT_OP} would precede its allocation`, 'STORAGE_FAILURE');
@@ -2942,6 +3080,51 @@ class PortableBroker {
     if (!request.mapped) request.telegram_state = 'failed';
     this.#logger('portable.presentation.failed', { request_id: requestId });
     return requestView(request);
+  }
+
+  // One serialized prompt-sent turn (design section 5, C3d). The target, its
+  // durable opening, the frozen snapshot chat and the global tuple are re-read
+  // from installed state, so an unopened request, a foreign chat and a tuple held
+  // by another request or by the request role keep the caller's non-disclosing
+  // null. Repeating this request's own prompt tuple is the current copied view
+  // without a clock sample or append. A new prompt samples once, must not precede
+  // the opening instant retained from history, and installs its mapping only
+  // after the flush. An uncertain commit fences the journal and fails the live
+  // wait exactly as every other receipt does; success wakes nothing.
+  async #recordPromptSent({ requestId, chatId, messageId }) {
+    const request = this.#requests.get(requestId);
+    if (request === undefined || request.openedAt === null) return null;
+    if (request.pairing_snapshot.chat_id !== chatId) return null;
+    const key = mappingKey(chatId, messageId);
+    const existing = this.#mappings.get(key);
+    if (existing !== undefined) {
+      const mine = existing.role === 'prompt' && existing.request_id === requestId;
+      return mine ? { sent: false, request: requestView(request) } : null;
+    }
+    const sampled = sentTime(this.#clock);
+    if (compareInstants(sampled.instant, request.openedAt) < 0) {
+      throw storageFailure(
+        `${PROMPT_SENT_OP} would precede its response opening`,
+        'STORAGE_FAILURE',
+      );
+    }
+    try {
+      await this.#appendReceipt([
+        {
+          op: PROMPT_SENT_OP,
+          request_id: requestId,
+          chat_id: chatId,
+          message_id: messageId,
+          sent_at: sampled.text,
+        },
+      ]);
+    } catch (error) {
+      this.#waiters.fail([requestId], error);
+      throw error;
+    }
+    this.#mappings.set(key, promptMapping(requestId, chatId, messageId));
+    this.#logger('portable.prompt.sent', { request_id: requestId });
+    return { sent: true, request: requestView(request) };
   }
 
   // A receipt's only write path: an append that did not already carry the storage
