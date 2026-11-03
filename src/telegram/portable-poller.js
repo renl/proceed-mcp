@@ -7,12 +7,13 @@
 
 const PAIR = /^\/pair ([0-9a-f]{32})$/;
 const START = '/start';
-const PAIRED = 'Paired. Approval requests are not available in this setup stage yet.';
+const PAIRED =
+  'Paired. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.';
 const REFUSED = 'Pairing was not accepted. Ask the operator for a fresh code.';
 const ONBOARD =
   'To pair, ask the operator for a pairing code. Send /pair <code> here before it expires.';
 const ONBOARD_PAIRED =
-  'You are paired with this local broker. Approval requests are not available in this setup stage yet.';
+  'You are paired with this local broker. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.';
 // The fixed ladder repeats its last step; a platform retry_after is honoured
 // when it is longer.
 const LADDER = [1000, 2000, 4000, 8000, 16000, 30000];

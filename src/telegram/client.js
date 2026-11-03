@@ -19,6 +19,12 @@ export class TelegramError extends Error {
   }
 }
 
+// UI sends and edits answer 403/404 for a target this bot cannot address, which is
+// a definite rejection of that operation rather than proof that the configured
+// credential was rejected. Polling and callback acknowledgement keep the
+// credential classification, and a 401 is always a credential answer.
+const UI_METHODS = new Set(['sendMessage', 'editMessageText', 'editMessageReplyMarkup']);
+
 export function createTelegramClient({ token, timeoutMs = TELEGRAM_REQUEST_TIMEOUT_MS }) {
   if (typeof token !== 'string' || token === '') {
     throw new TelegramError('TOKEN_MISSING', 'no Telegram bot token is configured');
@@ -67,7 +73,7 @@ export function createTelegramClient({ token, timeoutMs = TELEGRAM_REQUEST_TIMEO
               finish(null, body.result);
               return;
             }
-            finish(envelopeError(response.statusCode, body));
+            finish(envelopeError(response.statusCode, body, UI_METHODS.has(method)));
           });
         },
       );
@@ -133,7 +139,7 @@ function unavailable(message = 'the Telegram platform could not be reached') {
   return new TelegramError('TELEGRAM_UNAVAILABLE', message, { retryable: true });
 }
 
-function envelopeError(status, body) {
+function envelopeError(status, body, ui = false) {
   const description =
     typeof body?.description === 'string' ? body.description.slice(0, 200) : 'unsupported';
   const retryAfter = Number.isInteger(body?.parameters?.retry_after)
@@ -150,7 +156,7 @@ function envelopeError(status, body) {
       },
     );
   }
-  if (status === 401 || status === 403 || status === 404) {
+  if (status === 401 || ((status === 403 || status === 404) && !ui)) {
     return new TelegramError('TOKEN_REJECTED', 'the configured Telegram bot token was rejected', {
       status,
     });

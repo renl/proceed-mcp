@@ -17,6 +17,7 @@ import { startExpirySchedule } from './expiry-schedule.js';
 import { createPortableBroker } from './portable.js';
 import { createPortableServer } from './portable-server.js';
 import { createPortableTelegramPoller } from '../telegram/portable-poller.js';
+import { createPortablePresentationWorker } from '../telegram/portable-presentation.js';
 
 // One token-backed poller exists only when the assembly supplies a Telegram
 // client. Its absence is local-only operation, not a degraded readiness state.
@@ -46,6 +47,7 @@ export async function startPortableRuntime({
   let server = null;
   let schedule = null;
   let poller = null;
+  let presentation = null;
   try {
     const control = await readLocalCredential(
       paths.controlCredentialFile,
@@ -102,10 +104,18 @@ export async function startPortableRuntime({
     if (telegram !== null) {
       poller = createPortableTelegramPoller({ broker, telegram, logger });
       poller.start();
+      // Question display is equally a private transport concern: it starts after
+      // the same local readiness and only when the client can actually send. Its
+      // own failures never withdraw local readiness.
+      if (typeof telegram.sendMessage === 'function') {
+        presentation = createPortablePresentationWorker({ broker, telegram, logger });
+        presentation.start();
+      }
     }
   } catch (error) {
     // Nothing may outlive a failed start: close only this invocation's own
     // listener, journal activity and ownership record, then report the cause.
+    await presentation?.stop().catch(() => {});
     await poller?.stop().catch(() => {});
     await schedule?.stop().catch(() => {});
     await server?.close().catch(() => {});
@@ -133,6 +143,9 @@ export async function startPortableRuntime({
         // in-flight poll/reply transport and drains its admitted core turn
         // before the authority closes, while scheduling keeps its own drain.
         await poller?.stop().catch(() => {});
+        // Question display drains next, so an already-admitted send completes and
+        // its receipt installs before the authority closes.
+        await presentation?.stop().catch(() => {});
         // Scheduling stops next, so a queued attempt settles before any close.
         await schedule.stop();
         await server.close().catch(() => {});
