@@ -21,8 +21,10 @@ export class TelegramError extends Error {
 
 // UI sends and edits answer 403/404 for a target this bot cannot address, which is
 // a definite rejection of that operation rather than proof that the configured
-// credential was rejected. Polling and callback acknowledgement keep the
-// credential classification, and a 401 is always a credential answer.
+// credential was rejected. A 409 on those same methods is likewise a refusal of
+// this one operation, not a competing poller. Polling and callback acknowledgement
+// keep the credential and poll-conflict classification, and a 401 is always a
+// credential answer.
 const UI_METHODS = new Set(['sendMessage', 'editMessageText', 'editMessageReplyMarkup']);
 
 export function createTelegramClient({ token, timeoutMs = TELEGRAM_REQUEST_TIMEOUT_MS }) {
@@ -144,10 +146,13 @@ function unavailable(message = 'the Telegram platform could not be reached') {
 function envelopeError(status, body, ui = false) {
   const description =
     typeof body?.description === 'string' ? body.description.slice(0, 200) : 'unsupported';
+  // The envelope's API error code is read independently of the HTTP status so a
+  // rate, credential or conflict answer classifies by what it actually reports.
+  const apiCode = Number.isInteger(body?.error_code) ? body.error_code : null;
   const retryAfter = Number.isInteger(body?.parameters?.retry_after)
     ? body.parameters.retry_after
     : null;
-  if (retryAfter !== null || body?.error_code === 429) {
+  if (retryAfter !== null || apiCode === 429 || status === 429) {
     return new TelegramError(
       'TELEGRAM_RATE_LIMITED',
       'the Telegram platform asked this bot to slow down',
@@ -158,20 +163,29 @@ function envelopeError(status, body, ui = false) {
       },
     );
   }
-  if (status === 401 || ((status === 403 || status === 404) && !ui)) {
+  if (status === 401 || apiCode === 401 || ((status === 403 || status === 404) && !ui)) {
     return new TelegramError('TOKEN_REJECTED', 'the configured Telegram bot token was rejected', {
-      status,
-    });
-  }
-  if (status === 409) {
-    // A webhook or a second poller owns this bot's updates.
-    return new TelegramError('POLLER_CONFLICT', 'another consumer owns this bot updates', {
       status,
     });
   }
   if (status >= 500) {
     return new TelegramError('TELEGRAM_UNAVAILABLE', 'the Telegram platform is unavailable', {
       retryable: true,
+      status,
+    });
+  }
+  if (ui && (status === 409 || apiCode === 409)) {
+    // A definite refusal of this one send or edit. The platform wording is not a
+    // trustworthy cause, so it never reaches the diagnostic: only this fixed text.
+    return new TelegramError(
+      'TELEGRAM_REJECTED',
+      'the Telegram platform refused this message operation',
+      { status },
+    );
+  }
+  if (status === 409) {
+    // A webhook or a second poller owns this bot's updates.
+    return new TelegramError('POLLER_CONFLICT', 'another consumer owns this bot updates', {
       status,
     });
   }
