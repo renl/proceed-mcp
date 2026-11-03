@@ -20,6 +20,7 @@ import { readOwnerCredential } from '../state/owner-credentials.js';
 import { resolveStateDir, statePaths } from '../state/paths.js';
 import { addOrigin, addOwner, initializeState, loadPortableConfiguration } from '../state/store.js';
 import { createTelegramClient } from '../telegram/client.js';
+import { renderPortableHumanOutcome } from '../telegram/portable-render.js';
 import { PAIRING_CODE_PATTERN, isPlainObject, isUtcTimestamp } from '../util/values.js';
 import { parseArguments, requireOptions } from './args.js';
 
@@ -43,7 +44,7 @@ const USAGE = [
   '',
   'The Telegram token is read from the environment, never from state or arguments.',
   'This checkpoint runs portable schema 2 setup: init, owner add, pair, serve, mcp and status.',
-  'Local waiting and Telegram question display are available. Human approvals, rejections and responses are not recorded in this setup stage yet.',
+  'Local waiting, Telegram question display and paired-human Approve, Reject and Respond are available. Respond text is instructions, not approval.',
   '`mcp` prepares real request authority through the running broker; request_approval creates',
   'or replays one request and waits for its resolution. When the token is set, `serve` consumes',
   'private-chat pairing updates and sends each approval question to the paired chat.',
@@ -144,12 +145,12 @@ async function runInit(argv, { stdout, env }) {
       '  3. proceed-mcp mcp --owner <owner_id>   (stdio MCP for that transport principal;',
       '     prepare_approval reserves real request authority through the running broker, and',
       '     request_approval creates that one request and waits for its resolution, expiry or',
-      '     cancellation; a configured serve consumes pairing messages only, so no request',
-      '     is presented and no human decision is recorded from Telegram yet)',
+      '     cancellation, and a configured serve presents that question in the paired private',
+      '     chat and records that human Approve, Reject or Respond)',
       '  4. proceed-mcp serve starts the loopback broker and "status" reports it.',
       '     "pair" obtains a one-use code from that running broker for private-chat pairing;',
-      '     retry and request delivery are later checkpoints that report their operation as',
-      '     unavailable rather than pretending to succeed.',
+      '     retry remains a later checkpoint that reports its operation as unavailable rather',
+      '     than pretending to succeed.',
       '',
     ].join('\n'),
   );
@@ -354,6 +355,7 @@ async function runMcp(argv, { env }) {
 // non-approval closure. Nothing here claims Events, delivery or approval.
 const NEXT_ACTION = {
   pending: 'wait for the pending Telegram presentation; it is not yet sent',
+  sent: 'wait for the paired human to select Approve, Reject or Respond',
   expired: 'create a new approval request if approval is still needed',
   approved: 'review the recorded resolution and its delivery state before relying on it',
   rejected: 'review the recorded resolution and its delivery state before relying on it',
@@ -361,10 +363,20 @@ const NEXT_ACTION = {
   cancelled: 'create a new approval request if approval is still needed',
 };
 
+// Selected presentation notes (proposal C3 Product-Copy Annex): the note follows the
+// recorded presentation state, never token presence or a presumed receipt.
+const PRESENTATION_NOTE = {
+  pending: 'Presentation is still pending: not yet sent, and no decision was recorded.',
+  sent: 'Telegram accepted a question message. Human receipt is not confirmed, and no decision was recorded.',
+  failed:
+    'A Telegram presentation attempt failed. No successful message mapping is recorded, and no decision was recorded.',
+};
+
 function pendingNote(request) {
-  return request.telegram_state === 'pending'
-    ? '  Presentation is still pending: not yet sent, and no decision was recorded.'
-    : '  No decision was recorded; review the recorded Telegram state above.';
+  const note =
+    PRESENTATION_NOTE[request.telegram_state] ??
+    'No decision was recorded; review the recorded Telegram state above.';
+  return `  ${note}`;
 }
 
 // Next action for a pending request depends on the reported presentation state, so an
@@ -373,8 +385,9 @@ function nextActionFor(request) {
   if (request.resolution !== 'pending') {
     return NEXT_ACTION[request.resolution] ?? 'review the recorded state above';
   }
-  return request.telegram_state === 'pending'
-    ? NEXT_ACTION.pending
+  if (request.telegram_state === 'pending') return NEXT_ACTION.pending;
+  return request.telegram_state === 'sent'
+    ? NEXT_ACTION.sent
     : 'review the recorded Telegram and delivery state above';
 }
 
@@ -398,6 +411,10 @@ function describeRequest(request) {
   if (request.resolution === 'expired') {
     lines.push('  Expired is a non-approval outcome: this request closed without a decision.');
   }
+  // One shared recorded-outcome composition: the committed resolution selects the
+  // prefix and the current ledger the suffix, so status restates no second wording.
+  const outcome = renderPortableHumanOutcome(request.resolution, request.delivery_state);
+  if (outcome !== null) lines.push(`  ${outcome}`);
   lines.push(`  next action: ${nextActionFor(request)}`);
   return lines.join('\n');
 }

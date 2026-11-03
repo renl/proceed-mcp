@@ -18,13 +18,14 @@ import { createPortableBroker } from './portable.js';
 import { createPortableServer } from './portable-server.js';
 import { createPortableTelegramPoller } from '../telegram/portable-poller.js';
 import { createPortablePresentationWorker } from '../telegram/portable-presentation.js';
+import { createPortablePromptWorker } from '../telegram/portable-prompt.js';
 
-// One private, process-local Telegram traffic fence shared by the two owned
-// consumers. A rejected credential observed by either of them stops all outbound
+// One private, process-local Telegram traffic fence shared by the three owned
+// consumers. A rejected credential observed by any of them stops all outbound
 // Telegram traffic; the local broker, its readiness, status, cancellation, waiting
-// and expiry are deliberately outside this fence. Both admission fences run
-// synchronously inside stop(), so a held drain on one side never leaves the other
-// side admitting scans, polls, sends, replies, acknowledgements or retries.
+// and expiry are deliberately outside this fence. All three admission fences run
+// synchronously inside stop(), so a held drain on one side never leaves another
+// side admitting scans, polls, sends, replies, prompts, acknowledgements or retries.
 function createTelegramTrafficFence() {
   const listeners = new Set();
   let stopped = false;
@@ -76,6 +77,7 @@ export async function startPortableRuntime({
   let schedule = null;
   let poller = null;
   let presentation = null;
+  let prompt = null;
   try {
     const control = await readLocalCredential(
       paths.controlCredentialFile,
@@ -145,13 +147,22 @@ export async function startPortableRuntime({
         presentation = createPortablePresentationWorker({ broker, telegram, logger, traffic });
         presentation.start();
       }
+      // A response prompt is one plain-text send with a ForceReply affordance, so
+      // this third consumer depends on sendMessage alone and not on the two-edit
+      // presentation gate above. Its own failures never withdraw local readiness.
+      if (typeof telegram.sendMessage === 'function') {
+        prompt = createPortablePromptWorker({ broker, telegram, logger, traffic });
+        prompt.start();
+      }
     }
   } catch (error) {
-    // Nothing may outlive a failed start: both owned Telegram consumers are fenced
-    // synchronously first, then only this invocation's own listener, journal
+    // Nothing may outlive a failed start: all three owned Telegram consumers are
+    // fenced synchronously first, then only this invocation's own listener, journal
     // activity and ownership record are closed before the cause is reported.
     const pollerDrain = poller?.stop();
     const presentationDrain = presentation?.stop();
+    const promptDrain = prompt?.stop();
+    await promptDrain?.catch(() => {});
     await presentationDrain?.catch(() => {});
     await pollerDrain?.catch(() => {});
     await schedule?.stop().catch(() => {});
@@ -175,11 +186,12 @@ export async function startPortableRuntime({
     stop() {
       if (stopPromise !== null) return stopPromise;
       stopping = true;
-      // Both owned Telegram consumers are fenced synchronously, before either drain
-      // is awaited: a held poll turn cannot admit a later scan or send, and a held
-      // receipt write cannot admit a later poll, reply or acknowledgement.
+      // All three owned Telegram consumers are fenced synchronously, before either
+      // drain is awaited: a held poll turn cannot admit a later scan or send, and a
+      // held receipt write cannot admit a later poll, reply, prompt or acknowledgement.
       const pollerDrain = poller?.stop();
       const presentationDrain = presentation?.stop();
+      const promptDrain = prompt?.stop();
       stopPromise = (async () => {
         // Update consumption drains first: it fences new sends, aborts actual
         // in-flight poll/reply transport and drains its admitted core turn
@@ -188,6 +200,9 @@ export async function startPortableRuntime({
         // Question display drains next, so an already-admitted send completes and
         // its receipt installs before the authority closes.
         await presentationDrain?.catch(() => {});
+        // Response prompts drain next, so an already-admitted prompt send still
+        // records its valid late result before the authority closes.
+        await promptDrain?.catch(() => {});
         // Scheduling stops next, so a queued attempt settles before any close.
         await schedule.stop();
         await server.close().catch(() => {});

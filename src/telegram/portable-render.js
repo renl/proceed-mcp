@@ -53,6 +53,31 @@ function requestLines(request, resolution, deliveryState) {
   ];
 }
 
+// Exact recorded-human-outcome composition (proposal C3 Product-Copy Annex). The
+// prefix follows the committed resolution and the suffix the current ledger, so no
+// UI success or assumed receipt selects the wording; anything else yields null.
+export const HUMAN_OUTCOME_PREFIX = Object.freeze({
+  approved: 'Approval recorded.',
+  rejected: 'Rejection recorded. This does not authorize the action.',
+  responded: 'Instructions recorded, not approval.',
+});
+
+export const DELIVERY_OUTCOME_SUFFIX = Object.freeze({
+  pending: 'Delivery is pending, not confirmed.',
+  returned:
+    'The adapter reported writing the result to the original call. Receipt is not confirmed.',
+  confirmed: 'Receipt acknowledged by a request-capability holder.',
+  unavailable:
+    'Automatic delivery is unavailable. Authorized retrieval requires the retained request capability.',
+  blocked: 'Delivery is blocked. Ask the operator to check proceed-mcp status.',
+});
+
+export function renderPortableHumanOutcome(resolution, deliveryState) {
+  if (!Object.hasOwn(HUMAN_OUTCOME_PREFIX, resolution)) return null;
+  if (!Object.hasOwn(DELIVERY_OUTCOME_SUFFIX, deliveryState)) return null;
+  return `${HUMAN_OUTCOME_PREFIX[resolution]} ${DELIVERY_OUTCOME_SUFFIX[deliveryState]}`;
+}
+
 export function renderPortableRequestMessage(request) {
   return requestLines(request, request.resolution, request.delivery_state).join('\n');
 }

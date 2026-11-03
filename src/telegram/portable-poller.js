@@ -1,19 +1,36 @@
-// Portable Telegram update consumption (design section 5, C1). The only
+// Portable Telegram update consumption (design section 5, C1-C3). The only
 // production poller: it reads the fixed-origin client, admits one exact private
-// pairing attempt through the journal-2 core, and mints no approval authority.
-// Every durable effect belongs to the core turn for that update, so a reply is
-// sent only after the transaction that justifies it has flushed, a failed reply
-// never replays it, and a callback is dismissed neutrally, never resolved.
+// update through the journal-2 core, and mints no approval authority. Every durable
+// effect belongs to the core turn for that update, so a reply or acknowledgement
+// follows its flushed transaction, a failed UI call never replays it, and every copy
+// below is selected from the committed result.
+import { admitCallbackUpdate, admitTextUpdate } from './portable-admission.js';
+import { renderPortableHumanOutcome } from './portable-render.js';
 
 const PAIR = /^\/pair ([0-9a-f]{32})$/;
+// A pairing attempt that fails the exact grammar is still intent: the doubled space,
+// trailing data or newline, bot suffix, uppercase code, tab and prefixed form stay
+// silent instead of falling through as response text.
+const PAIR_INTENT = /\/pair/;
 const START = '/start';
+// Exact product copy (proposal C3 Product-Copy Annex) for this surface.
 const PAIRED =
-  'Paired. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.';
+  'Paired. Approval questions can be sent to this chat. Select Approve, Reject or Respond on a request. Respond text is instructions, not approval.';
 const REFUSED = 'Pairing was not accepted. Ask the operator for a fresh code.';
 const ONBOARD =
   'To pair, ask the operator for a pairing code. Send /pair <code> here before it expires.';
 const ONBOARD_PAIRED =
-  'You are paired with this local broker. Approval questions can be sent to this chat. Approve, Reject and Respond are not recorded in this setup stage yet.';
+  'You are paired with this local broker. Select Approve, Reject or Respond on an approval request. Respond text is instructions, not approval.';
+// A refusal discloses nothing about any request, and never a private outcome.
+const UNAVAILABLE = 'This request is not available.';
+const EXPIRED =
+  'This request expired. No new choice was recorded. A new request is needed if approval is still required.';
+const CANCELLED =
+  'This request was cancelled. No new choice was recorded. A new request is needed if approval is still required.';
+const RESOLVED = 'This request is already resolved. The recorded outcome is unchanged.';
+const GUIDANCE =
+  'No response was recorded. Select Respond on the intended request, then reply to its prompt or send /respond <request_id> <text>. Text is instructions, not approval.';
+
 // The fixed ladder repeats its last step; a platform retry_after is honoured
 // when it is longer.
 const LADDER = [1000, 2000, 4000, 8000, 16000, 30000];
@@ -175,6 +192,85 @@ export function createPortableTelegramPoller({
   const reply = (chatId, text) =>
     deliver((options) => telegram.sendMessage({ chat_id: chatId, text }, { signal: options }));
 
+  // One best-effort answer for an admitted callback, always after the relevant core
+  // commit. An omitted text is the neutral dismissal: it claims no decision, no
+  // pairing state and no outcome, and never replays the handler.
+  const answer = (callbackQueryId, text) => {
+    const payload = { callback_query_id: callbackQueryId };
+    if (text !== null) payload.text = text;
+    return deliver((options) => telegram.answerCallbackQuery(payload, { signal: options }));
+  };
+
+  // Exact copy for one committed core result, or null when nothing new was recorded:
+  // the prefix follows the committed resolution and the suffix the committed ledger.
+  const copyFor = (result) => {
+    if (result.result === 'recorded') {
+      return renderPortableHumanOutcome(result.request.resolution, result.request.delivery_state);
+    }
+    if (result.result === 'expired') return EXPIRED;
+    if (result.result !== 'retained') return null;
+    if (result.request.resolution === 'expired') return EXPIRED;
+    return result.request.resolution === 'cancelled' ? CANCELLED : RESOLVED;
+  };
+
+  // One admitted callback. The raw token is correlation only: the core rechecks the
+  // whole binding in its own serialized turn, so this consumer never derives a
+  // target from text, ordering, a label or a displayed id. A refusal owns exactly
+  // one cursor commit here, and every answer is one best-effort attempt.
+  const callback = async (update, id) => {
+    const admitted = admitCallbackUpdate(update);
+    const target =
+      admitted.status === 'callback'
+        ? broker.correlateCallbackToken({ callbackToken: admitted.token })
+        : null;
+    if (target === null) {
+      await broker.advanceCursor(id);
+      return typeof admitted.callbackQueryId === 'string'
+        ? answer(admitted.callbackQueryId, UNAVAILABLE)
+        : true;
+    }
+    // The admitted fields are copied verbatim; the admission tag and the raw token
+    // name are inert extras the core validates against stored state, never trust.
+    const binding = { ...admitted, callbackToken: admitted.token, requestId: target.request_id };
+    const result =
+      admitted.kind === 'respond'
+        ? await broker.openResponse(binding)
+        : await broker.resolveCallback({
+            ...binding,
+            resolution: admitted.kind === 'approve' ? 'approved' : 'rejected',
+          });
+    if (result.result === 'refused') {
+      await broker.advanceCursor(id);
+      return answer(admitted.callbackQueryId, UNAVAILABLE);
+    }
+    // Stale input and an already open window record nothing and are dismissed
+    // neutrally; every other result already owns its cursor.
+    return answer(admitted.callbackQueryId, copyFor(result));
+  };
+
+  // One admitted paired response. Raw parsing and the reply/command split stay with
+  // admission, so this consumer copies the admitted fields verbatim and owns the
+  // cursor only for input that recorded nothing.
+  const respond = async (update, id, identity) => {
+    const admitted = admitTextUpdate(update);
+    if (admitted.status !== 'reply' && admitted.status !== 'command') {
+      // Non-text input records nothing and stays silent; a paired human's refused
+      // or uncorrelated text is answered only after its own cursor commit.
+      await broker.advanceCursor(id);
+      return admitted.status === 'ignored' ? true : reply(identity.chatId, GUIDANCE);
+    }
+    const result =
+      admitted.status === 'reply'
+        ? await broker.resolveReply(admitted)
+        : await broker.resolveCommand(admitted);
+    if (result.result === 'refused') {
+      await broker.advanceCursor(id);
+      return reply(identity.chatId, GUIDANCE);
+    }
+    const text = copyFor(result);
+    return text === null ? true : reply(identity.chatId, text);
+  };
+
   // One update at a time: its commit is awaited before the next member is read,
   // so no later position can outrun a held or failed append.
   const accept = async (update) => {
@@ -184,15 +280,8 @@ export function createPortableTelegramPoller({
     // decision, so a replayed member is skipped rather than re-consumed.
     if (cursor !== null && id <= cursor) return true;
 
-    const callback = update.callback_query;
-    if (callback !== null && typeof callback === 'object') {
-      await broker.advanceCursor(id);
-      if (stopped || typeof callback.id !== 'string' || callback.id === '') return true;
-      // Neutral spinner dismissal only, and only after the cursor commit: no
-      // text, no pairing claim and no decision may be acknowledged in C1.
-      return deliver((options) =>
-        telegram.answerCallbackQuery({ callback_query_id: callback.id }, { signal: options }),
-      );
+    if (update.callback_query !== undefined && update.callback_query !== null) {
+      return callback(update, id);
     }
 
     const identity = privateIdentity(update.message);
@@ -215,18 +304,27 @@ export function createPortableTelegramPoller({
     }
 
     const grammar = typeof text === 'string' ? PAIR.exec(text) : null;
-    // Malformed grammar, other text and unsupported types are cursor-only and
-    // never reach code verification.
-    if (grammar === null) {
+    // A malformed pairing attempt keeps its own state undisclosed and never falls
+    // through as response text, so this position is consumed alone.
+    if (grammar === null && typeof text === 'string' && PAIR_INTENT.test(text)) {
       await broker.advanceCursor(id);
       return true;
     }
 
     const stored = broker.pairing();
-    if (
-      stored !== null &&
-      (stored.user_id !== identity.userId || stored.chat_id !== identity.chatId)
-    ) {
+    const own =
+      stored !== null && stored.user_id === identity.userId && stored.chat_id === identity.chatId;
+    if (grammar === null) {
+      // Only the independently matching paired tuple may reach a text writer.
+      // Unpaired and foreign text stays silent and cursor-only.
+      if (!own) {
+        await broker.advanceCursor(id);
+        return true;
+      }
+      return respond(update, id, identity);
+    }
+
+    if (stored !== null && !own) {
       // A foreign tuple stays silent even for valid syntax: it learns nothing
       // about whether a human is paired.
       await broker.advanceCursor(id);

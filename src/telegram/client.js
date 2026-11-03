@@ -19,13 +19,16 @@ export class TelegramError extends Error {
   }
 }
 
-// UI sends and edits answer 403/404 for a target this bot cannot address, which is
-// a definite rejection of that operation rather than proof that the configured
-// credential was rejected. A 409 on those same methods is likewise a refusal of
-// this one operation, not a competing poller. Polling and callback acknowledgement
-// keep the credential and poll-conflict classification, and a 401 is always a
-// credential answer.
-const UI_METHODS = new Set(['sendMessage', 'editMessageText', 'editMessageReplyMarkup']);
+// UI sends, edits and callback acknowledgements answer 403/404/409 for a target this
+// bot cannot address or one refused operation: a definite refusal of that operation,
+// not proof of a rejected credential or a competing poller. Only getUpdates keeps
+// those classifications, and a 401 is always a credential answer.
+const UI_METHODS = new Set([
+  'sendMessage',
+  'editMessageText',
+  'editMessageReplyMarkup',
+  'answerCallbackQuery',
+]);
 
 export function createTelegramClient({ token, timeoutMs = TELEGRAM_REQUEST_TIMEOUT_MS }) {
   if (typeof token !== 'string' || token === '') {
@@ -174,9 +177,9 @@ function envelopeError(status, body, ui = false) {
       status,
     });
   }
-  if (ui && (status === 409 || apiCode === 409)) {
-    // A definite refusal of this one send or edit. The platform wording is not a
-    // trustworthy cause, so it never reaches the diagnostic: only this fixed text.
+  if (ui && [403, 404, 409].some((code) => code === status || code === apiCode)) {
+    // A definite refusal of this one send, edit or acknowledgement. The platform
+    // wording is never a trustworthy cause, so only this fixed text is reported.
     return new TelegramError(
       'TELEGRAM_REJECTED',
       'the Telegram platform refused this message operation',
