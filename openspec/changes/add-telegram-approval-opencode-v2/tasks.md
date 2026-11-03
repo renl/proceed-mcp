@@ -1,10 +1,10 @@
 # Tasks
 
-## C3g P2 maintained faults - STOP on credential ordering defect
+## C3g P2 maintained faults - credential correction PASS, breadth remains blocked
 
-- [ ] P.C3GP2-faults [Maintained fault breadth and exact defect](slices/03c3g-p2-prompt-faults.md). Source unchanged `76203969251d54b4252567cafa85345e1829bef3`, base evidence `dba79f06`. Full unfiltered native9:8PASS/1FAIL, no cancelled/skipped/todo. Own credential logger observes both actual peer transports un-aborted before eventual fanout, even with actual failed receipt append. No weakened tests or production edits. Gap ID pending coordination, correction attempts0.
+- [ ] P.C3GP2-faults [Maintained fault breadth, historical defect and current correction](slices/03c3g-p2-prompt-faults.md#credential-correction-attempt1-independent-verdict---2026-11-04). C3-PROMPT-CREDENTIAL-001 CLOSED attempt1 at `5f48f70444e8e8a6cef5e0c82d130c0e838d0f25`. Independent formerly failed composed control1/1 and supplementary lifecycle controls4/4 PASS. Author full9/9 reused, not full P2 acceptance. Historical8PASS/1FAIL retained.
 - [ ] P.C3GP2-review One combined owning test-artifact/boundary/decomposition review after correction and mandatory breadth. Exact remaining matrix is retained in the linked slice. P1 remains foundation-only, no worker/C3/live/human/feature/release acceptance.
-- Lifecycle: existing worktree/branch/change and test-engineering ownership retained, active/blocked. Next action coordination assigns gap ID and routes implementation correction, then resumes mandatory P2. Owned native cleanup PASS separately, ignored full TAP retained, owner/unknown files preserved. No worktree cleanup due.
+- Lifecycle: existing worktree/branch/change and test-engineering ownership retained, active/blocked on exact remaining P2 matrix in slice. Next owner coordination for separately authorized maintained breadth, no automatic preparation. Owned native cleanup PASS separately, ignored evidence retained, owner/unknown files preserved. No worktree cleanup due.
 
 ## C3g P1 inert prompt worker - bounded foundation PASS, P2 mandatory
 
