@@ -1,5 +1,14 @@
 # Tasks
 
+## C3 P3 - activated privacy packet A PASS, remaining breadth pending
+
+- [x] P.C3P3-A [Activated privacy/context/scalar tests and evidence](slices/03c3j-p3-privacy.md). Accepted source `dae0a47a`, packet baseline `e5810a98`. Full unfiltered maintained suite3/3 PASS. Actor/chat/token/message/prompt-role refusals, context binding, 4096-scalar exact original-call outcomes and no response echo. Initial fixture-output-cap failures preserved, not production failures or retroactive passes.
+- [ ] P.C3P3-review One focused combined boundary/test-artifact/decomposition review. Packet A is not complete C3. Immutable snapshot divergence and raw non-object envelopes remain unproved in assembled scope.
+- [ ] P.C3P3-B Public deadline equality/backlog/restart, replay/retained/terminal, repeated Respond and competing outcomes. Exact outstanding packets/dependencies/budgets are in the linked slice.
+- [ ] P.C3P3-C Positive flush/install/wake/ack ordering, append faults, UI/client failure isolation and global credential fanout versus method rejection, rate/transient/abort.
+- [ ] P.C3P3-D Assembled three-worker normal/partial-start/send-only/late-drain, full public copy/current-ledger/privacy selection and remaining raw/snapshot discrimination. No private mock substituted for assembled proof.
+- Lifecycle: existing worktree/branch/change retained active, owner test engineering. Next action combined owning review of packet A and route remaining packets. Owned execution cleanup PASS separately, evidence under ignored `.scratch/c3-activation/`. Owner/unknown files preserved. No complete C3/live/human/feature/release acceptance or cleanup/removal authorization.
+
 ## C3h activation - pairing correction PASS, mandatory P3 pending
 
 - [x] P.C3H-tests [All-path source brief, exact bindings, rebindings and RED limits](slices/03c3h-activation.md). Baseline `96dba1b4`, inert prerequisites present. Tests/helpers and owned tasks/slice only, no production edits.
