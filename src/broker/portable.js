@@ -69,6 +69,14 @@
 // is an observation, and a later status receipt must build on it. Recovery
 // replays it as a per-tuple transition of the committed history.
 //
+// A status display is the second durable per-copy terminal edit fact: the exact
+// `(decision_id, delivery_state)` pair one already retired copy is known to show,
+// bound to that same immutable decision and carrying no instant, deadline or
+// ledger change. Its pair must equal the ledger staged at that position in
+// history, so an older marker stays valid after a later ledger transition requires
+// another display. Recovery replays it as that copy's own marker, and work derives
+// only for a retired copy whose current pair differs from its last shown pair.
+//
 // A wait is an attached, non-durable observation of one request: admission,
 // duplicate refusal and the deadline check share the serialized turn, but the
 // turn is released before a future outcome is awaited. Every terminal writer
@@ -186,6 +194,18 @@ const FAILED_FIELDS = ['callback_token', 'error_code', 'failed_at', 'op', 'reque
 // with no instant: it is a transition, not a timed receipt.
 const RETIRED_OP = 'telegram.controls.retired';
 const RETIRED_FIELDS = ['chat_id', 'decision_id', 'message_id', 'op', 'request_id'];
+// A status display is the one durability fact about the text a retired copy
+// shows: the same mapped tuple and terminal decision, plus the exact ledger pair
+// that edit displayed. It has no instant, so it is a transition, not a receipt.
+const STATUS_SHOWN_OP = 'telegram.status.shown';
+const STATUS_SHOWN_FIELDS = [
+  'chat_id',
+  'decision_id',
+  'delivery_state',
+  'message_id',
+  'op',
+  'request_id',
+];
 // A failure is reported only as one of these redacted classes, never as a
 // platform description.
 const FAILURE_CODES = new Set(['unavailable', 'rate_limited', 'rejected', 'invalid_response']);
@@ -211,6 +231,16 @@ const EVIDENCE_STATES = new Set(['confirmed', 'returned']);
 // captured registration is still valid selects `pending`, anything else
 // `unavailable`. Neither value is receipt evidence.
 const DELIVERY_STATES = new Set(['pending', 'unavailable']);
+// One status edit may display any terminal ledger state. `not_applicable` is the
+// pre-resolution placeholder and never a displayable outcome, while `blocked`
+// stays a legal display value even though no accepted producer can establish it.
+const STATUS_DISPLAY_STATES = new Set([
+  'pending',
+  'returned',
+  'confirmed',
+  'unavailable',
+  'blocked',
+]);
 const EVENT_CAPABILITY = Object.freeze({
   status: 'unverified',
   revision: null,
@@ -358,6 +388,32 @@ function retiredFields(input) {
   return { requestId, chatId, messageId, decisionId };
 }
 
+// The status arguments are the same raw tuple and decision plus the displayed
+// ledger state, validated without coercion before admission so no malformed
+// primitive is coerced into a tuple, a decision or a display domain.
+function statusShownFields(input) {
+  if (!isPlainObject(input)) throw invalidArgument(`${STATUS_SHOWN_OP} expects an argument object`);
+  const { requestId, chatId, messageId, decisionId, deliveryState } = input;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw invalidArgument(`${STATUS_SHOWN_OP} needs a well-formed request identifier`);
+  }
+  if (identityProblem(chatId) !== null) {
+    throw invalidArgument(`${STATUS_SHOWN_OP} needs a decimal chat id`);
+  }
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw invalidArgument(`${STATUS_SHOWN_OP} needs a positive safe-integer message id`);
+  }
+  if (typeof decisionId !== 'string' || !DECISION_ID_PATTERN.test(decisionId)) {
+    throw invalidArgument(`${STATUS_SHOWN_OP} needs a well-formed decision identifier`);
+  }
+  if (typeof deliveryState !== 'string' || !STATUS_DISPLAY_STATES.has(deliveryState)) {
+    throw invalidArgument(
+      `${STATUS_SHOWN_OP} needs one of ${[...STATUS_DISPLAY_STATES].join(', ')}`,
+    );
+  }
+  return { requestId, chatId, messageId, decisionId, deliveryState };
+}
+
 // A chat message is one durable address across every role, so its two raw values
 // are joined by a separator neither admitted domain can contain.
 function mappingKey(chatId, messageId) {
@@ -366,8 +422,9 @@ function mappingKey(chatId, messageId) {
 
 // One mapped chat message and the role it plays for that request. A request
 // message is the only role so far, and a response prompt is a later, separate
-// role, so no retirement can target a tuple that is not the request's own
-// message. The per-copy retirement flag is the durable transition itself.
+// role, so no retirement or display can target a tuple that is not the request's
+// own message. The per-copy retirement flag is the durable transition itself, and
+// the last shown pair is that copy's own display marker.
 function requestMapping(requestId, chatId, messageId) {
   return {
     request_id: requestId,
@@ -375,7 +432,16 @@ function requestMapping(requestId, chatId, messageId) {
     chat_id: chatId,
     message_id: messageId,
     retired: false,
+    shown: null,
   };
+}
+
+// The marker a status receipt leaves on one copy: the last pair this tuple is
+// known to display. A copy without a marker has never been shown.
+function sameShownPair(shown, decisionId, deliveryState) {
+  return (
+    shown !== null && shown.decision_id === decisionId && shown.delivery_state === deliveryState
+  );
 }
 
 // The common request representation of design section 3, rebuilt as a fresh
@@ -822,6 +888,43 @@ function readRetired(mutation) {
   };
 }
 
+// A status display decodes from exactly its six persisted fields: the mapped
+// tuple, its terminal request, that request's recorded decision and the ledger
+// pair the copy was shown. It has no instant of its own, so no recovery clock can
+// be derived for it or compared against it.
+function readStatusShown(mutation) {
+  exactFields(mutation, STATUS_SHOWN_FIELDS);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw integrity(`${STATUS_SHOWN_OP} has a malformed request id`);
+  }
+  if (identityProblem(mutation.chat_id) !== null) {
+    throw integrity(`${STATUS_SHOWN_OP} has a malformed chat id`);
+  }
+  const messageId = mutation.message_id;
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+    throw integrity(`${STATUS_SHOWN_OP} needs a positive safe-integer message id`);
+  }
+  const decisionId = mutation.decision_id;
+  if (typeof decisionId !== 'string' || !DECISION_ID_PATTERN.test(decisionId)) {
+    throw integrity(`${STATUS_SHOWN_OP} has a malformed decision id`);
+  }
+  const deliveryState = mutation.delivery_state;
+  if (typeof deliveryState !== 'string' || !STATUS_DISPLAY_STATES.has(deliveryState)) {
+    throw integrity(`${STATUS_SHOWN_OP} has an unsupported display state`);
+  }
+  return {
+    kind: 'status',
+    record: {
+      request_id: requestId,
+      chat_id: mutation.chat_id,
+      message_id: messageId,
+      decision_id: decisionId,
+      delivery_state: deliveryState,
+    },
+  };
+}
+
 // A closure decodes from exactly its five persisted fields: only the window and
 // the installed resolution differ between expiry and cancellation.
 function readClosure(mutation, op) {
@@ -937,6 +1040,8 @@ function readMutation(mutation) {
       return readFailed(mutation);
     case RETIRED_OP:
       return readRetired(mutation);
+    case STATUS_SHOWN_OP:
+      return readStatusShown(mutation);
     default:
       throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
   }
@@ -1185,6 +1290,42 @@ function stageRetired(record, staged) {
   mapping.retired = true;
 }
 
+// A status display applies in array order against staged state: its tuple must
+// already be this committed terminal request's own mapped request message, its
+// retirement must already be in the history before it, and the pair it displays
+// must be the ledger staged at that exact position, not the eventual recovered
+// ledger. The pair it replaces is that copy's last shown pair, so a repeated pair
+// is invalid history while a later ledger transition legitimately leaves an older
+// marker behind.
+function stageStatusShown(record, staged) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${STATUS_SHOWN_OP} names no committed request`);
+  if (request.resolution === 'pending') {
+    throw integrity(`${STATUS_SHOWN_OP} targets a pending request`);
+  }
+  if (request.decision_id !== record.decision_id) {
+    throw integrity(`${STATUS_SHOWN_OP} does not match the recorded decision`);
+  }
+  const mapping = staged.mappings.get(mappingKey(record.chat_id, record.message_id));
+  if (mapping === undefined) {
+    throw integrity(`${STATUS_SHOWN_OP} names no mapped request message`);
+  }
+  if (mapping.role !== 'request') throw integrity(`${STATUS_SHOWN_OP} targets a non-request tuple`);
+  if (mapping.request_id !== record.request_id) {
+    throw integrity(`${STATUS_SHOWN_OP} names another request's message`);
+  }
+  if (!mapping.retired) {
+    throw integrity(`${STATUS_SHOWN_OP} precedes its controls retirement`);
+  }
+  if (request.delivery_state !== record.delivery_state) {
+    throw integrity(`${STATUS_SHOWN_OP} does not match the current delivery state`);
+  }
+  if (sameShownPair(mapping.shown, record.decision_id, record.delivery_state)) {
+    throw integrity(`${STATUS_SHOWN_OP} repeats a recorded display pair`);
+  }
+  mapping.shown = { decision_id: record.decision_id, delivery_state: record.delivery_state };
+}
+
 // A closure resolves one pending request and spends its decision identity once
 // across the whole journal: expiry must be at or after the recorded deadline, and
 // a cancellation must fall inside the request lifetime.
@@ -1408,6 +1549,7 @@ class PortableBroker {
         else if (record.kind === 'sent') stageSent(record.record, staged);
         else if (record.kind === 'failed') stageFailed(record.record, staged);
         else if (record.kind === 'retired') stageRetired(record.record, staged);
+        else if (record.kind === 'status') stageStatusShown(record.record, staged);
         else if (record.kind === 'cursor') cursorRecords.push(record);
         else pairingRecords.push(record);
       }
@@ -1593,6 +1735,23 @@ class PortableBroker {
     });
   }
 
+  // Records one successful status edit for one already retired mapped request
+  // message (design section 5, C2c). The raw tuple, decision and display state are
+  // validated before admission, while the binding is decided inside the serialized
+  // turn: a committed terminal request with that recorded decision, that exact
+  // mapped request message, its own retirement already installed and a display
+  // state equal to the current ledger pair. Anything else is a non-disclosing
+  // result that samples no clock and appends nothing. A pair already shown for this
+  // copy is the current copied request without an append, and a new pair appends
+  // exactly one clock-free mutation and installs the marker only after its flush.
+  recordStatusShown(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = statusShownFields(input);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#recordStatusShown(fields));
+    });
+  }
+
   // Allocates one durable presentation token for a committed request (design
   // section 5, C2a-i). A malformed, unknown or unused-reservation id is the same
   // non-disclosing null as an absent one, and no argument matrix is invented for
@@ -1617,12 +1776,43 @@ class PortableBroker {
   // Synchronous copied view of the committed presentation work (design section 5,
   // C2a-i/ii and C2c). Sends cover one send per unresolved request that has no
   // mapping yet, carrying its frozen snapshot chat, its allocated token, the latest
-  // failure class and a fresh request copy. Controls edits cover one retirement per
-  // mapped request message of a terminal request whose own retirement receipt is
-  // still absent, so a copy is offered once and copied state can never be
-  // mistaken for committed work. No status work exists at this cut, so no tuple is
-  // ever offered both kinds. It samples no clock.
+  // failure class and a fresh request copy. Edits cover one retirement per mapped
+  // request message of a terminal request whose own retirement receipt is still
+  // absent, and one status display per already retired copy whose current ledger
+  // pair differs from that copy's own last shown pair, so a copy is offered once,
+  // controls always precede that copy's status, and a copy is never offered both.
+  // Copied state can never be mistaken for committed work. It samples no clock.
   presentationWork() {
+    const controls = [];
+    const statuses = [];
+    for (const mapping of this.#mappings.values()) {
+      if (mapping.role !== 'request') continue;
+      const request = this.#requests.get(mapping.request_id);
+      if (request === undefined || request.resolution === 'pending') continue;
+      if (!mapping.retired) {
+        controls.push({
+          kind: 'controls',
+          request_id: request.request_id,
+          chat_id: mapping.chat_id,
+          message_id: mapping.message_id,
+          decision_id: request.decision_id,
+          request: requestView(request),
+        });
+      } else if (
+        STATUS_DISPLAY_STATES.has(request.delivery_state) &&
+        !sameShownPair(mapping.shown, request.decision_id, request.delivery_state)
+      ) {
+        statuses.push({
+          kind: 'status',
+          request_id: request.request_id,
+          chat_id: mapping.chat_id,
+          message_id: mapping.message_id,
+          decision_id: request.decision_id,
+          delivery_state: request.delivery_state,
+          request: requestView(request),
+        });
+      }
+    }
     return {
       sends: [...this.#requests.values()]
         .filter((request) => request.resolution === 'pending' && !request.mapped)
@@ -1633,22 +1823,7 @@ class PortableBroker {
           request: requestView(request),
           last_failure_code: request.lastFailureCode,
         })),
-      edits: [...this.#mappings.values()]
-        .filter((mapping) => mapping.role === 'request' && !mapping.retired)
-        .flatMap((mapping) => {
-          const request = this.#requests.get(mapping.request_id);
-          if (request === undefined || request.resolution === 'pending') return [];
-          return [
-            {
-              kind: 'controls',
-              request_id: request.request_id,
-              chat_id: mapping.chat_id,
-              message_id: mapping.message_id,
-              decision_id: request.decision_id,
-              request: requestView(request),
-            },
-          ];
-        }),
+      edits: [...controls, ...statuses],
     };
   }
 
@@ -2372,6 +2547,51 @@ class PortableBroker {
         'STORAGE_FAILURE',
         error,
       );
+    }
+  }
+
+  // One serialized status turn (design section 5, C2c). The target, its terminal
+  // record, the tuple role, that tuple's owning request and the tuple's own
+  // retirement are re-read from installed state, so a caller's claim can neither
+  // adopt another request's message nor display a state the ledger does not hold.
+  // A pair this copy already shows is the current copied request without an append
+  // or a clock sample; a new pair appends exactly one clock-free mutation and
+  // installs the marker only after its flush, never changing the business ledger.
+  async #recordStatusShown({ requestId, chatId, messageId, decisionId, deliveryState }) {
+    const request = this.#requests.get(requestId);
+    if (request === undefined || request.resolution === 'pending') return null;
+    if (request.decision_id !== decisionId) return null;
+    const mapping = this.#mappings.get(mappingKey(chatId, messageId));
+    if (mapping === undefined || mapping.role !== 'request') return null;
+    if (mapping.request_id !== requestId || !mapping.retired) return null;
+    if (request.delivery_state !== deliveryState) return null;
+    if (sameShownPair(mapping.shown, decisionId, deliveryState)) {
+      return { shown: false, request: requestView(request) };
+    }
+    await this.#appendStatusShown([
+      {
+        op: STATUS_SHOWN_OP,
+        request_id: requestId,
+        chat_id: chatId,
+        message_id: messageId,
+        decision_id: decisionId,
+        delivery_state: deliveryState,
+      },
+    ]);
+    mapping.shown = { decision_id: decisionId, delivery_state: deliveryState };
+    this.#logger('portable.status.shown', { request_id: requestId });
+    return { shown: true, request: requestView(request) };
+  }
+
+  // A status display's only write path: #append has already installed the fence
+  // for an uncertain commit, and a failure without the storage classification is
+  // wrapped so no caller can mistake it for a refusal it may retry.
+  async #appendStatusShown(mutations) {
+    try {
+      await this.#append(mutations);
+    } catch (error) {
+      if (error?.code === 'STORAGE_FAILURE') throw error;
+      throw storageFailure('the status display could not be committed', 'STORAGE_FAILURE', error);
     }
   }
 
