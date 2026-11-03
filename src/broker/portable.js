@@ -77,6 +77,14 @@
 // another display. Recovery replays it as that copy's own marker, and work derives
 // only for a retired copy whose current pair differs from its last shown pair.
 //
+// A callback human resolution is the first durable human-decision fact: one
+// pending request, one journal-wide decision identity, the actor bound to both
+// the committed pairing and that request's snapshot, the exact allocated token
+// of the request's own mapped message, the processed update with its sole
+// same-transaction cursor, and the writer's persisted initial delivery
+// selection. Replay rebuilds that terminal state without a recovery clock and
+// refuses Respond vocabulary it cannot yet correlate with a real opening.
+//
 // A wait is an attached, non-durable observation of one request: admission,
 // duplicate refusal and the deadline check share the serialized turn, but the
 // turn is released before a future outcome is awaited. Every terminal writer
@@ -138,6 +146,7 @@ const EXPIRE_OP = 'request.expire';
 const CANCEL_OP = 'request.cancel';
 const ACKNOWLEDGE_OP = 'request.acknowledge';
 const RETURNED_OP = 'request.returned';
+const RESOLVE_OP = 'request.resolve.telegram';
 const PREPARE_OP = 'telegram.presentation.prepare';
 const PAIRING_TTL_SECONDS = 300n;
 // At most five verification attempts per sender in any rolling 60-second
@@ -241,6 +250,35 @@ const STATUS_DISPLAY_STATES = new Set([
   'unavailable',
   'blocked',
 ]);
+// The two resolutions a callback can record. Respond vocabulary needs its real
+// opening and prompt history first, so it stays fail-closed here.
+const CALLBACK_RESOLUTIONS = new Set(['approved', 'rejected']);
+// One human resolution persists eleven fields: the target, its decision and
+// resolution, the exact text, the human instant, the actor, the processed update,
+// the correlated source and the writer's initial delivery selection.
+const RESOLVE_FIELDS = [
+  'chat_id',
+  'decision_id',
+  'delivery_state',
+  'op',
+  'request_id',
+  'resolution',
+  'resolved_at',
+  'response_text',
+  'source',
+  'update_id',
+  'user_id',
+];
+// A callback source is one query against one allocated request message. A reply
+// or command source needs prompt history this checkpoint does not replay, so its
+// fields exist here only to refuse them without inventing a variant.
+const SOURCE_FIELDS = [
+  'callback_query_id',
+  'callback_token',
+  'kind',
+  'message_id',
+  'reply_prompt_id',
+];
 const EVENT_CAPABILITY = Object.freeze({
   status: 'unverified',
   revision: null,
@@ -987,6 +1025,82 @@ function readEvidence(mutation, kind) {
   };
 }
 
+// A callback resolution decodes from exactly its eleven persisted fields. A
+// malformed primitive is refused before any lookup, and the callback-only
+// vocabulary refuses reply/command/respond history that needs an opening this
+// checkpoint cannot replay. The actor, token, message and time window are
+// validated against staged state afterwards.
+function readResolve(mutation) {
+  exactFields(mutation, RESOLVE_FIELDS);
+  const requestId = mutation.request_id;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw integrity(`${RESOLVE_OP} has a malformed request id`);
+  }
+  const decisionId = mutation.decision_id;
+  if (typeof decisionId !== 'string' || !DECISION_ID_PATTERN.test(decisionId)) {
+    throw integrity(`${RESOLVE_OP} has a malformed decision id`);
+  }
+  const resolution = mutation.resolution;
+  if (typeof resolution !== 'string' || !CALLBACK_RESOLUTIONS.has(resolution)) {
+    throw integrity(`${RESOLVE_OP} has an unsupported resolution`);
+  }
+  // A callback carries no human text: only a Respond resolution ever does, and
+  // that vocabulary is not replayable yet.
+  if (mutation.response_text !== null) throw integrity(`${RESOLVE_OP} needs null response text`);
+  const resolvedAt = readInstant(mutation.resolved_at);
+  if (resolvedAt === null) throw integrity(`${RESOLVE_OP} has a malformed resolution time`);
+  if (identityProblem(mutation.user_id) !== null)
+    throw integrity(`${RESOLVE_OP} has a malformed actor`);
+  if (identityProblem(mutation.chat_id) !== null)
+    throw integrity(`${RESOLVE_OP} has a malformed chat id`);
+  if (!usableUpdateId(mutation.update_id)) {
+    throw integrity(`${RESOLVE_OP} needs a raw nonnegative update id with a safe next offset`);
+  }
+  const delivery = mutation.delivery_state;
+  if (typeof delivery !== 'string' || !DELIVERY_STATES.has(delivery)) {
+    throw integrity(`${RESOLVE_OP} has an unsupported initial delivery state`);
+  }
+  const source = mutation.source;
+  if (!isPlainObject(source)) throw integrity(`${RESOLVE_OP} needs a source object`);
+  exactFields(source, SOURCE_FIELDS);
+  if (source.kind !== 'callback') throw integrity(`${RESOLVE_OP} has an unsupported source kind`);
+  if (!Number.isSafeInteger(source.message_id) || source.message_id <= 0) {
+    throw integrity(`${RESOLVE_OP} needs a positive safe-integer message id`);
+  }
+  if (typeof source.callback_query_id !== 'string' || source.callback_query_id.length === 0) {
+    throw integrity(`${RESOLVE_OP} needs a nonempty callback query id`);
+  }
+  if (
+    typeof source.callback_token !== 'string' ||
+    !CALLBACK_TOKEN_PATTERN.test(source.callback_token)
+  ) {
+    throw integrity(`${RESOLVE_OP} has a malformed callback token`);
+  }
+  if (source.reply_prompt_id !== null) throw integrity(`${RESOLVE_OP} has no reply prompt role`);
+  return {
+    kind: 'resolve',
+    record: {
+      request_id: requestId,
+      decision_id: decisionId,
+      resolution,
+      response_text: mutation.response_text,
+      resolved_at: mutation.resolved_at,
+      resolvedAt,
+      user_id: mutation.user_id,
+      chat_id: mutation.chat_id,
+      update_id: mutation.update_id,
+      source: {
+        kind: source.kind,
+        message_id: source.message_id,
+        callback_query_id: source.callback_query_id,
+        callback_token: source.callback_token,
+        reply_prompt_id: source.reply_prompt_id,
+      },
+      delivery_state: delivery,
+    },
+  };
+}
+
 // One Telegram update id is stored exactly as delivered: a raw nonnegative safe
 // integer whose next offset is also safe, so no string, fraction or coercion can
 // become an offset. The same predicate guards the writer and the replay decoder,
@@ -1042,6 +1156,8 @@ function readMutation(mutation) {
       return readRetired(mutation);
     case STATUS_SHOWN_OP:
       return readStatusShown(mutation);
+    case RESOLVE_OP:
+      return readResolve(mutation);
     default:
       throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
   }
@@ -1092,6 +1208,28 @@ function applyCursor(records, cursor) {
     throw integrity(`${CURSOR_OP} must strictly increase`);
   }
   return next;
+}
+
+// One human resolution is the sole source consumer of its update: the same
+// transaction advances exactly that update id, and only while it is newer than
+// the cursor committed before the transaction. Either cursor array position is
+// valid, so the matching cursor never makes its own source look stale, and no
+// cursor from another transaction authorizes this source.
+function applyResolveCursor(resolveRecords, cursorRecords, entryCursor) {
+  if (resolveRecords.length === 0) return;
+  if (resolveRecords.length > 1) {
+    throw integrity(`${RESOLVE_OP} is recorded more than once in one transaction`);
+  }
+  if (cursorRecords.length !== 1) {
+    throw integrity(`${RESOLVE_OP} needs exactly one cursor in its transaction`);
+  }
+  const updateId = resolveRecords[0].update_id;
+  if (cursorRecords[0].last_update_id !== updateId) {
+    throw integrity(`${RESOLVE_OP} does not match its transaction cursor`);
+  }
+  if (entryCursor !== null && updateId <= entryCursor) {
+    throw integrity(`${RESOLVE_OP} is not newer than the committed cursor`);
+  }
 }
 
 // A refusal is exactly `{paired:false,reason}` and a successful consumption is
@@ -1357,6 +1495,65 @@ function stageClosure(record, staged, resolution) {
   request.delivery_state = record.delivery_state;
 }
 
+// A callback resolution resolves one pending request for the paired human: the
+// actor equals both the committed pairing and that request's immutable snapshot,
+// the exact allocated token is the one bound to that request's own mapped request
+// message in the actor's chat, and the recorded instant lies inside the request
+// lifetime. One journal-wide decision identity is spent, the initial ledger is
+// the writer's persisted selection, and the private actor/source stays outside
+// every common view.
+function stageResolve(record, staged, pairing) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${RESOLVE_OP} names no committed request`);
+  if (request.resolution !== 'pending') {
+    throw integrity(`${RESOLVE_OP} targets an already resolved request`);
+  }
+  if (
+    pairing === null ||
+    pairing.user_id !== record.user_id ||
+    pairing.chat_id !== record.chat_id
+  ) {
+    throw integrity(`${RESOLVE_OP} does not match the committed pairing`);
+  }
+  if (
+    request.pairing_snapshot.user_id !== record.user_id ||
+    request.pairing_snapshot.chat_id !== record.chat_id
+  ) {
+    throw integrity(`${RESOLVE_OP} does not match the request snapshot`);
+  }
+  if (request.callback_token !== record.source.callback_token) {
+    throw integrity(`${RESOLVE_OP} does not match the allocated token`);
+  }
+  const mapping = staged.mappings.get(mappingKey(record.chat_id, record.source.message_id));
+  if (mapping === undefined) throw integrity(`${RESOLVE_OP} names no mapped request message`);
+  if (mapping.role !== 'request' || mapping.request_id !== record.request_id) {
+    throw integrity(`${RESOLVE_OP} names another request's message`);
+  }
+  if (
+    compareInstants(record.resolvedAt, request.createdAt) < 0 ||
+    compareInstants(record.resolvedAt, request.expiresAt) >= 0
+  ) {
+    throw integrity(`${RESOLVE_OP} lies outside the request lifetime`);
+  }
+  if (staged.decisions.has(record.decision_id)) {
+    throw integrity(`decision id ${record.decision_id} is used twice`);
+  }
+  staged.decisions.add(record.decision_id);
+  request.resolution = record.resolution;
+  request.resolved_at = record.resolved_at;
+  request.resolvedAt = record.resolvedAt;
+  request.response_text = null;
+  request.decision_id = record.decision_id;
+  request.delivery_state = record.delivery_state;
+  request.delivery_error = null;
+  request.resolution_source = {
+    user_id: record.user_id,
+    chat_id: record.chat_id,
+    update_id: record.update_id,
+    ...record.source,
+  };
+}
+
 // First evidence is recorded once per kind against one known terminal request
 // and its already recorded decision identity: it never resolves or re-identifies
 // anything. The recorded time is bounded only by the resolution, and the two
@@ -1538,12 +1735,16 @@ class PortableBroker {
       const reservedNow = new Set();
       const pairingRecords = [];
       const cursorRecords = [];
+      const resolveRecords = [];
       for (const record of records) {
         if (record.kind === 'reservation') stageReservation(record.record, staged, reservedNow);
         else if (record.kind === 'create') stageCreate(record.record, staged, pairing, reservedNow);
         else if (record.kind === 'expire') stageClosure(record.record, staged, 'expired');
         else if (record.kind === 'cancel') stageClosure(record.record, staged, 'cancelled');
-        else if (record.kind === 'acknowledge' || record.kind === 'returned') {
+        else if (record.kind === 'resolve') {
+          stageResolve(record.record, staged, pairing);
+          resolveRecords.push(record.record);
+        } else if (record.kind === 'acknowledge' || record.kind === 'returned') {
           stageEvidence(record, staged);
         } else if (record.kind === 'presentation') stagePresentation(record.record, staged);
         else if (record.kind === 'sent') stageSent(record.record, staged);
@@ -1553,6 +1754,7 @@ class PortableBroker {
         else if (record.kind === 'cursor') cursorRecords.push(record);
         else pairingRecords.push(record);
       }
+      applyResolveCursor(resolveRecords, cursorRecords, cursor);
       pairing = applyPairing(pairingRecords, challenges, pairing);
       cursor = applyCursor(cursorRecords, cursor);
     }
