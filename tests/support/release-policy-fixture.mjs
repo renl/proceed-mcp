@@ -9,7 +9,7 @@ export function releaseFacts() {
     run: { id: '123', attempt: '1', workflowRef: `renl/proceed-mcp/.github/workflows/release.yml@refs/tags/v${version}` },
     package: { name: '@meshimize/proceed-mcp', version, registryName: 'io.github.renl/proceed-mcp', channel: 'preview' },
     tag: { name: `v${version}` }, candidate: { mainContains: true },
-    acceptance: { state: 'present', record: {
+    acceptance: { state: 'present', ancestor: true, record: {
       schemaVersion: 1, package: '@meshimize/proceed-mcp', version, tag: `v${version}`, channel: 'preview',
       repository: 'renl/proceed-mcp', registryName: 'io.github.renl/proceed-mcp', candidateCommit: 'c'.repeat(40),
       verifiedAt: '2026-11-05T11:00:00.000Z', artifact,

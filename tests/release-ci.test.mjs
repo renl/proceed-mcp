@@ -108,6 +108,7 @@ test('PR workflow exists and passes parsed and lexical policy', async () => {
 
 // Dynamic import preserves independent B1 calibration while the B2 source is RED.
 const policy = () => import('../scripts/release-policy.mjs');
+const core = () => import('../scripts/release-policy-core.mjs');
 function verdict(api, facts, codes = []) {
   const blockers = codes.map((code) => ({ code, scope: /^(CHECK_|CONFIGURATION_|ARTIFACT_|PACKED_INPUTS_)/.test(code)
     ? 'publication' : 'validation' })).sort((a, b) => a.code.localeCompare(b.code));
@@ -120,9 +121,16 @@ const set = (facts, path, value) => {
   parts.reduce((object, part) => object[part], facts)[key] = value;
 };
 test('B2 policy: explicit phase scope, bootstrap refusal, exact fail-closed matrix', async () => {
-  const api = await policy();
+  const api = await core();
   assert.equal(api.RELEASE_POLICY_SCHEMA_VERSION, 2);
   assert.equal(api.PACKED_INPUT_DIGEST_ALGORITHM, 'sha256-packed-inputs-v1');
+  assert.deepEqual(api.APPROVED, { repository: 'renl/proceed-mcp', packageName: '@meshimize/proceed-mcp',
+    registryName: 'io.github.renl/proceed-mcp', channel: 'preview', environment: 'npm-preview',
+    workflow: '.github/workflows/release.yml', bootstrapVersion: '0.1.0-preview.1' });
+  assert.ok(Object.isFrozen(api.APPROVED));
+  assert.equal(api.VERSION_PATTERN.source, '^\\d+\\.\\d+\\.\\d+-preview\\.\\d+$');
+  assert.throws(() => api.expectedTarballName(null, '0.1.0-preview.2'),
+    (error) => error instanceof api.ReleasePolicyError && error.code === 'USAGE_INVALID');
   assert.equal(api.expectedTarballName('@meshimize/proceed-mcp', '0.1.0-preview.2'),
     'meshimize-proceed-mcp-0.1.0-preview.2.tgz');
   verdict(api, releaseFacts());
@@ -135,8 +143,8 @@ test('B2 policy: explicit phase scope, bootstrap refusal, exact fail-closed matr
     ['package.channel', 'latest', ['CHANNEL_INVALID', 'ACCEPTANCE_MISMATCH']], ['run.workflowRef', null, 'WORKFLOW_INVALID'],
     ['candidate.mainContains', false, 'MAIN_ANCESTRY_UNAVAILABLE'],
     ['candidate.mainContains', 'unknown', 'MAIN_ANCESTRY_UNAVAILABLE'],
-    ['acceptance', { state: 'missing', record: null }, 'ACCEPTANCE_MISSING'],
-    ['acceptance', { state: 'malformed', record: null }, 'ACCEPTANCE_MALFORMED'],
+    ['acceptance', { state: 'missing', record: null, ancestor: 'unknown' }, 'ACCEPTANCE_MISSING'],
+    ['acceptance', { state: 'malformed', record: null, ancestor: 'unknown' }, 'ACCEPTANCE_MALFORMED'],
     ['acceptance.record.verification.status', 'failed', 'ACCEPTANCE_NOT_PASSED'],
     ['acceptance.record.verification.reference', '../escape', 'ACCEPTANCE_MALFORMED'],
     ['acceptance.record.verification.reference', 'C:/private', 'ACCEPTANCE_MALFORMED'],
@@ -195,8 +203,101 @@ test('B2 policy: explicit phase scope, bootstrap refusal, exact fail-closed matr
   }
 });
 
+test('B2 core: ancestry requires validated passed matching acceptance in both phases', async () => {
+  const api = await core();
+  for (const phase of ['preflight', 'publish']) {
+    for (const ancestor of [true, false, 'unknown']) {
+      const facts = releaseFacts();
+      facts.phase = phase;
+      facts.acceptance.ancestor = ancestor;
+      verdict(api, facts, ancestor === true ? [] : ['ACCEPTANCE_ANCESTOR_INVALID']);
+      for (const [path, value, code] of [
+        ['acceptance.state', 'missing', 'ACCEPTANCE_MISSING'],
+        ['acceptance.state', 'malformed', 'ACCEPTANCE_MALFORMED'],
+        ['acceptance.record.verifiedAt', '2099-01-01T00:00:00.000Z', 'ACCEPTANCE_MALFORMED'],
+        ['acceptance.record.verification.status', 'failed', 'ACCEPTANCE_NOT_PASSED'],
+        ['acceptance.record.repository', 'other/repo', 'ACCEPTANCE_MISMATCH'],
+      ]) {
+        const gated = structuredClone(facts);
+        set(gated, path, value);
+        verdict(api, gated, [code]);
+      }
+    }
+  }
+});
+
+test('B2 core: record shape, timestamps, identity and independent groups fail closed', async () => {
+  const api = await core();
+  const cases = [];
+  for (const path of ['schemaVersion', 'package', 'version', 'tag', 'channel', 'repository',
+    'registryName', 'candidateCommit', 'verifiedAt', 'artifact', 'packedInputs', 'verification']) {
+    cases.push([`acceptance.record.${path}`, undefined, 'ACCEPTANCE_MALFORMED']);
+  }
+  for (const path of ['schemaVersion', 'state', 'observedAt', 'scope', 'reference', 'repository',
+    'environment', 'workflow', 'observation', 'validationWindow']) {
+    cases.push([`configuration.record.${path}`, undefined, 'CONFIGURATION_MALFORMED']);
+  }
+  for (const prefix of ['acceptance.record.verification', 'configuration.record']) {
+    for (const reference of ['', '/absolute', '../escape', 'a/../b', 'C:/private', 'a\\b']) {
+      cases.push([`${prefix}.reference`, reference, prefix.startsWith('acceptance')
+        ? 'ACCEPTANCE_MALFORMED' : 'CONFIGURATION_MALFORMED']);
+    }
+  }
+  for (const [path, value] of [
+    ['schemaVersion', 2], ['candidateCommit', 'bad'], ['artifact.sha256', 'bad'],
+    ['artifact.bytes', -1], ['packedInputs.algorithm', 'other'], ['packedInputs.digest', 'bad'],
+    ['packedInputs.toolchain.node', ''], ['packedInputs.toolchain.npm', ''],
+    ['verification.scope', ''], ['verifiedAt', 'not-a-date'], ['verifiedAt', '2099-01-01T00:00:00.000Z'],
+  ]) cases.push([`acceptance.record.${path}`, value, 'ACCEPTANCE_MALFORMED']);
+  for (const [path, value] of [
+    ['schemaVersion', 2], ['scope', ''], ['observedAt', 'not-a-date'],
+    ['validationWindow.endsAt', 'not-a-date'], ['observation.rights.packageWrite', 'true'],
+    ['observation.mainProtection.requiredApprovals', 1.5],
+  ]) cases.push([`configuration.record.${path}`, value, 'CONFIGURATION_MALFORMED']);
+  cases.push(['configuration.record.observation.mainProtection.requiredApprovals', 0, 'CONFIGURATION_INCOMPLETE']);
+  for (const field of ['package', 'version', 'tag', 'channel', 'repository', 'registryName']) {
+    const value = field === 'version' ? '0.1.0-preview.3' : 'other';
+    cases.push([`acceptance.record.${field}`, value, 'ACCEPTANCE_MISMATCH']);
+  }
+  for (const path of ['repository', 'environment', 'workflow', 'observation.trustedPublisher.repository',
+    'observation.trustedPublisher.environment', 'observation.trustedPublisher.workflow']) {
+    cases.push([`configuration.record.${path}`, 'other', 'CONFIGURATION_MISMATCH']);
+  }
+  cases.push(['packedInputs.digest', 'bad', 'PACKED_INPUTS_MALFORMED']);
+  cases.push(['artifact.filename', 'wrong.tgz', 'ARTIFACT_MALFORMED']);
+  for (const [path, value, code] of cases) {
+    const facts = releaseFacts();
+    set(facts, path, value);
+    verdict(api, facts, [code]);
+    verdict(api, releaseFacts());
+  }
+  const facts = releaseFacts();
+  facts.acceptance.record.verifiedAt = '2000-01-01T00:00:00.000Z';
+  facts.configuration.record.observedAt = facts.evaluatedAt;
+  facts.configuration.record.validationWindow.endsAt = facts.evaluatedAt;
+  verdict(api, facts); // Old byte-identical acceptance and inclusive window boundary are valid.
+  facts.acceptance.record = {};
+  facts.checks.validate = 'fail';
+  facts.artifact.sha256 = 'd'.repeat(64);
+  facts.packedInputs.digest = 'd'.repeat(64);
+  verdict(api, facts, ['ACCEPTANCE_MALFORMED', 'CHECK_FAILED']);
+  for (const path of ['acceptance.ancestor', 'event', 'run', 'package', 'tag', 'candidate',
+    'acceptance', 'configuration', 'checks', 'artifact', 'packedInputs', 'environment', 'evaluatedAt']) {
+    const malformed = releaseFacts();
+    const parts = path.split('.');
+    const key = parts.pop();
+    delete parts.reduce((object, part) => object[part], malformed)[key];
+    assert.throws(() => api.evaluateRelease(malformed), { code: 'FACTS_MALFORMED' }, path);
+  }
+  for (const ancestor of [null, 0, 'true']) {
+    const malformed = releaseFacts();
+    malformed.acceptance.ancestor = ancestor;
+    assert.throws(() => api.evaluateRelease(malformed), { code: 'FACTS_MALFORMED' });
+  }
+});
+
 test('B2 digest: independently encoded per-file bytes, path set and declared inputs', async () => {
-  const api = await policy();
+  const api = await core();
   const parent = resolve('.scratch/preview-prep');
   await mkdir(parent, { recursive: true });
   const root = await mkdtemp(join(parent, 'b2-digest-'));
@@ -232,12 +333,25 @@ test('B2 digest: independently encoded per-file bytes, path set and declared inp
     await symlink(join(root, 'scripts'), linked, process.platform === 'win32' ? 'junction' : 'dir');
     await assert.rejects(api.computePackedInputs({ installDir, root }), { code: 'DIGEST_UNREADABLE' });
     await rm(linked);
-    await writeFile(join(root, '.npmignore'), 'src/changed.js\n');
-    const selection = await api.computePackedInputs({ installDir, root });
-    assert.notEqual(selection.digest, expected.digest, 'new packing configuration invalidates acceptance');
-    assert.ok(selection.inputs.some(({ path }) => path === '.npmignore'));
-    await rm(join(root, '.npmignore'));
+    for (const path of ['.npmignore', '.gitignore', 'npm-shrinkwrap.json']) {
+      await writeFile(join(root, path), 'selection');
+      const selection = await api.computePackedInputs({ installDir, root });
+      assert.notEqual(selection.digest, expected.digest, path);
+      assert.deepEqual(selection.inputs, [...inputs, { path, sha256: hash('selection') }]
+        .sort((a, b) => Buffer.compare(Buffer.from(a.path), Buffer.from(b.path))));
+      await writeFile(join(root, path), 'changed-selection');
+      assert.notEqual((await api.computePackedInputs({ installDir, root })).digest, selection.digest);
+      await rm(join(root, path));
+      assert.deepEqual(await api.computePackedInputs({ installDir, root }), expected);
+    }
+    for (const path of ['docs', 'release']) await mkdir(join(root, path));
+    for (const path of ['.prettierrc.json', '.prettierignore', 'docs/note.md', 'release/note.json']) {
+      await writeFile(join(root, path), 'not a declared input');
+    }
+    assert.deepEqual(await api.computePackedInputs({ installDir, root }), expected);
     await rm(join(root, 'LICENSE'));
+    await assert.rejects(api.computePackedInputs({ installDir, root }), { code: 'DIGEST_UNREADABLE' });
+    await mkdir(join(root, 'LICENSE'));
     await assert.rejects(api.computePackedInputs({ installDir, root }), { code: 'DIGEST_UNREADABLE' });
   } finally {
     await rm(root, { recursive: true });
@@ -363,7 +477,7 @@ test('B2 checked-in release workflow satisfies the selected offline structure', 
 });
 
 test('B2 readers: absent and invalid JSON never become verified records', async () => {
-  const api = await policy();
+  const api = await core();
   const parent = resolve('.scratch/preview-prep');
   await mkdir(parent, { recursive: true });
   const root = await mkdtemp(join(parent, 'b2-records-'));
@@ -377,13 +491,23 @@ test('B2 readers: absent and invalid JSON never become verified records', async 
     await writeFile(acceptance, '{'); await writeFile(configuration, '{');
     assert.deepEqual(await api.readAcceptanceRecord({ root, version }), { state: 'malformed', record: null });
     assert.deepEqual(await api.readConfigurationRecord({ root }), { state: 'malformed', record: null });
+    for (const value of [null, [], 42, 'not a record']) {
+      await writeFile(acceptance, JSON.stringify(value));
+      await writeFile(configuration, JSON.stringify(value));
+      assert.deepEqual(await api.readAcceptanceRecord({ root, version }), { state: 'malformed', record: null });
+      assert.deepEqual(await api.readConfigurationRecord({ root }), { state: 'malformed', record: null });
+    }
     const facts = releaseFacts();
     await writeFile(acceptance, JSON.stringify(facts.acceptance.record));
     await writeFile(configuration, JSON.stringify(facts.configuration.record));
-    assert.deepEqual(await api.readAcceptanceRecord({ root, version }), facts.acceptance);
+    assert.deepEqual(await api.readAcceptanceRecord({ root, version }), {
+      state: 'present', record: facts.acceptance.record,
+    });
     assert.deepEqual(await api.readConfigurationRecord({ root }), facts.configuration);
     await rm(acceptance); await mkdir(acceptance);
     await assert.rejects(api.readAcceptanceRecord({ root, version }), { code: 'RECORD_UNREADABLE' });
+    await rm(configuration); await mkdir(configuration);
+    await assert.rejects(api.readConfigurationRecord({ root }), { code: 'RECORD_UNREADABLE' });
   } finally {
     await rm(root, { recursive: true });
     await assert.rejects(access(root), { code: 'ENOENT' });
