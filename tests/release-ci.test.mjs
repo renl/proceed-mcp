@@ -136,6 +136,11 @@ test('B2 policy: explicit phase scope, bootstrap refusal, exact fail-closed matr
   verdict(api, releaseFacts());
   const cases = [
     ['event.name', 'pull_request', 'EVENT_INVALID'], ['event.name', 'workflow_dispatch', 'EVENT_INVALID'],
+    ['event.ref', 'refs/heads/main', ['REF_INVALID', 'WORKFLOW_INVALID']],
+    ['package.version', 'not-a-version', ['VERSION_INVALID', 'TAG_VERSION_MISMATCH', 'ACCEPTANCE_MISMATCH', 'ARTIFACT_MALFORMED']],
+    ['package.version', '0.1.0', ['VERSION_INVALID', 'TAG_VERSION_MISMATCH', 'ACCEPTANCE_MISMATCH', 'ARTIFACT_MALFORMED']],
+    ['run.workflowRef', 'renl/proceed-mcp/.github/workflows/other.yml@refs/tags/v0.1.0-preview.2', 'WORKFLOW_INVALID'],
+    ['run.workflowRef', 'renl/proceed-mcp/.github/workflows/release.yml@refs/heads/main', 'WORKFLOW_INVALID'],
     ['package.name', 'other', ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH']],
     ['event.repository', 'fork/proceed-mcp', ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH', 'CONFIGURATION_MISMATCH']],
     ['package.registryName', 'other', ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH']],
@@ -176,6 +181,7 @@ test('B2 policy: explicit phase scope, bootstrap refusal, exact fail-closed matr
   for (const [path, value, code] of cases) {
     const facts = releaseFacts(); set(facts, path, value);
     verdict(api, facts, Array.isArray(code) ? code : [code]);
+    verdict(api, releaseFacts());
   }
   for (const phase of ['preflight', 'publish']) {
     const facts = releaseFacts(); facts.phase = phase;
