@@ -12,7 +12,10 @@ const authority = p => ({ live: true, credentialAccess: true, consumeUpdates: tr
   noWebhook: true, privateHuman: true, runId: p.runId, port: p.port, candidate: p.candidate, expiresAt: 101 });
 const frozen = value => { assert.ok(Object.isFrozen(value)); return value; };
 const failure = (value, code) => { assert.deepEqual(frozen(value), { ok: false, code }); };
-const success = result => { assert.equal(frozen(result).ok, true); return result.value; };
+const success = result => { assert.deepEqual(frozen(result), { ok: true, value: result.value }); return result.value; };
+const exportsMatch = m => assert.deepEqual(Object.keys(m).sort(), ['LIVE_PORT', 'RUN_ID_PATTERN', 'validatePlan',
+  'validateLimits', 'validateAuthority', 'validateDriver', 'validateOptions', 'buildEnvironments', 'buildContext',
+  'workDeadline', 'cleanupWindows', 'progressDeadline', 'resolveOutcome'].sort());
 const throws = (fn, code, message) => assert.throws(fn, e => e instanceof TypeError && e.code === code && e.message === message);
 const buildError = (fn, message) => throws(fn, 'INVALID_BUILD_INPUT', message);
 const unvalidated = fn => throws(fn, 'UNVALIDATED_PLAN', 'plan must be the frozen object returned by validatePlan');
@@ -30,21 +33,34 @@ test('CAL-PURE: exact outcome, frozen wrapper and disclosure discriminators reje
     assert.throws(() => checkResult(Object.freeze(mutation), expected), { code: 'ERR_ASSERTION' });
   assert.throws(() => checkResult({ ...expected }, expected), { code: 'ERR_ASSERTION' });
   assert.throws(() => assert.ok(!JSON.stringify({ token }).includes(token)), { code: 'ERR_ASSERTION' });
+  success(Object.freeze({ ok: true, value: null }));
+  for (const v of [{ ok: true }, { ok: true, value: null }, Object.freeze({ ok: true, value: null, raw: token })])
+    assert.throws(() => success(v), { code: 'ERR_ASSERTION' });
 });
 
 test('PURE-PLAN: constants, exact sanitized paths, optional authority and copied safe environment', async () => {
   const m = await load(), p = input();
+  exportsMatch(m);
+  assert.throws(() => exportsMatch({ ...m, extra: true }), { code: 'ERR_ASSERTION' });
+  const missingExport = { ...m }; delete missingExport.validatePlan;
+  assert.throws(() => exportsMatch(missingExport), { code: 'ERR_ASSERTION' });
   assert.equal(m.LIVE_PORT, 43189); assert.equal(m.RUN_ID_PATTERN.source, '^live-[a-z0-9-]{1,40}$');
   assert.equal(m.RUN_ID_PATTERN.flags, '');
   p.authorization = token;
+  let ignoredReads = 0;
+  const ignored = { self: null, [Symbol.toPrimitive]() { ignoredReads++; throw Error(token); } };
+  ignored.self = ignored;
+  Object.defineProperty(ignored, 'nested', { enumerable: true, get() { ignoredReads++; throw Error(token); } });
+  p.environment.DATA = ignored;
   for (const key of ['PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC']) p.environment[key] = key;
-  const before = structuredClone(p), v = success(m.validatePlan(p));
+  const before = { ...p, limits: { ...p.limits }, environment: { ...p.environment } }, v = success(m.validatePlan(p));
   const directory = join(p.worktree, '.scratch', 'portable-live', p.runId);
   assert.deepEqual(frozen(v), { worktree: p.worktree, runId: p.runId, candidate: p.candidate, port: 43189,
     directory, state: join(directory, 'state'), limits: limits(), environment: {
       PATH: 'synthetic', PATHEXT: 'PATHEXT', SystemRoot: 'SystemRoot', WINDIR: 'WINDIR', COMSPEC: 'COMSPEC' } });
   frozen(v.limits); frozen(v.environment); assert.notEqual(v.limits, p.limits); assert.notEqual(v.environment, p.environment);
   assert.deepEqual(p, before); assert.ok(!Object.isFrozen(p)); assert.ok(!JSON.stringify(v).includes(token));
+  assert.equal(ignoredReads, 0); assert.ok(!Object.isFrozen(ignored));
   const empty = input(); empty.environment = Object.create(null);
   assert.deepEqual(success(m.validatePlan(empty)).environment, {});
   for (const runId of ['live-a', `live-${'a'.repeat(40)}`]) success(m.validatePlan({ ...input(), runId }));
@@ -87,6 +103,13 @@ test('PURE-LIMITS: exact positive safe integers and reachable reserve', async ()
     ...['../x', 'live-a/b', 'live-a\\b', 'live-a:b', 'live-.', 'live-', `live-${'a'.repeat(41)}`, 'live-A'].map(runId => ({ runId })),
     { port: '43189' }, { port: 43190 }, { candidate: 'A'.repeat(40) }, { candidate: 'a'.repeat(39) },
     { extra: true }, { environment: { PATH: 1 } }]) failure(m.validatePlan({ ...input(), ...patch }), 'INVALID_PLAN');
+  let coercions = 0;
+  const coercible = { [Symbol.toPrimitive]() { coercions++; throw Error(token); } };
+  for (const key of ['runId', 'candidate', 'worktree']) {
+    for (const value of [null, 1, new String(input()[key]), {}, coercible])
+      failure(m.validatePlan({ ...input(), [key]: value }), 'INVALID_PLAN');
+  }
+  assert.equal(coercions, 0);
 });
 
 test('PURE-AUTHORITY: strict flags, exact binding and independent epoch expiry', async () => {
