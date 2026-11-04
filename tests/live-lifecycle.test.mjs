@@ -3,9 +3,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
+import { validatePlan, buildContext, buildEnvironments, resolveOutcome } from './support/live-run-plan.mjs';
 import { fakeDriver, fakeToken, plan, namespace, abortable, assertRedacted,
   noncooperative, turn, assertResult, assertContext, callerCancellation } from './fixtures/live-lifecycle-driver.mjs';
 
+// Orchestration allocation: openspec/changes/add-telegram-approval-opencode-v2/slices/03c3t-bounded-orchestration.md
 // Dynamic import keeps the missing implementation RED per case, not a skipped suite.
 const run = async (p, d, options) => (await import('./support/live-run-lifecycle.mjs')).withLiveLifecycle(p, d, options);
 const order = (calls, first, second) => assert.ok(calls.indexOf(first) >= 0
@@ -393,4 +395,88 @@ test('VERIFY: noncooperative verification and failed forced stop never fabricate
     assert.ok(performance.now() - start < 1400);
     assert.equal(f.calls.filter(n => n === 'verifyStopped').length, 1);
   }
+});
+
+test('CAL-PLAN: accepted actual pure module supplies isolated contexts and fixed outcomes', () => {
+  const p = plan(), validated = validatePlan(p);
+  assert.equal(validated.ok, true);
+  const signal = new AbortController().signal;
+  const environments = buildEnvironments(validated.value, fakeToken);
+  assertContext(buildContext(validated.value, { deadline: 123, signal, environments }), p, true);
+  assert.deepEqual(environments.cli, { PATH: p.environment.PATH, SystemRoot: p.environment.SystemRoot,
+    TEMP: namespace(p), TMP: namespace(p), TMPDIR: namespace(p) });
+  assertResult(resolveOutcome({ validationCode: null, cancelled: false, reserved: true,
+    work: 'timeout', progressFailed: false, cleanup: 'passed' }),
+  { assertion: 'failed', cleanup: 'passed', retained: true, code: 'WORK_TIMEOUT' });
+});
+
+test('OUTCOMES: controller agrees with actual pure outcomes for refusals and partial failure', async () => {
+  for (const [change, code] of [[p => { p.port = 0; }, 'INVALID_PLAN'],
+    [p => { p.authorization = undefined; }, 'INVALID_AUTHORITY']]) {
+    const p = plan(), f = fakeDriver(); change(p);
+    assertResult(await run(p, f.driver), { assertion: 'blocked', cleanup: 'not-needed', retained: false, code });
+    assert.deepEqual(f.calls, []);
+  }
+  for (const [overrides, reserved, work] of [
+    [{ preflight: async () => ({ ready: false }) }, false, 'refused'],
+    [{ reserve: async () => { throw Error(fakeToken); } }, true, 'failed'],
+    [{ acquireCredential: async () => '' }, true, 'failed'],
+    [{}, true, 'ok']]) {
+    const expected = resolveOutcome({ validationCode: null, cancelled: false, reserved, work,
+      progressFailed: false, cleanup: reserved ? 'passed' : 'not-needed' });
+    assertResult(await run(plan(), fakeDriver(overrides).driver), expected);
+  }
+  for (const change of [d => { delete d.stop; }, d => { d.execute = null; }]) {
+    const f = fakeDriver(); change(f.driver);
+    assertResult(await run(plan(), f.driver), { assertion: 'blocked', cleanup: 'not-needed',
+      retained: false, code: 'INVALID_DRIVER' });
+    assert.deepEqual(f.calls, []);
+  }
+});
+
+test('RUN-SHARED: run progress spends the execute budget rather than restarting it', { timeout: 3000 }, async () => {
+  const p = plan(); p.limits.runMs = 100;
+  let entered, progressStart;
+  const f = fakeDriver({ progress: async event => {
+    if (event.phase === 'run') { progressStart = performance.now(); await delay(7); }
+  },
+    execute: context => { entered = { now: performance.now(), deadline: context.deadline }; return noncooperative(); } });
+  assertResult(await run(p, f.driver), { assertion: 'failed', cleanup: 'passed', retained: true, code: 'WORK_TIMEOUT' });
+  assert.ok(entered.deadline <= progressStart + p.limits.runMs, 'progress time deducted from run');
+  assert.equal(f.contexts.find(c => c.name === 'execute').value.signal.aborted, true);
+});
+
+test('PROGRESS-WINDOWS: each failed persistence is fixed/redacted and cannot skip cleanup', async () => {
+  for (const phase of ['setup', 'run', 'teardown', 'complete']) {
+    const f = fakeDriver({ progress: async event => { if (event.phase === phase) throw Error(fakeToken); } });
+    const reserved = phase !== 'setup';
+    assertResult(await run(plan(), f.driver), { assertion: 'failed',
+      cleanup: reserved ? 'passed' : 'not-needed', retained: reserved, code: 'PROGRESS_FAILED' });
+    if (reserved) {
+      assert.equal(f.calls.filter(n => n === 'stop').length, 1);
+      assert.equal(f.calls.filter(n => n === 'verifyStopped').length, 1);
+    } else assert.ok(!f.calls.includes('reserve'));
+    assertRedacted(f.progress);
+  }
+});
+
+test('LATE-ALL: deadline-abandoned fulfillment/rejection cannot change settled results or resume work', { timeout: 10000 }, async () => {
+  const unhandled = [], listener = reason => unhandled.push(reason);
+  process.on('unhandledRejection', listener);
+  try {
+    for (const stage of ['reserve', 'acquireCredential', 'setup', 'execute']) {
+      for (const reject of [false, true]) {
+        let settle;
+        const f = fakeDriver({ [stage]: () => new Promise((resolve, fail) => {
+          settle = () => reject ? fail(Error(fakeToken)) : resolve(fakeToken);
+        }) });
+        const result = await run(plan(), f.driver), snapshot = { ...result }, calls = [...f.calls];
+        assertResult(result, { assertion: 'failed', cleanup: 'passed', retained: true, code: 'WORK_TIMEOUT' });
+        settle(); await turn(); await turn();
+        assert.deepEqual(result, snapshot); assert.deepEqual(f.calls, calls);
+        assert.equal(f.calls.filter(n => n === 'stop').length, 1);
+      }
+    }
+    assert.deepEqual(unhandled, []);
+  } finally { process.removeListener('unhandledRejection', listener); }
 });
