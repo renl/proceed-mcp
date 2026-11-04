@@ -3,11 +3,11 @@
 ## Portable live runner - acceptance preparation only
 
 - [x] P.LIVE-spec [Runner contract, safety tests and dependency-bounded handoff](slices/03c3r-portable-live-runner.md). Preparation base `f434995`, production `d66e7613`. Final12: calibration1PASS/11 expected missing-controller RED, no skipped/cancelled/todo. Safety execution blocked until implementation, no live proof. No runner implementation or live activity authorized here.
-- [ ] P.LIVE-review One combined Architect boundary/decomposition/test-artifact review before implementation readiness. All five decomposition triggers YES. Schema2 setup default43189 source-confirmed, actual availability/reservation uninspected.
+- [ ] P.LIVE-review Corrections required. Cancellation-to-cleanup private binding is unresolved. See [correction stop](slices/03c3r-portable-live-runner.md#correction-stop---cancellation-binding). Renewed focused safety review required before implementation readiness. All five decomposition triggers YES. Schema2 setup default43189 source-confirmed, actual availability/reservation uninspected.
 - [ ] P.LIVE-A Implement only `tests/support/live-run-lifecycle.mjs`, ceiling200 gross, complete packet hard600. Full offline safety suite and independent verification required. No executable live driver in A.
 - [ ] P.LIVE-B After accepted pinned A, prepare controlled public-protocol/process safety tests, then separately dispatch bounded driver/entry implementation. Public pairing/Approve/original call/ack and Reject/exact Respond contract is in the slice. B not implementation-ready.
 - [ ] P.LIVE-execute Separate explicit bot/polling/credential/state/port/human authorization after offline runner qualification. No live readiness or first-host/model acknowledgement established by preparation.
-- Lifecycle: existing worktree/branch/change `add-telegram-approval-opencode-v2`, path `.worktree/add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next combined owner review of A and its B dependency, then CoS SE routing. Preserve protected state, ignored evidence and owner/unknown work. Cleanup not due.
+- Lifecycle: existing worktree/branch/change `add-telegram-approval-opencode-v2`, path `.worktree/add-telegram-approval-opencode-v2`, owner test engineering, blocked/retain. Next resolve private cancellation binding through coordination, then affected test correction and focused safety review. Preserve protected state, ignored evidence and owner/unknown work. Cleanup not due.
 
 ## C3 P3 - aggregate native completion, real-boundary gates open
 
