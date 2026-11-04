@@ -166,7 +166,9 @@ export const withLiveLifecycle = async (plan, driver, options) => {
     if (!persisted && !cancelled) {
       workResult = 'failed';
       progressFailed = true;
-    } else if (persisted) {
+    } else if (persisted && !cancelled) {
+      // Fulfilled progress can win the race against an already resolved cancellation fence, so the
+      // dispatch rechecks the observed request rather than trusting the race outcome.
       const executed = await workAttempt(driver.execute, context(runEnd, work.signal), runEnd);
       if (executed.timedOut) workResult = 'timeout';
       else if (executed.failed) workResult = 'failed';
