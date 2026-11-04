@@ -52,6 +52,7 @@ export function rpcPeer(child) {
       const catalog = await call('tools/list', {}).outcome;
       assert.equal(catalog.kind, 'response');
       assert.ok(catalog.frame.result.tools.some((tool) => tool.name === 'request_approval'));
+      return init.frame.result;
     },
     close() {
       stopped();

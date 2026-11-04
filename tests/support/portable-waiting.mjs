@@ -195,14 +195,14 @@ export async function portable(work, { pair = true, strictProtocol = false, cont
         const peer = strictProtocol ? catalogPeer(resource.child, { secrets: credentials }) : rpcPeer(resource.child);
         peers.push(peer);
         connections.push({ peer, resource });
-        let catalog;
+        let catalog, initialization;
         if (strictProtocol) {
           initializeResult(await peer.call('initialize', { protocolVersion: '2025-11-25', capabilities: {},
             clientInfo: { name: 'generic-reservation-test', version: '0' } }).outcome);
           resource.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
           catalog = { kind: 'response', frame: { result: { tools: await allTools(peer) } } };
         } else {
-          await peer.handshake();
+          initialization = await peer.handshake();
           catalog = await peer.call('tools/list', {}, { ms: 8000 }).outcome;
         }
         assert.equal(catalog.kind, 'response');
@@ -211,7 +211,7 @@ export async function portable(work, { pair = true, strictProtocol = false, cont
           assert.ok(catalog.frame.result?.tools?.some((tool) => tool.name === name),
             `portable MCP catalog exposes ${name}`);
         }
-        return { peer, resource, call: (name, args, id) => {
+        return { peer, resource, initialization, call: (name, args, id) => {
           const entry = peer.call('tools/call', { name, arguments: args }, { id, ms: 12000 });
           entry.outcome = entry.outcome.then((outcome) => {
             if (name !== 'prepare_approval') assert.ok(secrets.every((key) =>

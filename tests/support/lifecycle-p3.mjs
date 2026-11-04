@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import https from 'node:https';
 import http, { Server } from 'node:http';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { resolve, join } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 import { Journal } from '../../src/journal/journal.js';
@@ -75,10 +76,17 @@ export async function lifecycle(work) {
       calls.push({ name, args });
       return overrides[name] ? overrides[name](fn.bind(client), ...args) : fn.apply(client, args);
     }]));
-    const request = async (path, { method = 'GET', body, capability, token = owner } = {}) => {
+    const cli = async (...args) => {
+      const r = await promisify(execFile)(process.execPath,
+        [resolve('bin/proceed-mcp.js'), ...args, '--state-dir', paths.stateDir],
+        { env, timeout: 8000, maxBuffer: 65536, windowsHide: true });
+      assert.equal(r.stderr, '', 'public observation has no diagnostic failure');
+      return r.stdout;
+    };
+    const request = async (path, { method = 'GET', body, capability, token = owner, headers = {}, timeout = 2500 } = {}) => {
       const response = await fetch(`http://127.0.0.1:${config.broker.port}${path}`, { method,
-        headers: { authorization: `Bearer ${token}`, ...(capability ? { 'X-Proceed-Request-Capability': capability } : {}) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(2500) });
+        headers: { authorization: `Bearer ${token}`, ...(capability ? { 'X-Proceed-Request-Capability': capability } : {}), ...headers },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(timeout) });
       return { status: response.status, body: response.status === 204 ? null : await response.json() };
     };
     const rows = async () => readJournal(await fs.readFile(paths.journalFile)).transactions.flatMap(t => t.mutations);
@@ -117,7 +125,7 @@ export async function lifecycle(work) {
     try {
       await phase('assertions');
       await bounded(() => work({ start, wrap, request, rows, records, pair, create, mapped, opened, hold,
-        calls, logs, events, transports, paths, fixture, signal: ctx.signal, releaseOnCleanup: g => releases.push(g) }), 30000, 'lifecycle assertions deadline');
+        calls, logs, events, transports, paths, fixture, cli, signal: ctx.signal, releaseOnCleanup: g => releases.push(g) }), 30000, 'lifecycle assertions deadline');
     } finally {
       await phase('teardown');
       for (const g of releases) g.release();
