@@ -480,3 +480,50 @@ test('LATE-ALL: deadline-abandoned fulfillment/rejection cannot change settled r
     assert.deepEqual(unhandled, []);
   } finally { process.removeListener('unhandledRejection', listener); }
 });
+
+// LIVE-ORCHESTRATION-001: malformed release evidence must still settle and report completion.
+const assertVerificationCompletion = (result, progress, cleanup) => {
+  assertResult(result, { assertion: 'passed', cleanup, retained: true,
+    code: cleanup === 'passed' ? 'OK' : 'CLEANUP_FAILED' });
+  assert.deepEqual(progress.map(event => event.phase), ['setup', 'run', 'teardown', 'complete']);
+  assert.deepEqual(progress.at(-1), { phase: 'complete', assertion: 'passed', cleanup });
+  assertRedacted([result, progress]);
+};
+
+test('CAL-VERIFY: completion oracle rejects false release, missing completion and raw leakage', () => {
+  const result = { assertion: 'passed', cleanup: 'failed', retained: true, code: 'CLEANUP_FAILED' };
+  const progress = [{ phase: 'setup' }, { phase: 'run' }, { phase: 'teardown' },
+    { phase: 'complete', assertion: 'passed', cleanup: 'failed' }];
+  assertVerificationCompletion(result, progress, 'failed');
+  assert.throws(() => assertVerificationCompletion({ ...result, cleanup: 'passed' }, progress, 'failed'));
+  assert.throws(() => assertVerificationCompletion(result, progress.slice(0, -1), 'failed'));
+  assert.throws(() => assertVerificationCompletion({ ...result, error: fakeToken }, progress, 'failed'));
+  assert.throws(() => assertVerificationCompletion(result,
+    [{ phase: 'setup', error: fakeToken }, ...progress.slice(1)], 'failed'));
+});
+
+test('VERIFY-RAW: malformed release verdicts resolve redacted failed cleanup and complete progress',
+  { timeout: 3000 }, async t => {
+    const released = { processesAbsent: true, listenerReleased: true, ownershipReleased: true };
+    const throwing = Object.defineProperty({}, 'processesAbsent', {
+      get() { throw Error(fakeToken); },
+    });
+    for (const [name, verdict, cleanup] of [
+      ['all release evidence true', released, 'passed'],
+      ['null', null, 'failed'],
+      ['undefined', undefined, 'failed'],
+      ['missing fields', {}, 'failed'],
+      ['truthy is not true', { ...released, listenerReleased: 'true' }, 'failed'],
+      ['unreadable release field', throwing, 'failed'],
+    ]) {
+      await t.test(name, async () => {
+        const f = fakeDriver({ verifyStopped: async () => verdict });
+        const result = await run(plan(), f.driver);
+        assertVerificationCompletion(result, f.progress, cleanup);
+        assert.equal(f.calls.filter(name => name === 'stop').length, 1);
+        assert.equal(f.calls.filter(name => name === 'verifyStopped').length, 1);
+        assert.ok(!f.calls.includes('forceStop'), 'successful graceful stop needs no fallback');
+        order(f.calls, 'stop', 'verifyStopped');
+      });
+    }
+  });
