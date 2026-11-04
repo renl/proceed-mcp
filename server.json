@@ -1,0 +1,41 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.renl/proceed-mcp",
+  "description": "Preview Telegram approval broker for OpenCode sessions; live first use unverified.",
+  "version": "0.1.0-preview.1",
+  "repository": {
+    "url": "https://github.com/renl/proceed-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "proceed-mcp",
+      "version": "0.1.0-preview.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "description": "Run the stdio MCP adapter instead of the CLI or the broker."
+        },
+        {
+          "type": "named",
+          "name": "--owner",
+          "valueHint": "operator-owner-id",
+          "isRequired": true,
+          "description": "Owner id the operator added locally; an identifier, not a secret."
+        },
+        {
+          "type": "named",
+          "name": "--state-dir",
+          "valueHint": "operator-state-dir",
+          "isRequired": true,
+          "description": "Absolute protected state directory created by proceed-mcp init."
+        }
+      ]
+    }
+  ]
+}

@@ -1,10 +1,11 @@
 {
   "name": "proceed-mcp",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0-preview.1",
   "description": "Telegram approval broker that continues the exact requesting OpenCode V2 session.",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "mcpName": "io.github.renl/proceed-mcp",
+  "repository": "https://github.com/renl/proceed-mcp",
   "engines": {
     "node": ">=24"
   },

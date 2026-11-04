@@ -22,7 +22,7 @@ import {
 
 export const MCP_PROTOCOL_VERSION = '2025-11-25';
 export const SERVER_NAME = 'proceed-mcp';
-export const SERVER_VERSION = '0.0.0';
+export const SERVER_VERSION = '0.1.0-preview.1';
 
 // JSON Schema patterns reuse the format identifiers the broker validates, so the
 // catalog cannot advertise a shape the product would not accept.
