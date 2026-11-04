@@ -692,6 +692,58 @@ test('CANCEL-RESERVES: cancellation during each cleanup effect preserves indepen
     }
   });
 
+// LIVE-CANCELLATION-001: direct fulfillment must not conceal a cancelled dispatch.
+test('CANCEL-RUN-FULFILLED: successful progress fences execute and releases owned timers/listener',
+  { timeout: 3000 }, async t => {
+    for (const cancel of [false, true]) {
+      await t.test(cancel ? 'cancelled progress forbids execute' : 'uncancelled progress permits execute', async t => {
+        const c = callerCancellation(), f = fakeDriver(), active = new Set();
+        const set = globalThis.setTimeout, clear = globalThis.clearTimeout;
+        let created = 0, cleared = 0;
+        t.mock.method(globalThis, 'setTimeout', (...args) => {
+          const timer = set(...args); active.add(timer); created++; return timer;
+        });
+        t.mock.method(globalThis, 'clearTimeout', timer => {
+          if (active.delete(timer)) cleared++;
+          return clear(timer);
+        });
+        try {
+          // Deliberately bypass the fixture's extra async wrapper for this allowed return order.
+          f.driver.progress = async event => {
+            f.calls.push('progress'); f.progress.push(event);
+            if (event.phase === 'run' && cancel) c.abort();
+          };
+          const start = performance.now();
+          const result = await run(cancellationPlan(), f.driver, { signal: c.signal });
+          assertPromptCancellation(performance.now() - start);
+          assertResult(result, { assertion: cancel ? 'failed' : 'passed', cleanup: 'passed',
+            retained: true, code: cancel ? 'CANCELLED' : 'OK' });
+          for (const stage of ['setup', 'stop', 'verifyStopped']) {
+            assert.equal(f.calls.filter(name => name === stage).length, 1, stage);
+          }
+          assert.ok(!f.calls.includes('forceStop'));
+          order(f.calls, 'setup', 'stop'); order(f.calls, 'stop', 'verifyStopped');
+          for (const stage of ['stop', 'verifyStopped']) {
+            assert.equal(f.contexts.find(context => context.name === stage).value.signal.aborted, false);
+          }
+          assert.deepEqual(c.counts, { add: 1, remove: 1 });
+          assert.equal(c.activeListeners.size, 0);
+          assert.ok(created > 0); assert.equal(cleared, created); assert.equal(active.size, 0);
+          assertRedacted([result, f.progress]);
+          const calls = [...f.calls], snapshot = { ...result };
+          c.abort(); await turn(); await turn();
+          assert.deepEqual(f.calls, calls); assert.deepEqual(result, snapshot);
+          assert.equal(active.size, 0);
+          assert.equal(f.calls.filter(name => name === 'execute').length, cancel ? 0 : 1,
+            'fulfilled run progress must not admit execute after observed caller cancellation');
+        } finally {
+          for (const timer of active) clear(timer);
+          t.mock.restoreAll();
+        }
+      });
+    }
+  });
+
 test('CANCEL-PRECEDENCE: cancellation supersedes work/progress failure but never erases cleanup failure',
   { timeout: 4000 }, async t => {
     for (const primary of ['error', 'timeout', 'progress']) {
