@@ -28,6 +28,10 @@ const REQUIRED_FLAGS = Object.entries({
   rights: ['packageWrite', 'licenseConfirmed', 'documentationApproved'],
 }).flatMap(([group, keys]) => keys.map((key) => `${group}.${key}`));
 
+// Section 7: the record state domain is closed. Text shape alone would accept any
+// string, so an unlisted state has to fail the record shape tier.
+const CONFIGURATION_STATES = new Set(['verified', 'unconfigured', 'unknown']);
+
 const malformed = (detail) => {
   throw new ReleasePolicyError('FACTS_MALFORMED', detail);
 };
@@ -182,7 +186,7 @@ function isConfigurationRecord(record, evaluatedAt) {
   if (!isObject(observation) || !isObject(validationWindow)) return false;
   return (
     record.schemaVersion === 1 &&
-    isText(record.state) &&
+    CONFIGURATION_STATES.has(record.state) &&
     isTime(record.observedAt) &&
     notAfter(record.observedAt, evaluatedAt) &&
     filledKeys(record, ['scope']) &&
