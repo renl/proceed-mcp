@@ -27,25 +27,30 @@ const WORK_FACTS = [null, 'ok', 'refused', 'failed', 'timeout'], CLEANUP_FACTS =
 const WORK_CODES = { refused: 'PREFLIGHT_BLOCKED', failed: 'WORK_FAILED', timeout: 'WORK_TIMEOUT', ok: 'OK' };
 const CANDIDATE_PATTERN = /^[0-9a-f]{40}$/, MISSING = Symbol('missing'), ACCESSOR = Symbol('accessor');
 
-const failure = code => Object.freeze({ ok: false, code }), success = value => Object.freeze({ ok: true, value });
+const failure = code => Object.freeze({ ok: false, code });
+const success = value => Object.freeze({ ok: true, value });
 const typeError = (code, message) => Object.assign(new TypeError(message), { code });
 const buildError = message => typeError('INVALID_BUILD_INPUT', message);
 const isNumber = value => typeof value === 'number' && Number.isFinite(value);
 const isPlain = value => typeof value === 'object' && value !== null && !Array.isArray(value)
   && Object.getOwnPropertySymbols(value).length === 0 && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 // Descriptor read only: an accessor is reported, never invoked, and no value is ever coerced.
+// A descriptor that defines get or set is an accessor even when both are undefined.
 const field = (object, key) => {
   const descriptor = Object.getOwnPropertyDescriptor(object, key);
   if (descriptor === undefined) return MISSING;
-  return descriptor.get !== undefined || descriptor.set !== undefined ? ACCESSOR : descriptor.value;
+  return 'get' in descriptor || 'set' in descriptor ? ACCESSOR : descriptor.value;
 };
+const hasAccessor = (object, names) => names.some(name => field(object, name) === ACCESSOR);
 const exactDataFields = (value, keys) => {
   if (!isPlain(value)) return null;
   const names = Object.getOwnPropertyNames(value);
   if (names.length !== keys.length || !keys.every(key => names.includes(key))) return null;
-  if (names.some(key => field(value, key) === ACCESSOR)) return null;
+  if (hasAccessor(value, names)) return null;
   return Object.fromEntries(names.map(key => [key, field(value, key)]));
 };
+const validWorktree = value => typeof value === 'string' && value.length > 0 && !value.includes('\u0000')
+  && isAbsolute(value) && resolve(value) === value;
 const sanitizeLimits = (value, frozenOnly) => {
   if (frozenOnly && !Object.isFrozen(value)) return null;
   const limits = exactDataFields(value, LIMIT_KEYS);
@@ -54,27 +59,45 @@ const sanitizeLimits = (value, frozenOnly) => {
   if (limits.gracefulMs + limits.forceMs >= limits.cleanupMs) return null;
   return Object.freeze(limits);
 };
-const requireLimits = value => { const limits = sanitizeLimits(value, true); if (limits === null) throw buildError(LIMITS_MESSAGE); return limits; };
+const requireLimits = value => {
+  const limits = sanitizeLimits(value, true);
+  if (limits === null) throw buildError(LIMITS_MESSAGE);
+  return limits;
+};
 const sanitizeEnvironment = value => {
   if (!isPlain(value)) return null;
   const names = Object.getOwnPropertyNames(value);
-  if (names.some(key => field(value, key) === ACCESSOR)) return null;
+  if (hasAccessor(value, names)) return null;
   const kept = names.filter(key => SAFE_ENVIRONMENT_KEYS.includes(key));
   if (kept.some(key => typeof field(value, key) !== 'string')) return null;
   return Object.fromEntries(kept.map(key => [key, field(value, key)]));
+};
+// A trusted sanitized plan environment carries only the permitted safe string data keys. Raw plan
+// validation drops other string data, while a sanitized plan refuses any forbidden key outright.
+const isSanitizedEnvironment = value => {
+  if (!isPlain(value)) return false;
+  const names = Object.getOwnPropertyNames(value);
+  return names.every(name => SAFE_ENVIRONMENT_KEYS.includes(name) && typeof field(value, name) === 'string');
 };
 const planShape = value => {
   if (!isPlain(value) || !Object.isFrozen(value)) return null;
   const plan = exactDataFields(value, PLAN_OUTPUT_KEYS);
   if (plan === null) return null;
-  if (typeof plan.worktree !== 'string' || typeof plan.runId !== 'string' || typeof plan.candidate !== 'string') return null;
+  if (!validWorktree(plan.worktree)) return null;
+  if (typeof plan.runId !== 'string' || !RUN_ID_PATTERN.test(plan.runId)) return null;
+  if (typeof plan.candidate !== 'string' || !CANDIDATE_PATTERN.test(plan.candidate)) return null;
+  if (plan.port !== LIVE_PORT) return null;
   const directory = join(plan.worktree, '.scratch', 'portable-live', plan.runId);
-  if (plan.port !== LIVE_PORT || plan.directory !== directory || plan.state !== join(directory, 'state')) return null;
-  if (!isPlain(plan.limits) || sanitizeLimits(plan.limits, true) === null) return null;
-  if (!isPlain(plan.environment) || !Object.isFrozen(plan.environment)) return null;
-  return sanitizeEnvironment(plan.environment) === null ? null : plan;
+  if (plan.directory !== directory || plan.state !== join(directory, 'state')) return null;
+  if (!Object.isFrozen(plan.limits) || sanitizeLimits(plan.limits, true) === null) return null;
+  if (!Object.isFrozen(plan.environment) || !isSanitizedEnvironment(plan.environment)) return null;
+  return plan;
 };
-const requirePlan = value => { const plan = planShape(value); if (plan === null) throw typeError('UNVALIDATED_PLAN', PLAN_MESSAGE); return plan; };
+const requirePlan = value => {
+  const plan = planShape(value);
+  if (plan === null) throw typeError('UNVALIDATED_PLAN', PLAN_MESSAGE);
+  return plan;
+};
 const validRole = value => isPlain(value) && Object.isFrozen(value)
   && Object.getOwnPropertyNames(value).every(key => typeof field(value, key) === 'string');
 const validEnvironments = value => {
@@ -86,12 +109,11 @@ export const validatePlan = value => {
   if (!isPlain(value)) return failure('INVALID_PLAN');
   const names = Object.getOwnPropertyNames(value);
   if (names.some(name => !PLAN_KEYS.includes(name))) return failure('INVALID_PLAN');
-  if (names.some(name => field(value, name) === ACCESSOR)) return failure('INVALID_PLAN');
+  if (hasAccessor(value, names)) return failure('INVALID_PLAN');
   if (!PLAN_INPUT_KEYS.every(name => names.includes(name))) return failure('INVALID_PLAN');
   const fields = Object.fromEntries(names.map(name => [name, field(value, name)]));
   const { worktree, runId, candidate, port, environment } = fields;
-  if (typeof worktree !== 'string' || worktree.length === 0 || worktree.includes('\u0000')) return failure('INVALID_PLAN');
-  if (!isAbsolute(worktree) || resolve(worktree) !== worktree) return failure('INVALID_PLAN');
+  if (!validWorktree(worktree)) return failure('INVALID_PLAN');
   if (typeof runId !== 'string' || !RUN_ID_PATTERN.test(runId)) return failure('INVALID_PLAN');
   if (typeof candidate !== 'string' || !CANDIDATE_PATTERN.test(candidate)) return failure('INVALID_PLAN');
   if (port !== LIVE_PORT) return failure('INVALID_PLAN');
@@ -101,7 +123,11 @@ export const validatePlan = value => {
   return success(Object.freeze({ worktree, runId, candidate, port, directory, state: join(directory, 'state'),
     limits, environment: Object.freeze(safe) }));
 };
-export const validateLimits = value => { const limits = sanitizeLimits(value, false); return limits === null ? failure('INVALID_PLAN') : success(limits); };
+export const validateLimits = value => {
+  const limits = sanitizeLimits(value, false);
+  if (limits === null) return failure('INVALID_PLAN');
+  return success(limits);
+};
 export const validateAuthority = (value, plan, nowEpochMs) => {
   const bound = requirePlan(plan);
   if (!isNumber(nowEpochMs)) throw buildError('nowEpochMs must be a finite number');
@@ -114,8 +140,11 @@ export const validateAuthority = (value, plan, nowEpochMs) => {
   return success(null);
 };
 export const validateDriver = value => {
-  const complete = isPlain(value) && DRIVER_METHODS.every(method => typeof field(value, method) === 'function');
-  return complete ? success(value) : failure('INVALID_DRIVER');
+  if (!isPlain(value)) return failure('INVALID_DRIVER');
+  const names = Object.getOwnPropertyNames(value);
+  if (hasAccessor(value, names)) return failure('INVALID_DRIVER');
+  if (!DRIVER_METHODS.every(method => typeof field(value, method) === 'function')) return failure('INVALID_DRIVER');
+  return success(value);
 };
 export const validateOptions = value => {
   const absent = Object.freeze({ signal: null });
