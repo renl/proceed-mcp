@@ -4,12 +4,13 @@ import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { resolve, join, dirname, isAbsolute, sep, delimiter } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import test from 'node:test';
 import { managed } from './support/managed-spike.mjs';
 import { completed, stopped } from './support/startup-guards.mjs';
-import { catalogPeer, initializeResult, allTools, workflowInstructions } from './support/catalog-consumer.mjs';
+import { catalogPeer, initializeResult, successful, allTools, workflowInstructions } from './support/catalog-consumer.mjs';
 
-test('PREVIEW-INSTALLED: fresh protected owner setup and installed stdio catalog', { timeout: 45000 }, async () => {
+test('PREVIEW-INSTALLED: fresh protected setup and installed unpaired tool behavior', { timeout: 45000 }, async () => {
   const executable = process.env.PROCEED_TEST_INSTALLED_BIN;
   assert.ok(executable && isAbsolute(executable), 'explicit isolated installed bin required');
   assert.ok(resolve(executable).startsWith(resolve('.scratch') + sep),
@@ -45,6 +46,8 @@ test('PREVIEW-INSTALLED: fresh protected owner setup and installed stdio catalog
     assert.notEqual(cli('init').status, 0, 'existing state cannot be overwritten');
     assert.equal(cli('owner', 'add', 'preview_owner', '--label', 'Preview test').status, 0);
     const broker = await context.start([process.execPath, '--import', preload, executable, 'serve', '--state-dir', state]);
+    const diagnostics = [];
+    for (const stream of [broker.child.stdout, broker.child.stderr]) stream.on('data', chunk => diagnostics.push(chunk));
     await broker.wait('broker-ready');
     const status = cli('status', '--json');
     assert.equal(status.status, 0);
@@ -53,6 +56,7 @@ test('PREVIEW-INSTALLED: fresh protected owner setup and installed stdio catalog
     assert.deepEqual(value.requests, []);
     const adapter = await context.start([process.execPath, '--import', preload, executable,
       'mcp', '--owner', 'preview_owner', '--state-dir', state]);
+    adapter.child.stderr.on('data', chunk => diagnostics.push(chunk));
     const peer = catalogPeer(adapter.child);
       const init = initializeResult(await peer.call('initialize', {
         protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'package-smoke', version: '1' },
@@ -63,11 +67,46 @@ test('PREVIEW-INSTALLED: fresh protected owner setup and installed stdio catalog
       const tools = await allTools(peer);
       assert.ok(tools.some((tool) => tool.name === 'prepare_approval'));
       assert.ok(tools.some((tool) => tool.name === 'request_approval'));
-      workflowInstructions(init, tools);
-      adapter.child.stdin.end();
+       workflowInstructions(init, tools);
+       // Compare privately: assertion diagnostics must never print issued authority.
+       const tool = async (name, args) => {
+         const result = successful(await peer.call('tools/call', { name, arguments: args }).outcome);
+         assert.ok(Array.isArray(result.content) && result.content.length === 1 &&
+           result.content[0].type === 'text', 'one documented text result required');
+         let text;
+         try { text = JSON.parse(result.content[0].text); }
+         catch { assert.fail('tool text must be valid JSON, private output withheld'); }
+         assert.ok(isDeepStrictEqual(text, result.structuredContent), 'structured and text results agree');
+         return result;
+       };
+       const prepared = await tool('prepare_approval', {});
+       assert.equal(prepared.isError, false);
+       const authority = prepared.structuredContent;
+       assert.equal(authority.schema_version, 1);
+       for (const [field, pattern] of [['request_handle', /^hdl_[a-f0-9]{32}$/],
+         ['request_id', /^req_[a-f0-9]{32}$/], ['request_capability', /^cap_[a-f0-9]{64}$/]]) {
+         assert.ok(typeof authority[field] === 'string' && pattern.test(authority[field]), 'documented private authority');
+       }
+       const refused = await tool('request_approval', {
+         request_handle: authority.request_handle, request_capability: authority.request_capability,
+         client_request_id: 'installed_smoke', action: 'Check installed unpaired refusal', context: '',
+         expires_in_seconds: 60,
+       });
+       assert.equal(refused.isError, true);
+       assert.ok(isDeepStrictEqual(refused.structuredContent, { schema_version: 1,
+         error: { code: 'NOT_PAIRED', message: 'No human is paired; run proceed-mcp pair and complete private-chat pairing',
+           retryable: false } }), 'documented unpaired refusal, not authority or transport failure');
+       const after = cli('status', '--json');
+       assert.equal(after.status, 0);
+       assert.ok(isDeepStrictEqual(JSON.parse(after.stdout).requests, []), 'no actionable approval after preparation/refusal');
+       assert.ok(!Buffer.concat([after.stdout, after.stderr]).includes(Buffer.from(authority.request_capability)),
+         'status excludes private capability');
+       adapter.child.stdin.end();
       assert.equal(await completed(adapter), 0, 'public EOF completes adapter');
       peer.assertComplete();
     await stopped(broker);
+    assert.ok(!Buffer.concat(diagnostics).includes(Buffer.from(authority.request_capability)),
+      'broker and adapter diagnostics exclude private capability');
   }, { totalMs: 30000, readyMs: 5000 });
   assert.ifError(result.cleanupError);
   assert.ifError(result.assertionError);
