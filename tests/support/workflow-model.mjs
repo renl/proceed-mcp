@@ -32,31 +32,34 @@ const strings = (value) => {
   if (!map(value) || Object.values(value).some((entry) => typeof entry !== 'string')) fail();
   return value;
 };
-export function parseWorkflow(text) {
+export function parseWorkflow(text, { release = false } = {}) {
   const ast = parsers.yaml.parse(text, {});
   if (ast.children.length !== 1 || ast.children[0].type !== 'document') fail();
   const [head, body] = ast.children[0].children;
   if (head?.type !== 'documentHead' || head.children.length ||
       body?.type !== 'documentBody' || body.children.length !== 1) fail();
   const workflow = decode(body.children[0]);
-  keys(workflow, ['name', 'on', 'permissions', 'jobs']);
+  keys(workflow, ['name', 'on', 'permissions', 'jobs', ...(release ? ['concurrency'] : [])]);
   if (!map(workflow.on) || !map(workflow.jobs) || !Object.keys(workflow.jobs).length) fail();
-  if (Object.values(workflow.on).some((value) => value !== null)) fail();
+  if (!release && Object.values(workflow.on).some((value) => value !== null)) fail();
   return {
     triggers: Object.keys(workflow.on), topPermissions: strings(workflow.permissions),
+    ...(release ? { events: workflow.on, concurrency: workflow.concurrency } : {}),
     jobs: Object.entries(workflow.jobs).map(([id, job]) => {
-      keys(job, ['name', 'runs-on', 'timeout-minutes', 'steps', 'permissions', 'environment', 'if']);
-      if (typeof job['runs-on'] !== 'string' || !/^(?:[1-9]|1[0-5])$/.test(job['timeout-minutes']) ||
+      keys(job, ['name', 'runs-on', 'timeout-minutes', 'steps', 'permissions', 'environment', 'if', ...(release ? ['needs', 'env'] : [])]);
+      if (typeof job['runs-on'] !== 'string' || !(release ? /^(?:[1-9]|1\d|20)$/ : /^(?:[1-9]|1[0-5])$/).test(job['timeout-minutes']) ||
           !Array.isArray(job.steps)) fail();
       return { id, runsOn: [job['runs-on']], environment: job.environment ?? null,
         permissions: strings(job.permissions ?? {}), if: job.if ?? null,
+        ...(release ? { needs: job.needs ?? null, env: strings(job.env ?? {}), timeout: job['timeout-minutes'] } : {}),
         steps: job.steps.map((step) => {
           keys(step, ['name', 'run', 'uses', 'with', 'shell', 'timeout-minutes']);
           if ((typeof step.run === 'string') === (typeof step.uses === 'string')) fail();
           if (step.shell != null && step.shell !== 'pwsh') fail();
           if (step['timeout-minutes'] != null && !/^[1-5]$/.test(step['timeout-minutes'])) fail();
           return { run: step.run ?? null, uses: step.uses ?? null,
-            with: strings(step.with ?? {}), env: {} };
+            with: strings(step.with ?? {}), env: {},
+            ...(release ? { shell: step.shell ?? null, timeout: step['timeout-minutes'] ?? null } : {}) };
         }) };
     }),
   };

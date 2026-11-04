@@ -4,6 +4,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { parseWorkflow, WorkflowModelError } from './support/workflow-model.mjs';
+import { releaseFacts } from './support/release-policy-fixture.mjs';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, writeFile, rm, access, symlink } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 function unprivileged(text) {
   // Reject even comments mentioning these constructs. False positives require review,
@@ -98,4 +104,310 @@ test('parser calibration fails closed on unsupported YAML and structure', () => 
 });
 test('PR workflow exists and passes parsed and lexical policy', async () => {
   validate(await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
+});
+
+// Dynamic import preserves independent B1 calibration while the B2 source is RED.
+const policy = () => import('../scripts/release-policy.mjs');
+function verdict(api, facts, codes = []) {
+  const blockers = codes.map((code) => ({ code, scope: /^(CHECK_|CONFIGURATION_|ARTIFACT_|PACKED_INPUTS_)/.test(code)
+    ? 'publication' : 'validation' })).sort((a, b) => a.code.localeCompare(b.code));
+  assert.deepEqual(api.evaluateRelease(facts), { phase: facts.phase,
+    decision: codes.length ? 'blocked' : 'policy-pass', blockers, authorization: 'not-assessed' });
+}
+const set = (facts, path, value) => {
+  const parts = path.split('.');
+  const key = parts.pop();
+  parts.reduce((object, part) => object[part], facts)[key] = value;
+};
+test('B2 policy: explicit phase scope, bootstrap refusal, exact fail-closed matrix', async () => {
+  const api = await policy();
+  assert.equal(api.RELEASE_POLICY_SCHEMA_VERSION, 2);
+  assert.equal(api.PACKED_INPUT_DIGEST_ALGORITHM, 'sha256-packed-inputs-v1');
+  assert.equal(api.expectedTarballName('@meshimize/proceed-mcp', '0.1.0-preview.2'),
+    'meshimize-proceed-mcp-0.1.0-preview.2.tgz');
+  verdict(api, releaseFacts());
+  const cases = [
+    ['event.name', 'pull_request', 'EVENT_INVALID'], ['event.name', 'workflow_dispatch', 'EVENT_INVALID'],
+    ['package.name', 'other', ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH']],
+    ['event.repository', 'fork/proceed-mcp', ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH', 'CONFIGURATION_MISMATCH']],
+    ['package.registryName', 'other', ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH']],
+    ['tag.name', '', ['TAG_VERSION_MISMATCH', 'ACCEPTANCE_MISMATCH']],
+    ['package.channel', 'latest', ['CHANNEL_INVALID', 'ACCEPTANCE_MISMATCH']], ['run.workflowRef', null, 'WORKFLOW_INVALID'],
+    ['candidate.mainContains', false, 'MAIN_ANCESTRY_UNAVAILABLE'],
+    ['candidate.mainContains', 'unknown', 'MAIN_ANCESTRY_UNAVAILABLE'],
+    ['acceptance', { state: 'missing', record: null }, 'ACCEPTANCE_MISSING'],
+    ['acceptance', { state: 'malformed', record: null }, 'ACCEPTANCE_MALFORMED'],
+    ['acceptance.record.verification.status', 'failed', 'ACCEPTANCE_NOT_PASSED'],
+    ['acceptance.record.verification.reference', '../escape', 'ACCEPTANCE_MALFORMED'],
+    ['acceptance.record.verification.reference', 'C:/private', 'ACCEPTANCE_MALFORMED'],
+    ['acceptance.record.packedInputs', null, 'ACCEPTANCE_MALFORMED'],
+    ['acceptance.record.registryName', 'other', 'ACCEPTANCE_MISMATCH'],
+    ['checks.validate', 'fail', 'CHECK_FAILED'], ['checks.validate', 'unknown', 'CHECK_FAILED'],
+    ['configuration', { state: 'unknown', record: null }, 'CONFIGURATION_UNKNOWN'],
+    ['configuration', { state: 'unconfigured', record: null }, 'CONFIGURATION_UNCONFIGURED'],
+    ['configuration', { state: 'malformed', record: null }, 'CONFIGURATION_MALFORMED'],
+    ['configuration.record.observedAt', '2099-01-01T00:00:00.000Z', 'CONFIGURATION_MALFORMED'],
+    ['configuration.record.validationWindow.endsAt', '2026-11-04T00:00:00.000Z', 'CONFIGURATION_EXPIRED'],
+    ['configuration.record.observation.rights.packageWrite', false, 'CONFIGURATION_INCOMPLETE'],
+    ['configuration.record.observation.environmentProtection.preventsSelfReview', false, 'CONFIGURATION_INCOMPLETE'],
+    ['configuration.record.observation.trustedPublisher.directPublish', false, 'CONFIGURATION_INCOMPLETE'],
+    ['configuration.record.observation.trustedPublisher.workflow', 'other.yml', 'CONFIGURATION_MISMATCH'],
+    ['environment.name', null, 'CONFIGURATION_MISMATCH'],
+    ['artifact', { state: 'missing', filename: null, sha256: null, bytes: null }, 'ARTIFACT_MISSING'],
+    ['artifact.state', 'malformed', 'ARTIFACT_MALFORMED'],
+    ['artifact.sha256', 'd'.repeat(64), 'ARTIFACT_MISMATCH'], ['artifact.bytes', 124, 'ARTIFACT_MISMATCH'],
+    ['packedInputs', { state: 'missing', algorithm: null, digest: null }, 'PACKED_INPUTS_MISSING'],
+    ['packedInputs.algorithm', 'unrecognized', 'PACKED_INPUTS_MALFORMED'],
+    ['packedInputs.digest', 'd'.repeat(64), 'PACKED_INPUTS_MISMATCH'],
+  ];
+  for (const path of ['mainProtection.requiredPullRequest', 'mainProtection.enforcedForAdmins',
+    'tagProtection.active', 'environmentProtection.requiredApproval', 'environmentProtection.deploymentRefRestricted',
+    'trustedPublisher.configurationPresent', 'rights.licenseConfirmed', 'rights.documentationApproved']) {
+    cases.push([`configuration.record.observation.${path}`, false, 'CONFIGURATION_INCOMPLETE']);
+  }
+  for (const [path, value, code] of cases) {
+    const facts = releaseFacts(); set(facts, path, value);
+    verdict(api, facts, Array.isArray(code) ? code : [code]);
+  }
+  for (const phase of ['preflight', 'publish']) {
+    const facts = releaseFacts(); facts.phase = phase;
+    // Keep every identity binding consistent so the version exclusion is decisive.
+    for (const object of [facts.package, facts.acceptance.record]) object.version = '0.1.0-preview.1';
+    facts.tag.name = facts.acceptance.record.tag = 'v0.1.0-preview.1';
+    facts.event.ref = 'refs/tags/v0.1.0-preview.1';
+    facts.run.workflowRef = `renl/proceed-mcp/.github/workflows/release.yml@${facts.event.ref}`;
+    facts.artifact.filename = facts.acceptance.record.artifact.filename = 'meshimize-proceed-mcp-0.1.0-preview.1.tgz';
+    verdict(api, facts, ['INITIAL_VERSION_CI_FORBIDDEN']);
+  }
+  const facts = releaseFacts();
+  facts.configuration = { state: 'unknown', record: null };
+  facts.checks.validate = 'unknown'; facts.artifact.state = 'missing'; facts.packedInputs.state = 'missing';
+  facts.phase = 'preflight'; verdict(api, facts);
+  facts.phase = 'publish';
+  verdict(api, facts, ['CONFIGURATION_UNKNOWN', 'CHECK_FAILED', 'ARTIFACT_MISSING', 'PACKED_INPUTS_MISSING']);
+  // A passed flag, an ancestor claim, and cleanup metadata alone cannot authorize.
+  for (const record of [{ verification: { status: 'passed' } }, { candidateCommit: 'c'.repeat(40) }, { cleanup: 'pass' }]) {
+    const alone = releaseFacts(); alone.acceptance.record = record;
+    verdict(api, alone, ['ACCEPTANCE_MALFORMED']);
+  }
+  for (const bad of [null, {}, { ...releaseFacts(), schemaVersion: 1 }, { ...releaseFacts(), phase: 'other' }]) {
+    assert.throws(() => api.evaluateRelease(bad), { code: 'FACTS_MALFORMED' });
+  }
+});
+
+test('B2 digest: independently encoded per-file bytes, path set and declared inputs', async () => {
+  const api = await policy();
+  const parent = resolve('.scratch/preview-prep');
+  await mkdir(parent, { recursive: true });
+  const root = await mkdtemp(join(parent, 'b2-digest-'));
+  const installDir = join(root, 'installed');
+  const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+  const inputPaths = ['LICENSE', 'README.md', 'package-lock.json', 'package.json', 'scripts/build.mjs'];
+  try {
+    await mkdir(installDir); await mkdir(join(root, 'scripts'));
+    for (const path of inputPaths) await writeFile(join(root, path), `input:${path}`);
+    // Creation order differs from byte-order sorting. Non-ASCII names expose locale sorting.
+    for (const path of ['z.js', 'a.js', '\u00e9.js']) await writeFile(join(installDir, path), `file:${path}`);
+    const files = ['a.js', 'z.js', '\u00e9.js'].map((path) => ({ path, sha256: hash(`file:${path}`), bytes: Buffer.byteLength(`file:${path}`) }));
+    const inputs = inputPaths.map((path) => ({ path, sha256: hash(`input:${path}`) }));
+    const expected = { algorithm: 'sha256-packed-inputs-v1',
+      digest: hash(JSON.stringify({ schema: 'proceed-mcp/packed-inputs/1', files, inputs })), files, inputs };
+    assert.deepEqual(await api.computePackedInputs({ installDir, root }), expected);
+    assert.deepEqual(await api.computePackedInputs({ installDir, root }), expected);
+    for (const [path, replacement] of [['a.js', 'changed'], ['added.js', 'new']]) {
+      await writeFile(join(installDir, path), replacement);
+      assert.notEqual((await api.computePackedInputs({ installDir, root })).digest, expected.digest);
+      if (path === 'a.js') await writeFile(join(installDir, path), 'file:a.js');
+      else await rm(join(installDir, path));
+    }
+    await rm(join(installDir, 'z.js'));
+    assert.notEqual((await api.computePackedInputs({ installDir, root })).digest, expected.digest);
+    await writeFile(join(installDir, 'z.js'), 'file:z.js');
+    for (const path of inputPaths) {
+      await writeFile(join(root, path), 'changed');
+      assert.notEqual((await api.computePackedInputs({ installDir, root })).digest, expected.digest, path);
+      await writeFile(join(root, path), `input:${path}`);
+    }
+    const linked = join(installDir, 'linked');
+    await symlink(join(root, 'scripts'), linked, process.platform === 'win32' ? 'junction' : 'dir');
+    await assert.rejects(api.computePackedInputs({ installDir, root }), { code: 'DIGEST_UNREADABLE' });
+    await rm(linked);
+    await writeFile(join(root, '.npmignore'), 'src/changed.js\n');
+    const selection = await api.computePackedInputs({ installDir, root });
+    assert.notEqual(selection.digest, expected.digest, 'new packing configuration invalidates acceptance');
+    assert.ok(selection.inputs.some(({ path }) => path === '.npmignore'));
+    await rm(join(root, '.npmignore'));
+    await rm(join(root, 'LICENSE'));
+    await assert.rejects(api.computePackedInputs({ installDir, root }), { code: 'DIGEST_UNREADABLE' });
+  } finally {
+    await rm(root, { recursive: true });
+    await assert.rejects(access(root), { code: 'ENOENT' });
+  }
+});
+
+// Closed command lists mirror the selected binding, not a second policy implementation.
+const preflight = 'node scripts/release-policy.mjs --phase preflight';
+const publication = 'node scripts/release-policy.mjs --phase publish --artifact-dir .release-artifact --install-dir (Join-Path $prefix \'node_modules/@meshimize/proceed-mcp\')';
+const releasePack = packCommand.replace('node tests/release-pack.mjs',
+  "$env:PROCEED_TEST_ARTIFACT_DIR = Join-Path $env:GITHUB_WORKSPACE '.release-artifact'\nnode tests/release-pack.mjs");
+const fetchMain = 'git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main';
+const npmVersion = `node -e "const{execFileSync}=require('node:child_process');const v=execFileSync(process.platform==='win32'?'npm.cmd':'npm',['--version'],{encoding:'utf8'}).trim();const[a,b,c]=v.split('.').map(Number);if(a<11||(a===11&&(b<5||(b===5&&c<1))))process.exit(1)"`;
+const digestInstall = [
+  "$prefix = Join-Path $env:RUNNER_TEMP 'digest-install'",
+  'New-Item -ItemType Directory -Path $prefix | Out-Null',
+  'Set-Content -LiteralPath (Join-Path $prefix \'package.json\') -Value \'{"private":true}\'',
+  "$tgz = Get-ChildItem -LiteralPath '.release-artifact' -Filter '*.tgz'",
+  "if ($tgz.Count -ne 1) { throw 'expected exactly one tarball' }",
+  'npm install $tgz.FullName --prefix $prefix --omit=dev --ignore-scripts --package-lock=false --offline --no-audit --no-fund',
+  publication,
+].join('\n');
+const publishTarball = "$tgz = Get-ChildItem -LiteralPath '.release-artifact' -Filter '*.tgz'\nnpm publish $tgz.FullName --access public --tag preview";
+function releaseGuard(text) {
+  assert.doesNotMatch(text, /secrets\b|NODE_AUTH_TOKEN|NPM_TOKEN|\.npmrc|registry-url|npm config|dist-tag|latest|--provenance|continue-on-error|self-hosted/i);
+  const model = parseWorkflow(text, { release: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(model.events)), { push: { tags: ['v*'] } });
+  assert.deepEqual({ ...model.topPermissions }, { contents: 'read' });
+  assert.deepEqual({ ...model.concurrency }, { group: 'release-${{ github.ref }}', 'cancel-in-progress': 'false' });
+  assert.deepEqual(model.jobs.map((job) => job.id), ['validate', 'publish']);
+  const [validation, publishing] = model.jobs;
+  assert.equal(validation.timeout, '20'); assert.equal(publishing.timeout, '15');
+  assert.equal(validation.environment, null); assert.equal(validation.needs, null); assert.equal(validation.if, null);
+  assert.deepEqual({ ...validation.permissions }, {}); assert.deepEqual({ ...validation.env }, {});
+  assert.equal(publishing.environment, 'npm-preview'); assert.equal(publishing.needs, 'validate');
+  assert.equal(publishing.if, "needs.validate.result == 'success'");
+  assert.deepEqual({ ...publishing.permissions }, { contents: 'read', 'id-token': 'write' });
+  assert.deepEqual({ ...publishing.env }, { RELEASE_ENVIRONMENT: 'npm-preview', VALIDATE_RESULT: '${{ needs.validate.result }}' });
+  const pins = [];
+  for (const job of model.jobs) {
+    assert.deepEqual(job.runsOn, ['windows-2025']);
+    for (const step of job.steps.filter((item) => item.run)) assert.deepEqual({ ...step.with }, {});
+    for (const step of job.steps.filter((item) => item.uses)) {
+      assert.match(step.uses, /^actions\/(?:checkout|setup-node|upload-artifact|download-artifact)@[a-f0-9]{40}$/);
+      pins.push(step.uses);
+    }
+    assert.match(job.steps[0].uses, /^actions\/checkout@/);
+    assert.deepEqual({ ...job.steps[0].with }, { 'fetch-depth': '0', 'persist-credentials': 'false' });
+    assert.match(job.steps[1].uses, /^actions\/setup-node@/);
+    assert.deepEqual({ ...job.steps[1].with }, { 'node-version': '24.22.2' });
+  }
+  assert.equal(new Set(pins.map((pin) => pin.split('@')[0])).size, 4);
+  const revisions = new Map();
+  for (const pin of pins) {
+    const [name, revision] = pin.split('@');
+    assert.ok(!revisions.has(revision) || revisions.get(revision) === name, 'different actions need distinct revisions');
+    revisions.set(revision, name);
+  }
+  assert.deepEqual(validation.steps.map((step) => step.run?.trimEnd() ?? step.uses.split('@')[0]),
+    ['actions/checkout', 'actions/setup-node', fetchMain, preflight,
+      'node --test tests/release-metadata.test.mjs', 'node scripts/build.mjs', releasePack, 'actions/upload-artifact']);
+  assert.deepEqual(publishing.steps.map((step) => step.run?.trimEnd() ?? step.uses.split('@')[0]),
+    ['actions/checkout', 'actions/setup-node', fetchMain, 'actions/download-artifact', npmVersion, digestInstall, publishTarball]);
+  assert.deepEqual({ ...validation.steps.at(-1).with }, { name: 'release-artifact', path: '.release-artifact/', 'if-no-files-found': 'error', 'retention-days': '1' });
+  assert.deepEqual({ ...publishing.steps[3].with }, { name: 'release-artifact', path: '.release-artifact' });
+  assert.equal(validation.steps[6].shell, 'pwsh'); assert.equal(validation.steps[6].timeout, '5');
+}
+const action = (name, pin, values) => `      - uses: actions/${name}@${pin.repeat(40)}\n        with:\n${Object.entries(values).map(([key, value]) => `          ${key}: ${value}\n`).join('')}`;
+const runStep = (run, pack = false) => `      - shell: pwsh\n${pack ? '        timeout-minutes: 5\n' : ''}        run: |\n${run.split('\n').map((line) => `          ${line}\n`).join('')}`;
+const checkout = action('checkout', 'a', { 'fetch-depth': 0, 'persist-credentials': false });
+const setupNode = action('setup-node', 'b', { 'node-version': '24.22.2' });
+const releaseSpecimen = `on:
+  push:
+    tags:
+      - v*
+permissions:
+  contents: read
+concurrency:
+  group: release-\${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+${checkout}${setupNode}${[fetchMain, preflight, 'node --test tests/release-metadata.test.mjs', 'node scripts/build.mjs'].map((run) => runStep(run)).join('')}${runStep(releasePack, true)}${action('upload-artifact', 'c', { name: 'release-artifact', path: '.release-artifact/', 'if-no-files-found': 'error', 'retention-days': 1 })}  publish:
+    needs: validate
+    if: needs.validate.result == 'success'
+    runs-on: windows-2025
+    timeout-minutes: 15
+    environment: npm-preview
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_ENVIRONMENT: npm-preview
+      VALIDATE_RESULT: \${{ needs.validate.result }}
+    steps:
+${checkout}${setupNode}${runStep(fetchMain)}${action('download-artifact', 'd', { name: 'release-artifact', path: '.release-artifact' })}${[npmVersion, digestInstall, publishTarball].map((run) => runStep(run)).join('')}`;
+test('B2 workflow calibration rejects privilege, ordering, artifact and trigger hazards', () => {
+  releaseGuard(releaseSpecimen);
+  for (const [before, after] of [
+    ['push:', 'pull_request:'], ['- v*', '- main'], ['environment: npm-preview', 'environment: other'],
+    ['    steps:', '    environment: npm-preview\n    steps:'],
+    ['    steps:', '    permissions:\n      id-token: write\n    steps:'],
+    [`checkout@${'a'.repeat(40)}`, 'checkout@v4'], ['contents: read', 'contents: write'],
+    [`setup-node@${'b'.repeat(40)}`, `setup-node@${'a'.repeat(40)}`],
+    [preflight, 'npm publish . --tag preview'], [publication, 'echo policy-not-run'],
+    ['npm publish $tgz.FullName', 'npm publish .'], ['--tag preview', '--tag latest'],
+    ['--tag preview', '--tag preview\n          echo ${{ secrets.NPM_TOKEN }}'],
+    ['--tag preview', '--tag preview\n        continue-on-error: true'],
+    ['persist-credentials: false', 'persist-credentials: true'],
+    ['name: release-artifact', 'name: unrelated'], ['if-no-files-found: error', 'if-no-files-found: warn'],
+  ]) {
+    const mutated = releaseSpecimen.replace(before, after);
+    assert.notEqual(mutated, releaseSpecimen, 'calibration must actually change the specimen');
+    assert.throws(() => releaseGuard(mutated), undefined, before);
+  }
+});
+test('B2 checked-in release workflow satisfies the selected offline structure', async () => {
+  releaseGuard(await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'));
+});
+
+test('B2 readers: absent and invalid JSON never become verified records', async () => {
+  const api = await policy();
+  const parent = resolve('.scratch/preview-prep');
+  await mkdir(parent, { recursive: true });
+  const root = await mkdtemp(join(parent, 'b2-records-'));
+  const version = '0.1.0-preview.2';
+  const acceptance = join(root, 'release/evidence', `${version}.json`);
+  const configuration = join(root, 'release/configuration.json');
+  try {
+    assert.deepEqual(await api.readAcceptanceRecord({ root, version }), { state: 'missing', record: null });
+    assert.deepEqual(await api.readConfigurationRecord({ root }), { state: 'unknown', record: null });
+    await mkdir(join(root, 'release/evidence'), { recursive: true });
+    await writeFile(acceptance, '{'); await writeFile(configuration, '{');
+    assert.deepEqual(await api.readAcceptanceRecord({ root, version }), { state: 'malformed', record: null });
+    assert.deepEqual(await api.readConfigurationRecord({ root }), { state: 'malformed', record: null });
+    const facts = releaseFacts();
+    await writeFile(acceptance, JSON.stringify(facts.acceptance.record));
+    await writeFile(configuration, JSON.stringify(facts.configuration.record));
+    assert.deepEqual(await api.readAcceptanceRecord({ root, version }), facts.acceptance);
+    assert.deepEqual(await api.readConfigurationRecord({ root }), facts.configuration);
+    await rm(acceptance); await mkdir(acceptance);
+    await assert.rejects(api.readAcceptanceRecord({ root, version }), { code: 'RECORD_UNREADABLE' });
+  } finally {
+    await rm(root, { recursive: true });
+    await assert.rejects(access(root), { code: 'ENOENT' });
+  }
+});
+
+test('B2 CLI: usage is redacted and current bootstrap version cannot reach CI validation', async () => {
+  await policy();
+  const script = fileURLToPath(new URL('../scripts/release-policy.mjs', import.meta.url));
+  const env = Object.fromEntries(['PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC']
+    .filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
+  const run = (args) => spawnSync(process.execPath, [script, ...args], {
+    cwd: resolve('.'), env, encoding: 'utf8', timeout: 5000, maxBuffer: 65536, windowsHide: true,
+  });
+  for (const args of [[], ['--phase', 'other'], ['--unknown'], ['--phase', 'publish']]) {
+    const child = run(args); assert.ifError(child.error);
+    assert.equal(child.status, 2); assert.equal(child.stdout, '');
+    assert.match(child.stderr, /^release-policy: USAGE_INVALID: [^\r\n]+\r?\n$/);
+    assert.doesNotMatch(child.stderr, /[A-Z]:[\\/]|\bat \w+.*:\d+/);
+  }
+  const child = run(['--phase', 'preflight']); assert.ifError(child.error);
+  assert.equal(child.status, 1); assert.equal(child.stderr, '');
+  assert.equal(child.stdout.trim().split('\n').length, 1);
+  const result = JSON.parse(child.stdout);
+  assert.equal(result.decision, 'blocked'); assert.equal(result.authorization, 'not-assessed');
+  assert.ok(result.blockers.some(({ code }) => code === 'INITIAL_VERSION_CI_FORBIDDEN'));
 });

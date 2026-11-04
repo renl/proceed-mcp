@@ -23,8 +23,15 @@ export async function retainVerifiedArtifact({ tarballPath, artifactDir, manifes
   assert.match(manifest.filename, /^[a-z0-9.-]+\.tgz$/);
   assert.equal(basename(tarballPath), manifest.filename);
   assert.equal(manifest.cleanup, undefined, 'cleanup not yet proven');
+  assert.ok([1, 2].includes(manifest.schemaVersion), 'known manifest version');
   assert.deepEqual(Object.keys(manifest).sort(),
-    ['schemaVersion', 'package', 'version', 'filename', 'sha256', 'bytes', 'files', 'node', 'platform'].sort());
+    ['schemaVersion', 'package', 'version', 'filename', 'sha256', 'bytes', 'files', 'node', 'platform',
+      ...(manifest.schemaVersion === 2 ? ['packedInputs'] : [])].sort());
+  if (manifest.schemaVersion === 2) {
+    assert.deepEqual(Object.keys(manifest.packedInputs).sort(), ['algorithm', 'digest']);
+    assert.equal(manifest.packedInputs.algorithm, 'sha256-packed-inputs-v1');
+    assert.match(manifest.packedInputs.digest, /^[a-f0-9]{64}$/);
+  }
   for (const entry of manifest.files) {
     assert.deepEqual(Object.keys(entry).sort(), ['path', 'size']);
     assert.match(entry.path, /^(?:package\.json|README\.md|LICENSE|(?:bin|src)\/[a-zA-Z0-9_/-]+\.js)$/);
