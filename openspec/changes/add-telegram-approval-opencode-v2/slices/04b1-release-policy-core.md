@@ -2,6 +2,8 @@
 
 ## Current three-checkpoint decomposition - pending focused review
 
+Current readiness: all three core checkpoints independently accepted. Digest/complete-core code `a9fe8ee2ed3c7998bc1f65990daa60217f37e263` PASS is limited to the [owned verdict](04b1c-release-digest.md#independent-digest-and-complete-core-verdict---2026-11-05). Collector preparation/consumption requires separate authorization. Remaining collector/artifact/CLI/workflow and real delivery obligations below are unchanged and unproved. The original heading and preparation records below are historical, not a pending replay of the accepted partition review.
+
 This section supersedes implementation readiness and the sole-source cut below, not historical failures or accounting. Preparation HEAD is `32e1844229da42e3788eac23916471176fa3802d`. Preserved untracked `scripts/release-policy-core.mjs` SHA-256 is `f99c9f037b17bd416c346778018167de73a7d70a66593dca2e82b7eb7eaae68f`. Its 460 gross exceeds 260. It is preservation-only, not an accepted baseline or authorization to refactor it now.
 
 | Ordered checkpoint | Allowed production paths after separate authorization | Proof before next consumption |
