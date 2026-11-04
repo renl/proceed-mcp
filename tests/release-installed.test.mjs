@@ -27,9 +27,12 @@ test('PREVIEW-INSTALLED: fresh protected setup and installed unpaired tool behav
     env.PATH = dirname(process.execPath) + delimiter + (env.PATH ?? '');
     const command = join(dirname(dirname(dirname(executable))), '.bin',
       process.platform === 'win32' ? 'proceed-mcp.cmd' : 'proceed-mcp');
+    // cmd.exe owns quoting here. Reject expansion/quote characters, not spaces.
+    assert.doesNotMatch(command, /["%!\r\n]/, 'shim path must not contain cmd expansion or quotes');
     const help = process.platform === 'win32'
       ? spawnSync(env.COMSPEC ?? 'cmd.exe', ['/d', '/s', '/c', `""${command}" --help"`],
-        { cwd: context.directory, env, timeout: 5000, maxBuffer: 65536, windowsHide: true })
+        { cwd: context.directory, env, timeout: 5000, maxBuffer: 65536, windowsHide: true,
+          windowsVerbatimArguments: true })
       : spawnSync(command, ['--help'],
         { cwd: context.directory, env, timeout: 5000, maxBuffer: 65536 });
     assert.ifError(help.error);

@@ -16,7 +16,7 @@ await mkdir(root, { recursive: true });
 const run = await mkdtemp(join(root, 'run-'));
 const record = join(root, basename(run));
 const stage = join(run, 'source');
-const install = join(run, 'install');
+const install = join(run, 'install with spaces');
 await mkdir(stage);
 await mkdir(install);
 const config = join(run, 'npmrc');
@@ -38,6 +38,9 @@ const execute = (file, args, cwd, timeout = 30000, childEnv = env) => {
     windowsHide: true, maxBuffer: 1024 * 1024 });
   writeFileSync(`${record}-${phase}-exit.json`, JSON.stringify({ status: child.status,
     signal: child.signal, error: child.error?.code ?? null }));
+  if (phase === 'installed-public-smoke') {
+    writeFileSync(`${record}-installed.tap`, child.stdout);
+  }
   assert.ifError(child.error);
   assert.equal(child.status, 0, `package check failed in ${phase}, no private output emitted`);
   return child.stdout;
@@ -55,7 +58,8 @@ try {
   const [packed] = JSON.parse(npmRun(['pack', '--json', '--pack-destination', run], stage));
   assert.equal(packed.filename, 'proceed-mcp-0.1.0-preview.1.tgz');
   await writeFile(`${record}-artifact.json`, JSON.stringify({ filename: packed.filename,
-    sha256: createHash('sha256').update(await readFile(join(run, packed.filename))).digest('hex') }));
+    sha256: createHash('sha256').update(await readFile(join(run, packed.filename))).digest('hex'),
+    files: packed.files.map(({ path, size }) => ({ path, size })) }));
   const paths = packed.files.map((entry) => entry.path);
   assert.ok(paths.includes('package.json') && paths.includes('LICENSE') && paths.includes('README.md'));
   for (const path of paths) {
