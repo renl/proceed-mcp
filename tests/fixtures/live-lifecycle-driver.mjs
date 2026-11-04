@@ -66,10 +66,18 @@ export function assertContext(context, p, setup = false) {
 export function callerCancellation() {
   const controller = new AbortController(), signal = controller.signal;
   const counts = { add: 0, remove: 0 };
+  const activeListeners = new Set();
   for (const [method, key] of [['addEventListener', 'add'], ['removeEventListener', 'remove']]) {
     const original = signal[method].bind(signal);
-    signal[method] = (...args) => { if (args[0] === 'abort') counts[key]++; return original(...args); };
+    signal[method] = (...args) => {
+      if (args[0] === 'abort') {
+        counts[key]++;
+        if (key === 'add') activeListeners.add(args[1]);
+        else activeListeners.delete(args[1]);
+      }
+      return original(...args);
+    };
   }
   Object.defineProperty(signal, 'reason', { get() { throw Error('caller reason must not be read'); } });
-  return { signal, counts, abort: () => controller.abort(fakeToken) };
+  return { signal, counts, activeListeners, abort: () => controller.abort(fakeToken) };
 }

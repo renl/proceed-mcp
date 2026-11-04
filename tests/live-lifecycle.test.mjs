@@ -527,3 +527,155 @@ test('VERIFY-RAW: malformed release verdicts resolve redacted failed cleanup and
       });
     }
   });
+
+// Final controller integration: selected private binding, no physical/public driver.
+test('CANCEL-VALIDATION: competing invalid inputs precede listener registration and pre-abort', async t => {
+  for (const [name, mutate, options, code] of [
+    ['plan', p => { p.port = 0; }, { extra: true }, 'INVALID_PLAN'],
+    ['authority', p => { p.authorization = undefined; }, { extra: true }, 'INVALID_AUTHORITY'],
+    ['driver', () => {}, { extra: true }, 'INVALID_DRIVER'],
+    ['options', () => {}, null, 'INVALID_OPTIONS'],
+  ]) {
+    await t.test(name, async () => {
+      const c = callerCancellation(), p = plan(), f = fakeDriver(); c.abort(); mutate(p);
+      if (name === 'plan') p.authorization = undefined;
+      if (['plan', 'authority', 'driver'].includes(name)) delete f.driver.stop;
+      const selected = options === null ? { signal: c.signal, extra: true } : { ...options, signal: c.signal };
+      assertResult(await run(p, f.driver, selected), { assertion: 'blocked', cleanup: 'not-needed', retained: false, code });
+      assert.deepEqual(f.calls, []);
+      assert.deepEqual(c.counts, { add: 0, remove: 0 });
+    });
+  }
+  const c = callerCancellation(), options = Object.assign(Object.create(null), { signal: c.signal });
+  assertResult(await run(plan(), fakeDriver().driver, options), { assertion: 'passed', code: 'OK' });
+  assert.equal(c.signal.aborted, false, 'controller must never abort the caller signal');
+  assert.deepEqual(c.counts, { add: 1, remove: 1 });
+  assert.equal(c.activeListeners.size, 0, 'remove the registered callback, not another callback');
+});
+
+test('CANCEL-SETTLEMENT: unfired caller listener is disposed on every ordinary outcome', { timeout: 3000 }, async t => {
+  for (const [name, overrides, code] of [
+    ['refusal', { preflight: async () => ({ ready: false }) }, 'PREFLIGHT_BLOCKED'],
+    ['work error', { setup: async () => { throw Error(fakeToken); } }, 'WORK_FAILED'],
+    ['timeout', { setup: noncooperative }, 'WORK_TIMEOUT'],
+    ['progress error', { progress: async () => { throw Error(fakeToken); } }, 'PROGRESS_FAILED'],
+    ['cleanup error', { verifyStopped: async () => null }, 'CLEANUP_FAILED'],
+  ]) {
+    await t.test(name, async () => {
+      const c = callerCancellation(), f = fakeDriver(overrides);
+      const result = await run(plan(), f.driver, { signal: c.signal }), snapshot = { ...result }, calls = [...f.calls];
+      assertResult(result, { code });
+      assert.equal(c.signal.aborted, false);
+      assert.deepEqual(c.counts, { add: 1, remove: 1 });
+      assert.equal(c.activeListeners.size, 0);
+      c.abort(); await turn();
+      assert.deepEqual(result, snapshot); assert.deepEqual(f.calls, calls);
+    });
+  }
+});
+
+test('CANCEL-COOPERATIVE: caller abort reaches pending work signal without forwarding caller authority', async t => {
+  for (const stage of ['preflight', 'reserve', 'acquireCredential', 'setup', 'execute']) {
+    await t.test(stage, async () => {
+      const c = callerCancellation(), p = plan();
+      const f = fakeDriver({ [stage]: context => { queueMicrotask(c.abort); return abortable(context); } });
+      const start = performance.now(), result = await run(p, f.driver, { signal: c.signal });
+      const reserved = stage !== 'preflight';
+      assertResult(result, { assertion: reserved ? 'failed' : 'blocked', retained: reserved,
+        cleanup: reserved ? 'passed' : 'not-needed', code: 'CANCELLED' });
+      assert.ok(performance.now() - start < 400);
+      for (const { name, value } of f.contexts) {
+        assertContext(value, p, name === 'setup'); assert.notEqual(value.signal, c.signal);
+        if (name === stage) assert.equal(value.signal.aborted, true);
+      }
+      assert.deepEqual(c.counts, { add: 1, remove: 1 });
+      assert.equal(c.activeListeners.size, 0);
+    });
+  }
+});
+
+test('CANCEL-ABANDONED: late fulfillment and rejection at every effect/progress window are fenced',
+  { timeout: 5000 }, async t => {
+    const unhandled = [], listener = reason => unhandled.push(reason);
+    process.on('unhandledRejection', listener);
+    try {
+      for (const stage of ['preflight', 'reserve', 'acquireCredential', 'setup', 'execute',
+        'progress:setup', 'progress:run', 'progress:teardown', 'progress:complete', 'stop', 'forceStop', 'verifyStopped']) {
+        for (const reject of [false, true]) {
+          await t.test(`${stage} ${reject ? 'reject' : 'fulfill'}`, async () => {
+            const c = callerCancellation(); let settleLate;
+            const pending = () => new Promise((resolve, fail) => {
+              settleLate = () => reject ? fail(Error(fakeToken)) : resolve(fakeToken);
+              c.abort();
+            });
+            const overrides = stage.startsWith('progress:')
+              ? { progress: event => event.phase === stage.split(':')[1] ? pending() : Promise.resolve() }
+              : { [stage]: pending };
+            if (stage === 'forceStop') overrides.stop = noncooperative;
+            const f = fakeDriver(overrides), result = await run(plan(), f.driver, { signal: c.signal });
+            const snapshot = { ...result }, calls = [...f.calls];
+            settleLate(); await turn(); await turn();
+            const reserved = !['preflight', 'progress:setup'].includes(stage);
+            assertResult(result, { assertion: reserved ? 'failed' : 'blocked', retained: reserved,
+              cleanup: stage === 'verifyStopped' ? 'failed' : reserved ? 'passed' : 'not-needed',
+              code: stage === 'verifyStopped' ? 'CANCELLED_CLEANUP_FAILED' : 'CANCELLED' });
+            assert.deepEqual(result, snapshot); assert.deepEqual(f.calls, calls);
+            assert.equal(f.calls.filter(name => name === 'stop').length, reserved ? 1 : 0);
+            assert.equal(f.calls.filter(name => name === 'verifyStopped').length, reserved ? 1 : 0);
+            if (['preflight', 'reserve', 'acquireCredential', 'setup', 'progress:setup', 'progress:run'].includes(stage)) {
+              assert.ok(!f.calls.includes('execute'));
+            }
+            assert.deepEqual(c.counts, { add: 1, remove: 1 });
+            assert.equal(c.activeListeners.size, 0); assertRedacted(f.progress);
+          });
+        }
+      }
+      assert.deepEqual(unhandled, []);
+    } finally { process.removeListener('unhandledRejection', listener); }
+  });
+
+test('CANCEL-RESERVES: cancellation during each cleanup effect preserves independent signals and verification',
+  { timeout: 5000 }, async t => {
+    for (const stage of ['stop', 'forceStop', 'verifyStopped']) {
+      await t.test(stage, async () => {
+        const c = callerCancellation(), p = plan(); let remaining;
+        const f = fakeDriver({ stop: noncooperative, forceStop: noncooperative,
+          verifyStopped: async context => {
+            remaining = context.deadline - performance.now();
+            return { processesAbsent: true, listenerReleased: true, ownershipReleased: true };
+          }, [stage]: context => { c.abort(); assert.equal(context.signal.aborted, false); return noncooperative(); } });
+        const start = performance.now(), result = await run(p, f.driver, { signal: c.signal });
+        assertResult(result, { assertion: 'failed', cleanup: stage === 'verifyStopped' ? 'failed' : 'passed',
+          retained: true, code: stage === 'verifyStopped' ? 'CANCELLED_CLEANUP_FAILED' : 'CANCELLED' });
+        assert.ok(performance.now() - start < 1400);
+        order(f.calls, 'stop', 'forceStop'); order(f.calls, 'forceStop', 'verifyStopped');
+        const contexts = ['stop', 'forceStop', 'verifyStopped'].map(name => f.contexts.find(c => c.name === name).value);
+        assert.equal(new Set(contexts.map(context => context.signal)).size, 3);
+        for (const context of contexts) assert.notEqual(context.signal, c.signal);
+        assert.equal(contexts[0].signal.aborted, true); assert.equal(contexts[1].signal.aborted, true);
+        assert.equal(contexts[2].signal.aborted, stage === 'verifyStopped');
+        if (stage !== 'verifyStopped') assert.ok(remaining >= 90, 'verification keeps its usable reserve');
+        assert.deepEqual(c.counts, { add: 1, remove: 1 }); assert.equal(c.activeListeners.size, 0);
+      });
+    }
+  });
+
+test('CANCEL-PRECEDENCE: cancellation supersedes work/progress failure but never erases cleanup failure',
+  { timeout: 4000 }, async t => {
+    for (const primary of ['error', 'timeout', 'progress']) {
+      for (const cleanupFailed of [false, true]) {
+        await t.test(`${primary} cleanup ${cleanupFailed ? 'failed' : 'passed'}`, async () => {
+          const c = callerCancellation();
+          const overrides = primary === 'progress'
+            ? { progress: async event => { if (event.phase === 'run') throw Error(fakeToken); } }
+            : { execute: primary === 'timeout' ? noncooperative : async () => { throw Error(fakeToken); } };
+          const f = fakeDriver({ ...overrides, stop: async () => { c.abort(); },
+            verifyStopped: async () => ({ processesAbsent: !cleanupFailed, listenerReleased: true, ownershipReleased: true }) });
+          assertResult(await run(plan(), f.driver, { signal: c.signal }), { assertion: 'failed', retained: true,
+            cleanup: cleanupFailed ? 'failed' : 'passed', code: cleanupFailed ? 'CANCELLED_CLEANUP_FAILED' : 'CANCELLED' });
+          assert.equal(f.calls.filter(name => name === 'verifyStopped').length, 1);
+          assert.deepEqual(c.counts, { add: 1, remove: 1 }); assert.equal(c.activeListeners.size, 0);
+        });
+      }
+    }
+  });
