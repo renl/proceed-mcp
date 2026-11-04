@@ -13,6 +13,15 @@ const run = async (p, d, options) => (await import('./support/live-run-lifecycle
 const order = (calls, first, second) => assert.ok(calls.indexOf(first) >= 0
   && calls.indexOf(second) > calls.indexOf(first), `${first} before ${second}`);
 
+// A 700ms observation allows scheduling slack but cannot pass a 2000ms work timeout.
+const cancellationPlan = () => {
+  const p = plan();
+  Object.assign(p.limits, { setupMs: 2000, runMs: 2000, totalMs: 4350 });
+  return p;
+};
+const assertPromptCancellation = elapsed => assert.ok(elapsed < 700,
+  'caller cancellation must settle comfortably before the 2000ms work deadline');
+
 test('CAL: controlled driver cannot access real resources and exposes deliberate failure', async () => {
   const f = fakeDriver({ execute: async () => { throw Error('calibration'); } });
   assert.deepEqual(await f.driver.preflight({}), { ready: true });
@@ -300,11 +309,11 @@ test('CANCEL-EARLY: pre-aborted caller owns no namespace, listener or effect', a
 test('CANCEL-PENDING: cancellation fences every pending effect and independently cleans attempted reservation', { timeout: 15000 }, async () => {
   for (const stage of ['preflight', 'reserve', 'acquireCredential', 'setup', 'execute', 'progress']) {
     const c = callerCancellation(), f = fakeDriver({ [stage]: () => { c.abort(); return noncooperative(); } });
-    const start = performance.now(), result = await run(plan(), f.driver, { signal: c.signal });
+    const start = performance.now(), result = await run(cancellationPlan(), f.driver, { signal: c.signal });
+    assertPromptCancellation(performance.now() - start);
     const reserved = !['preflight', 'progress'].includes(stage);
     assertResult(result, { assertion: reserved ? 'failed' : 'blocked', retained: reserved,
       cleanup: reserved ? 'passed' : 'not-needed', code: 'CANCELLED' });
-    assert.ok(performance.now() - start < 400, 'caller cancellation must not wait for work deadline');
     assert.deepEqual(c.counts, { add: 1, remove: 1 });
     for (const { name, value } of f.contexts) {
       assert.notEqual(value.signal, c.signal);
@@ -574,16 +583,16 @@ test('CANCEL-SETTLEMENT: unfired caller listener is disposed on every ordinary o
   }
 });
 
-test('CANCEL-COOPERATIVE: caller abort reaches pending work signal without forwarding caller authority', async t => {
+test('CANCEL-COOPERATIVE: caller abort reaches pending work signal without forwarding caller authority', { timeout: 15000 }, async t => {
   for (const stage of ['preflight', 'reserve', 'acquireCredential', 'setup', 'execute']) {
     await t.test(stage, async () => {
-      const c = callerCancellation(), p = plan();
+      const c = callerCancellation(), p = cancellationPlan();
       const f = fakeDriver({ [stage]: context => { queueMicrotask(c.abort); return abortable(context); } });
       const start = performance.now(), result = await run(p, f.driver, { signal: c.signal });
+      assertPromptCancellation(performance.now() - start);
       const reserved = stage !== 'preflight';
       assertResult(result, { assertion: reserved ? 'failed' : 'blocked', retained: reserved,
         cleanup: reserved ? 'passed' : 'not-needed', code: 'CANCELLED' });
-      assert.ok(performance.now() - start < 400);
       for (const { name, value } of f.contexts) {
         assertContext(value, p, name === 'setup'); assert.notEqual(value.signal, c.signal);
         if (name === stage) assert.equal(value.signal.aborted, true);
@@ -633,6 +642,29 @@ test('CANCEL-ABANDONED: late fulfillment and rejection at every effect/progress 
       assert.deepEqual(unhandled, []);
     } finally { process.removeListener('unhandledRejection', listener); }
   });
+
+test('CAL-CANCEL-PROMPT: valid long budgets and prompt oracle reject deadline-only settlement', () => {
+  assert.equal(validatePlan(cancellationPlan()).ok, true);
+  assertPromptCancellation(0);
+  assert.throws(() => assertPromptCancellation(2000), { code: 'ERR_ASSERTION' });
+});
+
+test('CANCEL-SETUP-FULFILLED: successful setup cancellation fences execute and disposes its callback', async () => {
+  const c = callerCancellation(), f = fakeDriver({ setup: async () => { c.abort(); } });
+  const result = await run(cancellationPlan(), f.driver, { signal: c.signal });
+  assert.ok(!f.calls.includes('execute'), 'fulfilled cancelled setup must never schedule execute');
+  assertResult(result, { assertion: 'failed', cleanup: 'passed', retained: true, code: 'CANCELLED' });
+  assert.equal(f.calls.filter(name => name === 'setup').length, 1);
+  assert.equal(f.calls.filter(name => name === 'stop').length, 1);
+  assert.equal(f.calls.filter(name => name === 'verifyStopped').length, 1);
+  assert.ok(!f.calls.includes('forceStop'));
+  order(f.calls, 'setup', 'stop'); order(f.calls, 'stop', 'verifyStopped');
+  assert.deepEqual(c.counts, { add: 1, remove: 1 });
+  assert.equal(c.activeListeners.size, 0);
+  const calls = [...f.calls], snapshot = { ...result };
+  c.abort(); await turn();
+  assert.deepEqual(f.calls, calls); assert.deepEqual(result, snapshot);
+});
 
 test('CANCEL-RESERVES: cancellation during each cleanup effect preserves independent signals and verification',
   { timeout: 5000 }, async t => {
