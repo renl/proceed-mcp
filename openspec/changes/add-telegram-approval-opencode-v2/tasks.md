@@ -1,6 +1,7 @@
 # Tasks
 
 ## Portable live runner - acceptance preparation only
+- [ ] P.LIVE-PLAN-001 cycle0: resolved descriptor/sanitized-plan semantics now have durable behavioral RED and positive data/clone controls. [Same-file repair brief, bounded packet and evidence](slices/03c3s-pure-live-plan.md#live-plan-001-cycle0---implementation-repair-brief). Next: implementation via coordination, then independent verification. Original failure retained, controller/live dependencies still blocked. Worktree/owner state retained.
 - [ ] P.LIVE-pure-verification Code `1931707976a5f87a56bdf6515aa41b0490cb1e78`: maintained10/10 PASS, independent verdict FAIL for accessor rejection and readable sizing, auxiliary-plan trust clarification pending. [Findings and accounting](slices/03c3s-pure-live-plan.md#independent-affected-verification---2026-11-04). Controller absent/unverified, dependency blocked, retained lifecycle unchanged.
 
 - [x] P.LIVE-spec [Corrected lifecycle/cancellation binding and executable safety allocation](slices/03c3r-portable-live-runner.md#selected-private-binding---renewed-review-not-approval). Original preparation304 against `f434995` preserved. Historical12-test import RED is not safety proof. New evidence below the binding. No source implementation or live activity authorized.

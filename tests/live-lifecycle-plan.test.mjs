@@ -89,6 +89,117 @@ test('PURE-VALIDATE: total shape refusal, descriptors never execute and cycles t
   }
 });
 
+test('LIVE-PLAN-001-DESCRIPTORS: every own accessor refuses without invocation', async t => {
+  const m = await load(), p = success(m.validatePlan(input()));
+  let calls = 0;
+  const driver = () => Object.fromEntries(['preflight', 'reserve', 'acquireCredential', 'setup', 'execute',
+    'stop', 'forceStop', 'verifyStopped', 'progress'].map(key => [key, () => { calls++; throw Error(token); }]));
+  const cases = [
+    ['plan', () => ({ ...input(), authorization: undefined }), m.validatePlan, 'INVALID_PLAN'],
+    ['environment', () => ({ PATH: 'synthetic', ignored: undefined }),
+      environment => m.validatePlan({ ...input(), environment }), 'INVALID_PLAN'],
+    ['limits', limits, m.validateLimits, 'INVALID_PLAN'],
+    ['authority', () => authority(p), value => m.validateAuthority(value, p, 100), 'INVALID_AUTHORITY'],
+    ['driver', () => ({ ...driver(), extra: undefined }), m.validateDriver, 'INVALID_DRIVER'],
+    ['options', () => ({ signal: undefined }), m.validateOptions, 'INVALID_OPTIONS']
+  ];
+  for (const [name, make, validate, code] of cases) {
+    for (const key of Object.keys(make())) {
+      for (const kind of ['get', 'set', 'empty']) {
+        await t.test(`${name}.${key}/${kind}`, () => {
+          const value = make();
+          const descriptor = kind === 'empty' ? { get: undefined, set: undefined }
+            : { [kind]() { calls++; throw Error(token); } };
+          Object.defineProperty(value, key, { ...descriptor, enumerable: false, configurable: true });
+          const before = Object.getOwnPropertyDescriptors(value);
+          try {
+            failure(validate(value), code);
+          } finally {
+            assert.equal(calls, 0, 'no getter, setter or driver invocation');
+            assert.deepEqual(Object.getOwnPropertyDescriptors(value), before);
+            assert.ok(!Object.isFrozen(value));
+          }
+        });
+      }
+    }
+  }
+});
+
+test('LIVE-PLAN-001-DATA: ignored extra data preserves identity without nested inspection/freezing', async () => {
+  const m = await load();
+  let calls = 0;
+  const ignored = { self: null, [Symbol.toPrimitive]() { calls++; throw Error(token); } };
+  ignored.self = ignored;
+  Object.defineProperty(ignored, 'nested', { get() { calls++; throw Error(token); } });
+  const driver = Object.fromEntries(['preflight', 'reserve', 'acquireCredential', 'setup', 'execute',
+    'stop', 'forceStop', 'verifyStopped', 'progress'].map(key => [key, () => { calls++; throw Error(token); }]));
+  Object.defineProperty(driver, 'extra', { value: ignored });
+  assert.equal(success(m.validateDriver(driver)), driver);
+  const raw = input();
+  raw.authorization = ignored;
+  Object.defineProperty(raw.environment, 'ignored', { value: ignored });
+  const p = success(m.validatePlan(raw));
+  assert.deepEqual(p.environment, { PATH: 'synthetic' });
+  assert.equal(Object.hasOwn(p, 'authorization'), false);
+  assert.equal(calls, 0);
+  for (const value of [driver, raw, raw.environment, ignored]) assert.ok(!Object.isFrozen(value));
+});
+
+test('LIVE-PLAN-001-TRUST: equivalent frozen clones satisfy all plan consumers', async () => {
+  const m = await load(), p = success(m.validatePlan(input()));
+  const clone = Object.freeze({ ...p, limits: Object.freeze({ ...p.limits }), environment: Object.freeze({ ...p.environment }) });
+  assert.notEqual(clone, p);
+  assert.notEqual(clone.limits, p.limits);
+  assert.notEqual(clone.environment, p.environment);
+  assert.deepEqual(clone, p);
+  assert.equal(success(m.validateAuthority(authority(clone), clone, 100)), null);
+  assert.deepEqual(m.buildEnvironments(clone, token), m.buildEnvironments(p, token));
+  const spec = { deadline: 12.5, signal: new AbortController().signal };
+  assert.deepEqual(m.buildContext(clone, spec), m.buildContext(p, spec));
+});
+
+test('LIVE-PLAN-001-TRUST: malformed frozen plans reject at each trusted auxiliary boundary', async t => {
+  const m = await load(), p = success(m.validatePlan(input()));
+  const relocate = (worktree, runId = p.runId) => {
+    const directory = join(worktree, '.scratch', 'portable-live', runId);
+    return { ...p, worktree, runId, directory, state: join(directory, 'state') };
+  };
+  const cases = [
+    ['candidate-short', { ...p, candidate: 'bad' }],
+    ['candidate-upper', { ...p, candidate: 'A'.repeat(40) }],
+    ['relative-worktree', relocate('.')],
+    ['unresolved-worktree', relocate(`${p.worktree}/..`)],
+    ['nul-worktree', relocate(`${p.worktree}\u0000`)],
+    ['invalid-runId', relocate(p.worktree, 'live-A')],
+    ['escaping-runId', relocate(p.worktree, '../outside')],
+    ['port', { ...p, port: 43190 }],
+    ['directory', { ...p, directory: join(p.directory, 'other') }],
+    ['state', { ...p, state: join(p.state, 'other') }],
+    ['invalid-limits', { ...p, limits: Object.freeze({ ...p.limits, totalMs: 999 }) }],
+    ['unfrozen-limits', { ...p, limits: { ...p.limits } }],
+    ['unfrozen-environment', { ...p, environment: { ...p.environment } }],
+    ['nonstring-safe-environment', { ...p, environment: Object.freeze({ PATH: 1 }) }],
+    ...['NODE_OPTIONS', 'TELEGRAM_TOKEN', 'PROCEED_TELEGRAM_BOT_TOKEN', 'TEMP', 'ignored'].map(key =>
+      [`forbidden-environment-${key}`, { ...p, environment: Object.freeze({ ...p.environment, [key]: token }) }])
+  ];
+  const missing = { ...p }; delete missing.state;
+  cases.push(['missing-key', missing], ['extra-key', { ...p, extra: true }]);
+  const consumers = [
+    ['authority', plan => m.validateAuthority(authority(p), plan, 100)],
+    ['environments', plan => m.buildEnvironments(plan, token)],
+    ['context', plan => m.buildContext(plan, { deadline: 12.5, signal: new AbortController().signal })]
+  ];
+  for (const [name, value] of [...cases.map(([name, value]) => [name, Object.freeze(value)]), ['unfrozen-plan', { ...p }]]) {
+    for (const [consumer, invoke] of consumers) {
+      await t.test(`${name}/${consumer}`, () => {
+        const before = Object.getOwnPropertyDescriptors(value);
+        unvalidated(() => invoke(value));
+        assert.deepEqual(Object.getOwnPropertyDescriptors(value), before);
+      });
+    }
+  }
+});
+
 test('PURE-LIMITS: exact positive safe integers and reachable reserve', async () => {
   const m = await load(); assert.deepEqual(frozen(success(m.validateLimits(limits()))), limits());
   for (const key of Object.keys(limits())) {
