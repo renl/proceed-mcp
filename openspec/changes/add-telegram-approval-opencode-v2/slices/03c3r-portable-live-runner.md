@@ -17,7 +17,7 @@ Real proof is live private pairing, visible question and explicit choice, origin
 
 ## A executable runner-only contract
 
-Readiness is blocked pending renewed focused owner review of the selected binding and dependency split below. The historical correction stop remains evidence, not the current interface definition.
+Readiness is blocked pending renewed combined owner review. The [pure plan packet](03c3s-pure-live-plan.md) now reconciles the selected return/error representations and supersedes the provisional pure-cut allocation below. Historical correction stops and accounting remain evidence, not current missing-schema blockers. Original aggregate200 proposal is unchanged pending that review. Controller and live acceptance obligations in this file remain intact.
 
 Harness seam, not application API: `withLiveLifecycle(plan, driver, options)` from `tests/support/live-run-lifecycle.mjs`. Import has no effects. Optional third argument is null/undefined or a strict plain object with only optional `signal`. See the complete private binding below. Resolve with exactly `{assertion,cleanup,retained,code}`. Assertion is `passed|failed|blocked`, cleanup `passed|failed|not-needed`. `retained` is true once namespace reservation is attempted, including partial failure. No application semantics, test endpoint or production import.
 
