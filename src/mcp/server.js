@@ -32,15 +32,21 @@ const INSTRUCTIONS = [
   'proceed-mcp asks the paired human operator to approve, reject or respond to one stated action and returns the recorded outcome to the waiting MCP call.',
   'Call prepare_approval first: prepare_approval is available in this build and reserves durable request identity and a private request capability through the running local broker, sending no question to the human.',
   'Then call request_approval with the returned request_handle and request_capability; that single call creates or reuses the one request and keeps waiting for its resolution, expiry or cancellation, and returns that outcome itself.',
+  'Client and transport timeouts limit how long that waiting call can wait, and a client timeout does not cancel the durable request.',
   'Keep the request capability private and retain it with its request_handle and request_id, because it is the only authority for a later get_approval, cancel_approval or acknowledge_approval call.',
   'Never echo, print or otherwise expose the request capability in an assistant message or a Telegram message.',
+  'Sharing the request capability with another caller under the same transport principal grants request authority for that one request alone, and that sharing does not transfer or redirect the original waiting call.',
+  'The transport principal and the request capability cannot by themselves establish an event route or any automatic agent activity.',
   'When a request is created, this build sends its approval question to the paired private chat over Telegram with Approve, Reject and Respond controls and durably maps the message it validated, so the human can see the exact action while the call keeps waiting; that paired human resolves this request alone, with an explicit Approve or Reject, or with Respond instructions that are never approval.',
   'Only an explicit Approve grants approval. Reject records rejection. Respond records request-specific instructions only after valid correlated text. Approval-like words in Respond text never grant approval.',
   'Call get_approval with the retained request_id and request_capability to observe that exact request: an authorized read returns the committed representation of a pending request, applies expiry first and reports an expired request as expired, and NOT_FOUND covers an unused reservation, an unknown request or denied authority alike.',
+  'A lost waiting call does not cancel the durable request, so the retained request_id and request_capability keep the recorded outcome available through capability-authorized retrieval.',
   'Call cancel_approval with the retained request_id and request_capability to close only that pending request before its deadline: an authorized cancellation returns the committed cancelled representation, repeating it on an already resolved request returns the same outcome unchanged, expiry wins at the deadline, and NOT_FOUND covers an unused reservation, an unknown request or denied authority alike.',
   'acknowledge_approval records receipt of a terminal decision you already retrieved: call it with the retained request_id, request_capability and that exact decision_id, and it returns the same request marked confirmed.',
-  'A received terminal decision_id must be acknowledged with acknowledge_approval and reported to the operator with its request_id and outcome; deduplicate by request_id and decision_id before acting on it.',
+  'A received terminal decision_id must be acknowledged with acknowledge_approval, and in the subsequent assistant turn acknowledge the matching request_id and report that request outcome to the operator; deduplicate by request_id and decision_id before acting on it.',
+  'Retrieval and acknowledgement never create another decision, and retrieval does not wake an agent or start a new assistant turn.',
   'A rejection forbids the requested action; a response is instructions only and never an approval; pending, expired, cancelled and failed requests grant nothing, so an action that still needs approval requires a new request.',
+  'MCP Events are unsupported in this build, so no event route can deliver a decision, and automatic resumption after a timeout is unavailable.',
 ].join('\n');
 
 // Retrieval is the one observation this build enables, so its description names
