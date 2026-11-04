@@ -7,6 +7,7 @@ import { readJournal } from '../src/journal/framing.js';
 import { renderPortableHumanOutcome } from '../src/telegram/portable-render.js';
 import { lifecycle, gate } from './support/lifecycle-p3.mjs';
 import { portable, success, ask, get, authority, until } from './support/portable-waiting.mjs';
+import { publicOnly } from './support/copy-privacy-p3.mjs';
 
 // Expected text is independently transcribed from the approved annex, not imported labels.
 const prefixes = {
@@ -96,11 +97,13 @@ test('C3-P3-COPY-EVIDENCE: original MCP writes and matching capability acks sele
       h.fixture.text(exact, prompt);
     }
     const outcome = await entry.outcome, value = success(outcome);
+    publicOnly(outcome.frame.result);
     assert.equal(outcome.frame.id, -1500 - index); assert.equal(value.request_id, p.request_id);
     assert.equal(value.resolution, resolution); assert.equal(value.response_text, kind === 't' ? exact : null);
     await until(async () => (await history(h)).some(m => m.op === 'request.returned' && m.request_id === p.request_id), 'actual original-write report', h.signal);
     await statusCopy(h, p, resolution, 'returned');
     const confirmed = success(await h.shared.call('acknowledge_approval', { ...authority(p), decision_id: value.decision_id }).outcome);
+    publicOnly(confirmed); publicOnly(await get(h.shared, p));
     assert.equal(confirmed.delivery_state, 'confirmed'); assert.equal(confirmed.decision_id, value.decision_id);
     await statusCopy(h, p, resolution, 'confirmed');
     const rows = (await history(h)).filter(m => m.request_id === p.request_id);
@@ -162,7 +165,7 @@ test('C3-P3-COPY-SELECTION: activation disclosures, neutral opening, retained cl
   const help = await h.cli('--help');
   assert.ok(help.includes('Local waiting, Telegram question display and paired-human Approve, Reject and Respond are available. Respond text is instructions, not approval.'));
   assert.match(help, /[Ee]vents/); assert.match(help, /timeout/); assert.match(help, /cancel/);
-  for (const closure of ['approved', 'cancelled', 'expired']) {
+  for (const closure of ['approved', 'rejected', 'responded', 'cancelled', 'expired']) {
     const p = await h.prepare(), entry = ask(h.shared, p, `selection_${closure}`), message = await mapped(h, p);
     await until(async () => (await history(h)).some(m => m.op === 'telegram.presentation.sent' && m.request_id === p.request_id), 'question receipt', h.signal);
     const open = `open_${closure}`;
@@ -173,13 +176,18 @@ test('C3-P3-COPY-SELECTION: activation disclosures, neutral opening, retained cl
     const again = `again_${closure}`; h.fixture.enqueue(callback(message, 't', again));
     assert.deepEqual((await ack(h, again)).body, { callback_query_id: again });
     if (closure === 'approved') h.fixture.choose(message, 'a');
+    if (closure === 'rejected') h.fixture.choose(message, 'r');
+    if (closure === 'responded') h.fixture.text(exact, prompt);
     if (closure === 'cancelled') success(await h.shared.call('cancel_approval', authority(p)).outcome);
     if (closure === 'expired') {
       const v = await get(h.shared, p); await h.setTime(Date.parse(v.expires_at));
       assert.equal((await get(h.shared, p)).resolution, 'expired');
     }
-    const terminal = success(await entry.outcome); assert.equal(terminal.resolution, closure);
-    const expected = closure === 'approved' ? 'This request is already resolved. The recorded outcome is unchanged.'
+    const outcome = await entry.outcome, terminal = success(outcome);
+    assert.equal(outcome.frame.id, `selection_${closure}`);
+    assert.equal(terminal.request_id, p.request_id); assert.equal(terminal.resolution, closure);
+    assert.equal(terminal.response_text, closure === 'responded' ? exact : null);
+    const expected = prefixes[closure] ? 'This request is already resolved. The recorded outcome is unchanged.'
       : `This request was ${closure}. No new choice was recorded. A new request is needed if approval is still required.`;
     // Expiry's selected grammar is "expired", not "was expired".
     const selected = closure === 'expired' ? 'This request expired. No new choice was recorded. A new request is needed if approval is still required.' : expected;
@@ -189,12 +197,28 @@ test('C3-P3-COPY-SELECTION: activation disclosures, neutral opening, retained cl
       const foreign = `foreign_${id}`; h.fixture.enqueue(callback(message, kind, foreign, true));
       assert.deepEqual((await ack(h, foreign)).body, { callback_query_id: foreign, text: 'This request is not available.' });
     }
-    const before = h.fixture.messages.length;
-    h.fixture.text('terminal private response', prompt);
-    await until(() => h.fixture.messages.length > before, 'retained text selection', h.signal);
-    assert.equal(h.fixture.messages.at(-1).text, selected);
+    for (const text of ['terminal private response', `/respond ${p.request_id} terminal private response`]) {
+      const before = h.fixture.messages.length;
+      h.fixture.text(text, prompt);
+      await until(() => h.fixture.messages.length > before, 'retained text selection', h.signal);
+      assert.deepEqual(h.fixture.messages.slice(before).map(m => m.text), [selected]);
+      const foreign = h.fixture.enqueue({ message: { message_id: 9100, date: 1,
+        from: { id: 8, is_bot: false }, chat: { id: 7, type: 'private' }, text,
+        reply_to_message: { message_id: prompt.message_id } } });
+      await consumed(h, foreign); await consumed(h, h.fixture.enqueue({ message: null }));
+      assert.equal(h.fixture.messages.length, before + 1, 'foreign terminal text is silent');
+    }
     const v = await get(h.shared, p); assert.equal(v.decision_id, terminal.decision_id);
-    assert.equal((await history(h)).filter(m => m.op === 'request.resolve.telegram' && m.request_id === p.request_id).length, closure === 'approved' ? 1 : 0);
+    assert.equal(v.response_text, terminal.response_text);
+    assert.equal((await history(h)).filter(m => m.op === 'request.resolve.telegram' && m.request_id === p.request_id).length, prefixes[closure] ? 1 : 0);
+    if (closure === 'cancelled' || closure === 'expired') {
+      const text = await h.cli('status', '--request', p.request_id);
+      assert.ok(text.includes(`${p.request_id}  ${closure}\n`));
+      assert.ok(text.includes(`  resolution=${closure}  telegram_state=sent`));
+      assert.ok(text.includes('  next action: create a new approval request if approval is still needed\n'));
+      if (closure === 'expired') assert.ok(text.includes('  Expired is a non-approval outcome: this request closed without a decision.\n'));
+      assert.doesNotMatch(text, /Approval recorded\.|Rejection recorded\.|Instructions recorded/);
+    }
   }
   await h.scan();
 }, { controlledClock: true }));
