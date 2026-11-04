@@ -15,8 +15,13 @@ test('PREVIEW-INSTALLED: fresh protected setup and installed unpaired tool behav
   assert.ok(executable && isAbsolute(executable), 'explicit isolated installed bin required');
   assert.ok(resolve(executable).startsWith(resolve('.scratch') + sep),
     'installed artifact must remain inside worktree scratch');
+  const prefix = process.env.PROCEED_TEST_INSTALL_PREFIX;
+  assert.ok(prefix && isAbsolute(prefix) && resolve(prefix).startsWith(resolve('.scratch') + sep),
+    'explicit isolated install prefix required');
+  assert.equal(resolve(executable), join(resolve(prefix), 'node_modules', '@meshimize', 'proceed-mcp',
+    'bin', 'proceed-mcp.js'));
   const manifest = JSON.parse(await readFile(join(dirname(dirname(executable)), 'package.json'), 'utf8'));
-  assert.equal(manifest.name, 'proceed-mcp');
+  assert.equal(manifest.name, '@meshimize/proceed-mcp');
   assert.equal(manifest.version, '0.1.0-preview.1');
   const preload = pathToFileURL(resolve('tests/fixtures/release-observer.mjs')).href;
   const result = await managed(async (context) => {
@@ -25,7 +30,7 @@ test('PREVIEW-INSTALLED: fresh protected setup and installed unpaired tool behav
       .filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
     Object.assign(env, { TEMP: context.directory, TMP: context.directory, TMPDIR: context.directory });
     env.PATH = dirname(process.execPath) + delimiter + (env.PATH ?? '');
-    const command = join(dirname(dirname(dirname(executable))), '.bin',
+    const command = join(prefix, 'node_modules', '.bin',
       process.platform === 'win32' ? 'proceed-mcp.cmd' : 'proceed-mcp');
     // cmd.exe owns quoting here. Reject expansion/quote characters, not spaces.
     assert.doesNotMatch(command, /["%!\r\n]/, 'shim path must not contain cmd expansion or quotes');

@@ -8,7 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-assert.ok(Number(process.versions.node.split('.')[0]) >= 24, 'qualified Node 24 required');
+assert.equal(Number(process.versions.node.split('.')[0]), 24, 'qualified Node 24 required');
 const npm = process.env.PROCEED_TEST_NPM_CLI;
 assert.ok(npm && isAbsolute(npm), 'explicit approved npm-cli.js path required');
 const root = resolve('.scratch/preview-package');
@@ -45,7 +45,7 @@ const execute = (file, args, cwd, timeout = 30000, childEnv = env) => {
   assert.equal(child.status, 0, `package check failed in ${phase}, no private output emitted`);
   return child.stdout;
 };
-const npmRun = (args, cwd) => execute(process.execPath, [npm, ...args, '--ignore-scripts',
+const npmRun = (args, cwd) => execute(process.execPath, [npm, ...args, '--offline', '--ignore-scripts',
   '--userconfig', config, '--globalconfig', globalConfig, '--cache', join(run, 'cache'),
   '--logs-dir', join(run, 'logs'), '--no-audit', '--no-fund'], cwd);
 try {
@@ -56,7 +56,9 @@ try {
   }
   phase = 'pack'; await progress();
   const [packed] = JSON.parse(npmRun(['pack', '--json', '--pack-destination', run], stage));
-  assert.equal(packed.filename, 'proceed-mcp-0.1.0-preview.1.tgz');
+  assert.equal(packed.name, '@meshimize/proceed-mcp');
+  assert.equal(packed.version, '0.1.0-preview.1');
+  assert.equal(packed.filename, 'meshimize-proceed-mcp-0.1.0-preview.1.tgz');
   await writeFile(`${record}-artifact.json`, JSON.stringify({ filename: packed.filename,
     sha256: createHash('sha256').update(await readFile(join(run, packed.filename))).digest('hex'),
     files: packed.files.map(({ path, size }) => ({ path, size })) }));
@@ -72,15 +74,23 @@ try {
   }
   phase = 'install'; await progress();
   await writeFile(join(install, 'package.json'), '{"private":true}');
-  npmRun(['install', join(run, packed.filename), '--omit=dev', '--package-lock=false'], install);
-  const installed = join(install, 'node_modules', 'proceed-mcp');
+  npmRun(['install', join(run, packed.filename), '--prefix', install, '--omit=dev', '--package-lock=false'], install);
+  const installed = join(install, 'node_modules', '@meshimize', 'proceed-mcp');
   for (const path of paths) {
     assert.deepEqual(await readFile(join(installed, path)), await readFile(join(stage, path)),
       'installed contents equal clean package input');
   }
+  // Inspect actual installed tarball bytes, not a fabricated scoped pack fixture.
+  const readme = await readFile(join(installed, 'README.md'), 'utf8');
+  assert.match(readme, /@meshimize\/proceed-mcp@0\.1\.0-preview\.1/);
+  assert.match(readme, /--package\s+@meshimize\/proceed-mcp@0\.1\.0-preview\.1\s+--\s+proceed-mcp/);
+  assert.doesNotMatch(readme, /(?:--package\s+|npm install[^\r\n]*\s)proceed-mcp@/);
+  await writeFile(`${record}-readme.json`, JSON.stringify({
+    sha256: createHash('sha256').update(readme).digest('hex'), scopedExamples: 'pass' }));
   phase = 'installed-public-smoke'; await progress();
   execute(process.execPath, ['--test', 'tests/release-installed.test.mjs'], resolve('.'), 50000,
-    { ...env, PROCEED_TEST_INSTALLED_BIN: join(installed, 'bin', 'proceed-mcp.js') });
+    { ...env, PROCEED_TEST_INSTALL_PREFIX: install,
+      PROCEED_TEST_INSTALLED_BIN: join(installed, 'bin', 'proceed-mcp.js') });
   phase = 'assertions-pass'; await progress();
 } finally {
   await rm(run, { recursive: true, maxRetries: 3, retryDelay: 100 });
