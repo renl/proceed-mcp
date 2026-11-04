@@ -109,6 +109,23 @@ test('PR workflow exists and passes parsed and lexical policy', async () => {
 // Dynamic import preserves independent B1 calibration while the B2 source is RED.
 const policy = () => import('../scripts/release-policy.mjs');
 const core = () => import('../scripts/release-policy-core.mjs');
+const facadeNames = ['APPROVED', 'VERSION_PATTERN', 'RELEASE_POLICY_SCHEMA_VERSION',
+  'PACKED_INPUT_DIGEST_ALGORITHM', 'ReleasePolicyError', 'expectedTarballName',
+  'readAcceptanceRecord', 'readConfigurationRecord', 'evaluateRelease', 'computePackedInputs'];
+for (const [stage, leaves, names] of [
+  ['foundation', ['schema', 'records'], facadeNames.slice(0, 8)],
+  ['evaluator', ['schema', 'records', 'evaluator'], facadeNames.slice(0, 9)],
+  ['digest', ['schema', 'records', 'evaluator', 'digest'], facadeNames],
+]) test(`B2 facade ${stage}: introduced bindings preserve leaf identity`, async () => {
+  const api = await core();
+  const modules = await Promise.all(leaves.map((leaf) => import(`../scripts/release-policy-${leaf}.mjs`)));
+  for (const name of names) {
+    const owner = modules.find((module) => Object.hasOwn(module, name));
+    assert.ok(owner, `${name} has a leaf owner`);
+    assert.equal(api[name], owner[name], name);
+  }
+  if (stage === 'digest') assert.deepEqual(Object.keys(api).sort(), [...facadeNames].sort());
+});
 function verdict(api, facts, codes = []) {
   const blockers = codes.map((code) => ({ code, scope: /^(CHECK_|CONFIGURATION_|ARTIFACT_|PACKED_INPUTS_)/.test(code)
     ? 'publication' : 'validation' })).sort((a, b) => a.code.localeCompare(b.code));
@@ -141,7 +158,7 @@ test('B2 policy: explicit phase scope, bootstrap refusal, exact fail-closed matr
     ['package.version', '0.1.0', ['VERSION_INVALID', 'TAG_VERSION_MISMATCH', 'ACCEPTANCE_MISMATCH', 'ARTIFACT_MALFORMED']],
     ['run.workflowRef', 'renl/proceed-mcp/.github/workflows/other.yml@refs/tags/v0.1.0-preview.2', 'WORKFLOW_INVALID'],
     ['run.workflowRef', 'renl/proceed-mcp/.github/workflows/release.yml@refs/heads/main', 'WORKFLOW_INVALID'],
-    ['package.name', 'other', ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH']],
+    ['package.name', 'other', ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH', 'ARTIFACT_MALFORMED']],
     ['event.repository', 'fork/proceed-mcp', ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH', 'CONFIGURATION_MISMATCH']],
     ['package.registryName', 'other', ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH']],
     ['tag.name', '', ['TAG_VERSION_MISMATCH', 'ACCEPTANCE_MISMATCH']],
@@ -222,12 +239,24 @@ test('B2 core: ancestry requires validated passed matching acceptance in both ph
         ['acceptance.state', 'malformed', 'ACCEPTANCE_MALFORMED'],
         ['acceptance.record.verifiedAt', '2099-01-01T00:00:00.000Z', 'ACCEPTANCE_MALFORMED'],
         ['acceptance.record.verification.status', 'failed', 'ACCEPTANCE_NOT_PASSED'],
+        ...[undefined, null, 0, false, {}].map((value) =>
+          ['acceptance.record.verification.status', value, 'ACCEPTANCE_MALFORMED']),
+        ...['', 'missing'].map((value) =>
+          ['acceptance.record.verification.status', value, 'ACCEPTANCE_NOT_PASSED']),
         ['acceptance.record.repository', 'other/repo', 'ACCEPTANCE_MISMATCH'],
       ]) {
         const gated = structuredClone(facts);
         set(gated, path, value);
         verdict(api, gated, [code]);
       }
+      for (const status of [undefined, null, 0, false, {}, '', 'missing', 'failed']) {
+        const gated = structuredClone(facts);
+        if (status === undefined) delete gated.acceptance.record.verification.status;
+        else gated.acceptance.record.verification.status = status;
+        gated.acceptance.record.repository = 'other/repo';
+        verdict(api, gated, [typeof status === 'string' ? 'ACCEPTANCE_NOT_PASSED' : 'ACCEPTANCE_MALFORMED']);
+      }
+      verdict(api, releaseFacts());
     }
   }
 });
@@ -271,6 +300,8 @@ test('B2 core: record shape, timestamps, identity and independent groups fail cl
   }
   cases.push(['packedInputs.digest', 'bad', 'PACKED_INPUTS_MALFORMED']);
   cases.push(['artifact.filename', 'wrong.tgz', 'ARTIFACT_MALFORMED']);
+  cases.push(['acceptance.record.artifact.filename', null, 'ACCEPTANCE_MALFORMED']);
+  cases.push(['acceptance.record.artifact.filename', 'wrong.tgz', 'ARTIFACT_MISMATCH']);
   for (const [path, value, code] of cases) {
     const facts = releaseFacts();
     set(facts, path, value);
@@ -278,6 +309,15 @@ test('B2 core: record shape, timestamps, identity and independent groups fail cl
     verdict(api, releaseFacts());
   }
   const facts = releaseFacts();
+  // Candidate filename validity is independent of approved package identity.
+  facts.package.name = 'other';
+  facts.artifact.filename = 'other-0.1.0-preview.2.tgz';
+  verdict(api, facts, ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH', 'ARTIFACT_MISMATCH']);
+  facts.acceptance.record.artifact.filename = facts.artifact.filename;
+  verdict(api, facts, ['IDENTITY_MISMATCH', 'ACCEPTANCE_MISMATCH']);
+  verdict(api, releaseFacts());
+  facts.package.name = releaseFacts().package.name;
+  facts.artifact.filename = facts.acceptance.record.artifact.filename = releaseFacts().artifact.filename;
   facts.acceptance.record.verifiedAt = '2000-01-01T00:00:00.000Z';
   facts.configuration.record.observedAt = facts.evaluatedAt;
   facts.configuration.record.validationWindow.endsAt = facts.evaluatedAt;
