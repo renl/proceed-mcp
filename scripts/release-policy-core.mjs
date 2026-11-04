@@ -3,9 +3,9 @@
 // redeclared, because a second ReleasePolicyError class would split the CLI exit
 // mapping by whichever module threw. Leaf helpers stay off this surface.
 //
-// This is the foundation checkpoint: it holds the identity constants, the error
-// class, the tarball-name function and the two record readers. The evaluator and
-// digest checkpoints add their own leaves and extend this list. The facade has no
+// This is the evaluator checkpoint: it holds the identity constants, the error
+// class, the tarball-name function, the two record readers and the pure evaluator.
+// The digest checkpoint adds its own leaf and extends this list. The facade has no
 // top-level execution, no filesystem, process or network access of its own and
 // enables no CLI, workflow or publishing consumer.
 export {
@@ -17,3 +17,4 @@ export {
   expectedTarballName,
 } from './release-policy-schema.mjs';
 export { readAcceptanceRecord, readConfigurationRecord } from './release-policy-records.mjs';
+export { evaluateRelease } from './release-policy-evaluator.mjs';
