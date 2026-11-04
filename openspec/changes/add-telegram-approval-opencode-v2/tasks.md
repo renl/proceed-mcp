@@ -1,5 +1,25 @@
 # Tasks
 
+## Current preview delivery - authoritative completion map
+
+The approved preview boundary in [proposal](proposal.md#approved-preview-boundary-and-scoped-risk-acceptance) and [design](design.md) section 8 governs completion. Historical checkpoint lists below retain failures, preparation RED and superseded sequencing. Their unchecked entries are not automatically current preview obligations or passing checks. No incomplete delta may be archived.
+
+- [x] PREVIEW-native Bounded native P3 accepted at `fdd8ee95`, production `d66e7613`, disclosure evidence `c69ae344`. Current full-controller prerequisite accepted at `fba1f4c6`, evidence `488dd407`. Assertion scopes and overlaps remain in the historical sections. Neither is live/first-use or integrated preview acceptance.
+- [x] PREVIEW-scope MIT, waiting-call baseline and scoped live-proof deferral are approved. Events/automatic continuation, completed doctor and retry delivery are deferred features, not passed implementations. Automated driver/containment work is paused, not required for preview.
+- [ ] PREVIEW-package Implement and verify [packaging/install packet](slices/04-preview-delivery.md). Metadata, lock, bin/version, license, contents and clean isolated installed public setup/stdio must pass. Current metadata is RED, not publishable.
+- [ ] PREVIEW-ci Implement non-publishing CI and protected release validation after packaging proof. Exact source boundaries, forecast and negative event/auth cases are in the same brief. Publishing bootstrap and identity-dependent criteria remain blocked pending owner input.
+- [ ] PREVIEW-docs Owner-approved README and other live documentation accurately describe installation, manual first-use steps, deferred behavior and actual qualification. Dirty owner files remain uncommitted and require their owners' final confirmation.
+- [ ] PREVIEW-integrated Independently verify the pinned assembled candidate, reuse unchanged native evidence by revision/assertion scope, run affected version/catalog and full PORT-A/B public offline proof, package smoke and cheap structural gates. Verify later finalization is docs-only. No integrated PASS yet.
+- [ ] PREVIEW-landing Resolve whole-PR scope gate using the concrete alternatives in the delivery brief and obtain owner delta review and separate archive/landing authority. Internal packet approvals do not authorize the oversized whole PR. Historical checkbox normalization must preserve unmet outcomes and failures before archive, never convert them to passed tests.
+- Post-merge PREVIEW-npm, NOT EXECUTED: after confirmed rights and protected release authorization, publish exact preview and independently verify public exact-version install/start plus dist-tag. Local tarball proof is not public npm delivery. Track release results outside the archived change.
+- Post-merge PREVIEW-registry, NOT EXECUTED: after npm delivery and confirmed namespace/authentication, independently publish/check matching listing. Pending Registry result must remain separate from npm result. These later operational observations are not pre-archive test passes.
+
+Deferred observations, UNVERIFIED and not passing checkboxes: live empty-state Telegram pairing/presentation/Approve/Reject/exact Respond, first-host routing/private authority retention and useful assistant acknowledgement. Manual post-install testing needs separate access authorization. Unreachable blocked-ledger/divergence scenarios retain their existing unexecuted disposition, not a waiver or PASS.
+
+Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, status active/retain. Next action combined delivery-preparation review, owner inputs and coordinated owned-file commit window. Cleanup evidence: no new application/npm/live resource started during preparation. No removal is due. Preserve all owner/unknown work.
+
+## Historical checkpoint records
+
 ## Portable live runner - acceptance preparation only
 - [x] P.LIVE-orchestration-prep [Bounded orchestration packet](slices/03c3t-bounded-orchestration.md): accepted pure prerequisite pinned, original26 tests preserved, exact25 runnable/6 later allocation and sole-source200 ceiling. Preparation authority only. One focused combined review precedes implementation. No physical/public driver until orchestration AND cancellation independently pass.
 - [x] P.LIVE-PLAN-001 closed attempt1 on `ff447e58d809db302dda0e0b2aee29347db35d18`: independent188/188 TAP plus focused controls and semantic/readability/purity review PASS. [Verdict and dependency limits](slices/03c3s-pure-live-plan.md#live-plan-001-attempt1---independent-affected-verification). Pure prerequisite available on this change branch only. Separately authorized orchestration preparation is linked above. Controller/live gates remain unverified, worktree/owner state retained.

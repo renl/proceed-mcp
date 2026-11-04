@@ -1,0 +1,111 @@
+# Preview delivery preparation
+
+Parent: [tasks](../tasks.md). Authority: [proposal](../proposal.md), [npm delta](../specs/npm-distribution/spec.md), design section 8. Status: prepared for combined review, not implementation authorization.
+
+## Goal and candidate
+
+Can an operator install the preview without a checkout and start the supported local setup/MCP flow before separately authorized manual Telegram testing?
+
+Direct prepublication proof is clean tarball installation and installed public CLI/stdio results. Metadata/build/static checks are supporting evidence. Public npm installation is later delivery proof. No local check proves Telegram receipt, host routing or useful assistant acknowledgement.
+
+- Worktree: `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, retained, owner test engineering.
+- Preparation baseline: `488dd4070d18b45e137f5f60a3627a66fb3b1b53`. Ultimate target and whole-PR base: `main` at `f385409792aff3d46d96b5c4f03358f10c8dc5ba`. No stacked parent or extra PR.
+- Current source: private package `0.0.0`, UNLICENSED, stale MCP version. Intended identity `proceed-mcp@0.1.0-preview.1`, tag `preview`, subject to rights confirmation. MIT selected.
+- Known dirty owner paths: `AGENTS.md`, `README.md`, `docs/status_log.md`, active `design.md`, `proposal.md` and three capability deltas. Read-only for this preparation.
+
+## Exact delivery selection and exclusions
+
+Current tracked candidate is exactly `git diff --name-only main --` at the pinned preparation baseline plus the eight known dirty paths above. Include approved dirty contents only after each owner confirms them. This is a working candidate, not an immutable verified revision.
+
+Additional proposed delivery paths are exactly `docs/operations/integration-readiness.md`, this slice, `tests/release-metadata.test.mjs`, `tests/release-installed.test.mjs`, `tests/release-pack.mjs`, `tests/fixtures/release-observer.mjs`, then the authorized new source paths below. Operations content requires its owner's confirmation. The grouped preparation inventory has 296 tracked changed paths, 47,302 gross lines against `main`, including dirty docs. An earlier shortstat observed 47,189 before the grouped inventory. These working-tree observations differ, so neither is a final immutable scope count. Exact selected path inventory is retained in ignored preparation evidence. No blanket `git add` or untracked glob.
+
+Explicitly exclude unknown untracked `assistant-schema-research.md`, `slices/02d-containment.md`, `slices/02e-review-plan.md`, `tests/fixtures/containment-tree.mjs`, `tests/support/containment-job.cs`, `tests/support/containment-job.ps1`, `tests/support/windows-containment.mjs`, `tests/windows-containment.test.mjs`. The first three names are relative to the active change. Preserve them for owner triage, never silently include or delete them. Exclude ignored state, evidence, caches and credentials.
+
+## Sequential internal packets and budgets
+
+Every packet counts additions plus deletions, including tests/docs/evidence. Forecast is not permission to overrun or compress readability.
+
+| Packet | Deliverable and prerequisite | Exact prospective source boundary | Gross forecast |
+| --- | --- | --- | --- |
+| A | Publishable metadata and clean offline installed startup, on preparation baseline with owner identity/support/attribution inputs | `package.json`, `package-lock.json`, `src/mcp/server.js`, new `LICENSE`, `server.json` | Source 110, tests/scripts 290, owned tasks/slice 130, verification reserve 40 = 570 |
+| B | Non-publishing validation and protected publication guard, after accepted A and source-supported bootstrap/environment decision | new `.github/workflows/ci.yml`, `.github/workflows/release.yml`, optional minimal `scripts/release-smoke.mjs` only if needed to invoke maintained tests | Source 180, test assertions 180, docs/evidence 100 = 460 |
+
+A's runner is the maintained `tests/release-pack.mjs`, not an application API or release framework. B reuses it. Do not create another harness. B's executable workflow checks must be authored by test engineering against the actual selected authentication workflow before source dispatch. B is a bounded follow-on brief, not yet test-ready. A can proceed without B or real publishing rights by using owner-approved non-secret metadata. Missing exact metadata inputs block A GREEN, not test preparation.
+
+## Executable mapping and ordered commands
+
+Windows PowerShell with project-local Node 24.22.2 is the initial qualification target. Ambient `node` is 22.23.1 and must not be used for runtime acceptance. Let `$node` point to `../../.tools/readiness-node24/node_modules/node-win-x64/bin/node.exe` resolved from this worktree. No installation is authorized by defining these commands.
+
+1. Cheap syntax checks: `& $node --check` for each of the four new test/fixture files. Existing formatter policy ignores `tests/` and `openspec/`, so `& $node node_modules/prettier/bin/prettier.cjs --check <owned-paths>` checks policy compliance, not their formatting. Review their readable owner formatting and run `git diff --check -- <owned-paths>`. Do not format foreign dirty documentation.
+2. `& $node --test tests/release-metadata.test.mjs`. PREVIEW-META asserts public prerelease identity, lock/root license/bin/engine agreement and repository. PREVIEW-LICENSE asserts standard MIT text, not ownership. PREVIEW-REGISTRY asserts schema URL and consistent name/version/npm/stdio operator arguments. Exact attribution, namespace ownership and licensing authority remain separate owner gates. No guessed identity assertion.
+3. After A source and metadata GREEN, run existing `& $node scripts/build.mjs`. Reuse unchanged native suites by exact source/assertion scope. Rerun affected catalog/disclosure tests and full `tests/portable-waiting.test.mjs` for complete original PORT-A/B, not a renamed package check. Do not run full `npm test`: historical host/live prerequisites and unknown containment files are not a maintained preview gate.
+4. Set `PROCEED_TEST_NPM_CLI` to the approved explicit npm CLI path, then `& $node tests/release-pack.mjs`, outer timeout 160 seconds. This is the explicit test-owned npm pack/install operation, not permission to install elsewhere. It uses empty isolated user/global npm configs, a minimal environment without credentials/NODE_OPTIONS, local cache/log/temp, copied runtime-only clean source and `--ignore-scripts` for pack/install. No ambient npm auth config or `.env` is read. No publish/tag/push operation exists. If runtime dependencies are introduced, reassess network/bootstrap scope before execution.
+5. Runner inspects generated pack file inventory, installs that exact tarball with `--omit=dev`, compares installed bytes to selected inputs and invokes `tests/release-installed.test.mjs` with the isolated installed executable path. Assert actual installed named command help, invalid args, protected init and overwrite refusal, stopped owner add, tokenless serve readiness, truthful empty status, public stdio initialize/version/catalog/instructions and EOF. Named help exercises the npm shim. Subsequent commands invoke Node with the installed bin entry, not the repository bin. It does not seed journal outcomes. The existing managed runner owns processes and teardown. A test-only observer forwards existing SIGTERM shutdown and rejects module resolution outside installed node_modules, so repository devDependencies cannot rescue missing runtime imports. No new Ctrl+Break feature.
+6. Record assertion and cleanup separately. The pack runner has a 150-second aggregate budget with teardown reserve, per-command deadlines and persisted phase/cleanup records under ignored `.scratch/preview-package`. It removes only its owned run. Managed subprocess resources use existing `tests/.artifacts`. Readiness failure or storage-protection refusal fails the test. Default local port requires a free isolated CI host/serialized test slot. Never stop an unrelated listener or mask host-only failures.
+7. B must prove fork PR has no publish/credentials/id-token write/privileged PR event. Negative release cases: branch/PR event, mismatched tag/version, non-preview version/channel, tag outside main, failed package check, missing independent candidate evidence, missing protected-environment authorization and absent bootstrap each prevent publication. Validate workflow structure using pinned tooling or owned deterministic assertions. Do not fake OIDC success. No real tag/push/publish in tests.
+8. Before landing: independent assembled-candidate review plus affected execution, structural `openspec validate add-telegram-approval-opencode-v2 --strict`, owner delta review, authorized CLI archive only when current preview tasks are complete. Structural validation is not behavior proof. After merge and separate release authority: real npm exact-version install/dist-tags, then separate Registry schema/auth/listing verification. None runs during preparation.
+
+## Boundary Verification
+
+- Normative package/MCP boundary: design section 8 and npm delta, exact `bin.proceed-mcp`, `serverInfo.name`, release `serverInfo.version`, protocol `2025-11-25`, `mcpName`, listing name/version/stdio argument consistency. Existing `src/mcp/server.js` stale version is an expected source correction, not a test waiver. No private implementation API is selected.
+- Actual local wire: installed public stdio JSON-RPC initialize/tools/list/EOF through shared strict consumer. Tokenless broker uses existing authenticated loopback behavior and generated test-only state, never operator credentials. Controlled local startup is not Telegram proof.
+- External npm/Registry: pinned official references in design section 8 apply. A uses local tarball only. B must not claim actual OIDC/auth/publish from static workflow checks. Real external proof waits for confirmed rights and separately authorized post-merge publication/public install/listing.
+- Telegram/first-host: DEFERRED and UNVERIFIED under explicit preview risk acceptance, not PASS. Events, completed doctor and retry are excluded future features. No live bot/network, existing state, containment or automation expansion.
+- Combined review required: decomposition triggers 1 YES (package identity consumed by install and CI), 2 YES (clean package/install baseline), 3 NO (no new event receiver), 4 YES (artifact/CI/publication chain), 5 YES (separate installed setup proof). Combine boundary, test-only and decomposition review once through coordination.
+
+## Whole-PR split analysis and scope gate
+
+The existing change is far above 20 files/600 gross. Packet approvals never covered this whole PR. At grouped preparation inventory: runtime `src/` 42 files/13,128 gross, tests 137/21,214, OpenSpec 95/9,531, generated OpenCode integration 12/2,608, remaining tracked paths 10/821. These counts include dirty documentation and exclude new untracked paths. Subsequent owned preparation growth is measured separately below.
+
+Concrete alternatives for coordination, without executing a split:
+
+1. Keep the approved complete preview as one final PR. Review historical checkpoints plus A then B as ordered internal commits, with one integrated gate and no partial promotion. This preserves the selected outcome but does NOT reduce the whole review surface. It needs an explicit whole-PR scope exception after final inventory, not an internal packet exception.
+2. Deliver a distinct unexposed portable-authority/local-waiting foundation, then a dependent Telegram preview and distribution outcome. This can preserve privacy and defer exposure until the second outcome is verified, but requires owner-defined new change boundaries, deltas and dependency acceptance. A foundation with most current source/tests is still oversized. Do not claim two cuts meet 600. Extracting already mixed historical code requires reviewed source/delta selection, not removing tests or rewriting history. It changes the selected one-change delivery and is not authorized here.
+3. Extract only standalone tooling/setup documentation before the preview. The 12 generated integration files already measure 2,608 gross, so even this cut is not automatically under threshold. It provides no installable product, leaves runtime/tests/contract review oversized and adds delivery overhead. A packaging-only PR cannot install from the target because `main` lacks the application. This does not solve the preview gate.
+
+Recommendation to coordination: retain the current outcome and obtain a scoped whole-PR decision after final source/dirty-doc inventory, explaining the larger review downside and deferred live proof. No safe <=600 whole-outcome split is established by these alternatives. If the owner prefers earlier independent landings, route explicit scope/dependency redesign before creating extra changes/PRs. Never discard history, tests or unknown work to shrink counts.
+
+## Open decisions and handoff
+
+Design section 8 reserves support policy, npm identity/rights/publisher, actual MIT attribution/licensing authority, protected environment/source-supported bootstrap, Registry namespace/authentication. Preparation can be reviewed while these are pending. Exact values must be supplied before metadata GREEN/publication, without credentials in artifacts. No invented OIDC workflow or publisher identity is authorized.
+
+Only tests, this slice and active tasks are owned edits. Production/package/README/design/proposal/operations remain read-only. Commit only these owned paths after a coordinated Git window. No window is implied by read-only inventory. Retain worktree and all owner/unknown state. Historical FAIL/RED evidence remains unchanged.
+
+## Preparation evidence - 2026-11-04
+
+- Node 24.22.2, Windows: all four new JavaScript files pass `--check`. Scoped `git diff --check` passes. Prettier check exits 0 under the existing ignore policy, so it is not a formatting assertion for ignored tests/specs. Owner readability review remains required.
+- `openspec validate add-telegram-approval-opencode-v2 --strict`: exit 1 with 11 requirement-length warnings in the three owner-authored capability deltas. This is not structural PASS. Route warning disposition to their owner through coordination. No owner spec was edited.
+- `node --test tests/release-metadata.test.mjs`: exit 1, 0 PASS/3 expected RED, 0 skipped/cancelled/todo. Version `0.0.0` differs from intended preview. LICENSE and server.json are absent. Later metadata assertions are blocked, not independently demonstrated.
+- `node --test tests/release-installed.test.mjs` without an installed-bin binding: exit 1, 0 PASS/1 prerequisite RED, 0 skipped/cancelled/todo. No server/state/npm operation starts. This calibrates admission only, not installed runtime behavior.
+- Pack/install and actual installed smoke remain UNEXECUTED. No full suite, npm install, live service or publishing operation ran. Fresh generated state protection and observer/shutdown behavior remain unverified until that smoke runs. No positive installed calibration is claimed.
+- Exact current selected list: 302 paths in ignored `.scratch/preview-prep/candidate-files.txt`, including the one proposed operations file and five new owned files. Future production additions are not yet in that list. Unknown untracked paths are excluded. This is not an immutable landing inventory or whole-PR approval.
+- Final owned preparation: 369 gross/6 paths, including runner evidence additions and the exact diagnostic appendix. Source reserve 110 and verification reserve 40 give 519 forecast combined gross, within A's 570 allocation and hard 600. Ignored evidence is supporting output, not a hidden production change.
+- Coordinated Git window granted for the six owned preparation files only. Combined boundary/decomposition/test-artifact review and owner inputs remain open. No source dispatch, archive or publication follows from preparation RED.
+
+## Exact strict-validation diagnostics and calibration handoff
+
+OpenSpec 1.15.0 on project Node 24.22.2 reports 11 `WARNING` issues and no `ERROR` issues. All are requirement-length warnings treated as fatal under `--strict`, which returns exit 1 and `valid:false`. The output reports no malformed requirement headings, missing scenarios or other requirement-structure errors. The generic suggested next steps printed by the CLI are not additional findings. No spec correction is authorized in this packet.
+
+All 11 messages have the exact form: `ADDED "<requirement name>": Requirement text is very long (>500 characters). Move examples and edge cases into scenarios, or split it into separate requirements that each state one behavior.` The affected names are:
+
+| Capability delta | Exact requirement name |
+| --- | --- |
+| npm-distribution/spec.md | Public package and explicit prerequisites |
+| npm-distribution/spec.md | Complete first useful action from empty state |
+| npm-distribution/spec.md | Validated version-tag publication |
+| npm-distribution/spec.md | Distinct MCP Registry publication |
+| opencode-session-continuation/spec.md | Exact originating-session delivery |
+| opencode-session-continuation/spec.md | Portable waiting-call outcome delivery |
+| opencode-session-continuation/spec.md | Continuation after tool timeout |
+| opencode-session-continuation/spec.md | Safe pending delivery and replay |
+| opencode-session-continuation/spec.md | Honest compatibility and enforcement boundary |
+| telegram-approval/spec.md | Distinguishable approval requests |
+| telegram-approval/spec.md | Fail closed without misleading status |
+
+Canonical correction owner for all three deltas is the product/specification owner. Route the exact names above for focused length correction without removing normative constraints, changing scenarios or inventing missing structure. Architecture owns the combined boundary/decomposition review, not these product delta edits. Test engineering owns any resulting test/spec alignment. Human package/licensing/Registry owners still supply identity, actual attribution and namespace. Implementation remains separately authorized and is not a correction to these expected preparation failures.
+
+Exact local evidence paths, relative to this worktree: `.scratch/preview-prep/strict-validation.txt` (complete CLI text), `.scratch/preview-prep/strict-validation.json` (complete machine diagnostics), `.scratch/preview-prep/diagnostic-exits.json` (runtime/version and exit statuses), `.scratch/preview-prep/metadata-red.tap` and `.scratch/preview-prep/installed-red-final.tap` (complete bounded TAP). Matching `.stderr` files contain separate stderr. Original text captures `metadata-red.txt`, `installed-red.txt` and `installed-red-final.txt` remain preserved. TAP was recaptured directly as bytes because the shell-rendered text reporter showed encoding artifacts, not because an assertion changed.
+
+Metadata TAP is 0 PASS/3 expected RED, exit 1. The exact failures are version `0.0.0` versus `0.1.0-preview.1`, absent root `LICENSE` and absent root `server.json`. Installed TAP is 0 PASS/1 admission RED, exit 1, with `explicit isolated installed bin required`. Both report zero cancelled/skipped/todo. The installed binding is deliberately absent. Downstream package/setup assertions are blocked and not positively calibrated. No pack/install, live Telegram, first-host or first-use operation ran.
+
+The six-file handoff is active `tasks.md`, this slice, `tests/release-metadata.test.mjs`, `tests/release-installed.test.mjs`, `tests/release-pack.mjs` and `tests/fixtures/release-observer.mjs`. All other dirty/untracked paths remain outside the commit. The complete requirement-name table is committed here so correction does not depend on access to ignored local diagnostics. Commit identity and final gross accounting are returned in the handoff.
