@@ -47,8 +47,16 @@ const attempt = async (effect, argument, deadline, controller) => {
     value: settled ? raced.value : undefined };
 };
 
-const released = verification => verification !== undefined
-  && RELEASED.every(field => verification[field] === true);
+// Only three literal true fields prove release. Null, absent or unreadable evidence fails closed so a
+// malformed verdict cannot reject the lifecycle or skip the completion report.
+const released = verification => {
+  if (verification === null || typeof verification !== 'object') return false;
+  try {
+    return RELEASED.every(field => verification[field] === true);
+  } catch {
+    return false;
+  }
+};
 
 export const withLiveLifecycle = async (plan, driver, options) => {
   const origin = performance.now();
