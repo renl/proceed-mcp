@@ -342,6 +342,38 @@ test('B2 core: record shape, timestamps, identity and independent groups fail cl
   }
 });
 
+test('B2 core: configuration record state domain and shape-tier precedence', async (t) => {
+  const api = await core();
+  // Binding sections 5 and 7. Outer state selects tier 1, record state has a closed schema domain.
+  for (const state of ['verified', 'unconfigured', 'unknown']) {
+    await t.test(`documented state ${state}`, () => {
+      const facts = releaseFacts();
+      facts.configuration.state = facts.configuration.record.state = state;
+      verdict(api, facts, state === 'verified' ? [] : [`CONFIGURATION_${state.toUpperCase()}`]);
+      verdict(api, releaseFacts());
+    });
+  }
+  for (const state of ['invalid', '', null, undefined, 0]) {
+    await t.test(`invalid record state ${String(state)}`, () => {
+      const facts = releaseFacts();
+      facts.configuration.record.state = state;
+      facts.phase = 'preflight'; verdict(api, facts);
+      facts.phase = 'publish'; verdict(api, facts, ['CONFIGURATION_MALFORMED']);
+      verdict(api, releaseFacts());
+    });
+  }
+  await t.test('shape suppresses later configuration tiers but not independent groups', () => {
+    const facts = releaseFacts();
+    facts.configuration.record.state = 'invalid';
+    facts.configuration.record.observation.rights.packageWrite = false;
+    facts.configuration.record.repository = 'other/repo';
+    facts.configuration.record.validationWindow.endsAt = '2026-11-04T00:00:00.000Z';
+    facts.checks.validate = 'fail';
+    verdict(api, facts, ['CONFIGURATION_MALFORMED', 'CHECK_FAILED']);
+    verdict(api, releaseFacts());
+  });
+});
+
 test('B2 digest: independently encoded per-file bytes, path set and declared inputs', async () => {
   const api = await core();
   const parent = resolve('.scratch/preview-prep');
