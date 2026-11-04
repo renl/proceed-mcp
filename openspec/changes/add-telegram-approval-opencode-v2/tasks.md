@@ -1,5 +1,14 @@
 # Tasks
 
+## Portable live runner - acceptance preparation only
+
+- [x] P.LIVE-spec [Runner contract, safety tests and dependency-bounded handoff](slices/03c3r-portable-live-runner.md). Preparation base `f434995`, production `d66e7613`. Final12: calibration1PASS/11 expected missing-controller RED, no skipped/cancelled/todo. Safety execution blocked until implementation, no live proof. No runner implementation or live activity authorized here.
+- [ ] P.LIVE-review One combined Architect boundary/decomposition/test-artifact review before implementation readiness. All five decomposition triggers YES. Schema2 setup default43189 source-confirmed, actual availability/reservation uninspected.
+- [ ] P.LIVE-A Implement only `tests/support/live-run-lifecycle.mjs`, ceiling200 gross, complete packet hard600. Full offline safety suite and independent verification required. No executable live driver in A.
+- [ ] P.LIVE-B After accepted pinned A, prepare controlled public-protocol/process safety tests, then separately dispatch bounded driver/entry implementation. Public pairing/Approve/original call/ack and Reject/exact Respond contract is in the slice. B not implementation-ready.
+- [ ] P.LIVE-execute Separate explicit bot/polling/credential/state/port/human authorization after offline runner qualification. No live readiness or first-host/model acknowledgement established by preparation.
+- Lifecycle: existing worktree/branch/change `add-telegram-approval-opencode-v2`, path `.worktree/add-telegram-approval-opencode-v2`, owner test engineering, active/retain. Next combined owner review of A and its B dependency, then CoS SE routing. Preserve protected state, ignored evidence and owner/unknown work. Cleanup not due.
+
 ## C3 P3 - aggregate native completion, real-boundary gates open
 
 - [x] P.C3P3-A [Activated privacy/context/scalar tests and evidence](slices/03c3j-p3-privacy.md). Accepted source `dae0a47a`, packet baseline `e5810a98`. Full unfiltered maintained suite3/3 PASS. Actor/chat/token/message/prompt-role refusals, context binding, 4096-scalar exact original-call outcomes and no response echo. Initial fixture-output-cap failures preserved, not production failures or retroactive passes.
