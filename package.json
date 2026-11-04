@@ -1,9 +1,13 @@
 {
-  "name": "proceed-mcp",
+  "name": "@meshimize/proceed-mcp",
   "version": "0.1.0-preview.1",
-  "description": "Telegram approval broker that continues the exact requesting OpenCode V2 session.",
+  "description": "Preview Telegram approval broker for MCP clients; live first use unverified.",
   "type": "module",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "tag": "preview"
+  },
   "mcpName": "io.github.renl/proceed-mcp",
   "repository": "https://github.com/renl/proceed-mcp",
   "engines": {
