@@ -1,6 +1,7 @@
 # Tasks
 
 ## Portable live runner - acceptance preparation only
+- [ ] P.LIVE-pure-verification Code `1931707976a5f87a56bdf6515aa41b0490cb1e78`: maintained10/10 PASS, independent verdict FAIL for accessor rejection and readable sizing, auxiliary-plan trust clarification pending. [Findings and accounting](slices/03c3s-pure-live-plan.md#independent-affected-verification---2026-11-04). Controller absent/unverified, dependency blocked, retained lifecycle unchanged.
 
 - [x] P.LIVE-spec [Corrected lifecycle/cancellation binding and executable safety allocation](slices/03c3r-portable-live-runner.md#selected-private-binding---renewed-review-not-approval). Original preparation304 against `f434995` preserved. Historical12-test import RED is not safety proof. New evidence below the binding. No source implementation or live activity authorized.
 - [x] P.LIVE-pure-prep [Pure plan packet](slices/03c3s-pure-live-plan.md): selected return/error representation and dedicated deterministic tests prepared, not implemented. Historical657 sequential preparation retained separately. Pure tests cannot satisfy controller or live gates.
