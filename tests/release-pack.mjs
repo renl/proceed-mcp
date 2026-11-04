@@ -7,6 +7,7 @@ import { resolve, join, isAbsolute, basename } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { retainVerifiedArtifact } from './support/release-artifact.mjs';
 
 assert.equal(Number(process.versions.node.split('.')[0]), 24, 'qualified Node 24 required');
 const npm = process.env.PROCEED_TEST_NPM_CLI;
@@ -29,6 +30,7 @@ Object.assign(env, { TEMP: run, TMP: run, TMPDIR: run, HOME: run, USERPROFILE: r
   NPM_CONFIG_USERCONFIG: config, NPM_CONFIG_GLOBALCONFIG: globalConfig,
   NPM_CONFIG_CACHE: join(run, 'cache'), NPM_CONFIG_LOGS_DIR: join(run, 'logs') });
 let phase = 'metadata';
+let retained;
 const deadline = performance.now() + 150000;
 const progress = async () => writeFile(`${record}-progress.json`, JSON.stringify({ phase }));
 const execute = (file, args, cwd, timeout = 30000, childEnv = env) => {
@@ -59,8 +61,9 @@ try {
   assert.equal(packed.name, '@meshimize/proceed-mcp');
   assert.equal(packed.version, '0.1.0-preview.1');
   assert.equal(packed.filename, 'meshimize-proceed-mcp-0.1.0-preview.1.tgz');
+  const packedHash = createHash('sha256').update(await readFile(join(run, packed.filename))).digest('hex');
   await writeFile(`${record}-artifact.json`, JSON.stringify({ filename: packed.filename,
-    sha256: createHash('sha256').update(await readFile(join(run, packed.filename))).digest('hex'),
+    sha256: packedHash,
     files: packed.files.map(({ path, size }) => ({ path, size })) }));
   const paths = packed.files.map((entry) => entry.path);
   assert.ok(paths.includes('package.json') && paths.includes('LICENSE') && paths.includes('README.md'));
@@ -92,8 +95,19 @@ try {
     { ...env, PROCEED_TEST_INSTALL_PREFIX: install,
       PROCEED_TEST_INSTALLED_BIN: join(installed, 'bin', 'proceed-mcp.js') });
   phase = 'assertions-pass'; await progress();
+  if (process.env.PROCEED_TEST_ARTIFACT_DIR) {
+    const bytes = await readFile(join(run, packed.filename));
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), packedHash, 'asserted tarball unchanged');
+    retained = await retainVerifiedArtifact({ tarballPath: join(run, packed.filename),
+      artifactDir: process.env.PROCEED_TEST_ARTIFACT_DIR,
+      manifest: { schemaVersion: 1, package: packed.name, version: packed.version,
+        filename: packed.filename, sha256: packedHash,
+        bytes: bytes.length, files: packed.files.map(({ path, size }) => ({ path, size })),
+        node: process.versions.node, platform: process.platform } });
+  }
 } finally {
   await rm(run, { recursive: true, maxRetries: 3, retryDelay: 100 });
   await assert.rejects(access(run), { code: 'ENOENT' });
+  if (retained) await retained(run);
   await writeFile(`${record}-cleanup.json`, '{"cleanup":"pass"}');
 }
