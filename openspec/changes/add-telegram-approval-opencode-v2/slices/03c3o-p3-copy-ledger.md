@@ -51,6 +51,8 @@ Parent: [tasks](../tasks.md). Authority: [copy annex](../proposal.md#c3-product-
 
 ### Exact remainder after STOP
 
+Disclosure attempt1 is now closed on `d66e76134ccf84b6ad881aa5395e2614147c91c0`. The [independent verdict and updated exact remainder](03c3p-disclosure-correction.md#attempt1-independent-affected-verdict---2026-11-04) records reviewed post-correction5/5 evidence and precise newly reached SELECT branches. The following STOP-time list is historical, not an assertion that all authored branches remain unexecuted. Broader copy/privacy/helper and P3 acceptance remain open.
+
 1. Correct and independently revalidate BOTH MCP and CLI disclosures through the separate [corrective packet](03c3p-disclosure-correction.md). Confirm longer capability retention/transfer versus original-call ownership/event routing, no agent wake from retrieval, matching assistant outcome acknowledgement and deduplication meanings, not merely subject words.
 2. Execute authored neutral-first/repeated-Respond, retained approved/cancelled/expired callbacks/text and foreign-terminal nondisclosure branches. Extend exact terminal status nonapproval and rejected/responded retained selection where accepted unchanged evidence is insufficient. Prove exact duplicate selection against canonical stale-update rules without inventing a new acknowledgement producer.
 3. Execute CLI availability/timeout/lost-call/unsupported-Events disclosures after the failed MCP assertion. Finish question nonempty-context/verbatim fidelity, every affected privacy surface and private actor nondisclosure. Reuse unchanged accepted silence/refusal/no-echo proof only within its exact scope.
