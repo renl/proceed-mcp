@@ -1,5 +1,7 @@
 # B2 core checkpoint
 
+Current downstream preparation: [collector/artifact checkpoint](04b2-collector-artifact.md). It supersedes the provisional combined collector180 cut with collector240 first and separately prepared CLI/runner90 next. Accepted core and historical accounting below stay unchanged. No implementation authority or early CLI/workflow consumption.
+
 ## Current three-checkpoint decomposition - pending focused review
 
 Current readiness: all three core checkpoints independently accepted. Digest/complete-core code `a9fe8ee2ed3c7998bc1f65990daa60217f37e263` PASS is limited to the [owned verdict](04b1c-release-digest.md#independent-digest-and-complete-core-verdict---2026-11-05). Collector preparation/consumption requires separate authorization. Remaining collector/artifact/CLI/workflow and real delivery obligations below are unchanged and unproved. The original heading and preparation records below are historical, not a pending replay of the accepted partition review.

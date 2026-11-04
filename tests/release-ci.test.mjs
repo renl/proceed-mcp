@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { parseWorkflow, WorkflowModelError } from './support/workflow-model.mjs';
-import { releaseFacts } from './support/release-policy-fixture.mjs';
+import { releaseFacts, withReleaseFixture } from './support/release-policy-fixture.mjs';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, writeFile, rm, access, symlink } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
@@ -612,4 +612,181 @@ test('B2 CLI: usage is redacted and current bootstrap version cannot reach CI va
   const result = JSON.parse(child.stdout);
   assert.equal(result.decision, 'blocked'); assert.equal(result.authorization, 'not-assessed');
   assert.ok(result.blockers.some(({ code }) => code === 'INITIAL_VERSION_CI_FORBIDDEN'));
+});
+
+test('B2 collector: phase requirements, complete facts and preflight isolation', async () => {
+  const api = await policy();
+  const accepted = await core();
+  for (const name of facadeNames) assert.equal(api[name], accepted[name], name);
+  assert.deepEqual(Object.keys(api).sort(), [...facadeNames, 'collectReleaseFacts'].sort());
+  await withReleaseFixture(async ({ root, facts, options, artifactDir, installDir }) => {
+    const errorIs = (code) => (error) => error instanceof accepted.ReleasePolicyError && error.code === code;
+    for (const change of [{ phase: undefined }, { phase: 'other' }, { artifactDir: undefined }, { installDir: undefined }]) {
+      await assert.rejects(api.collectReleaseFacts({ ...options, ...change }), errorIs('USAGE_INVALID'));
+    }
+    const inherited = Object.assign(Object.create({ phase: 'preflight' }), options);
+    delete inherited.phase;
+    await assert.rejects(api.collectReleaseFacts(inherited), errorIs('USAGE_INVALID'));
+    const before = Date.now();
+    const collected = await api.collectReleaseFacts(options);
+    assert.ok(Date.parse(collected.evaluatedAt) >= before && Date.parse(collected.evaluatedAt) <= Date.now());
+    assert.deepEqual(collected, { ...facts, evaluatedAt: collected.evaluatedAt });
+    verdict(api, collected);
+    const absolute = await api.collectReleaseFacts({ ...options, artifactDir, installDir });
+    assert.deepEqual(absolute.artifact, facts.artifact); assert.deepEqual(absolute.packedInputs, facts.packedInputs);
+    for (const [value, expected] of [['success', 'pass'], ['failure', 'fail'], ['cancelled', 'fail'],
+      ['skipped', 'fail'], [undefined, 'unknown'], ['other', 'unknown']]) {
+      const env = { ...options.env, VALIDATE_RESULT: value };
+      if (value === undefined) delete env.VALIDATE_RESULT;
+      const result = await api.collectReleaseFacts({ ...options, phase: 'preflight', env });
+      assert.equal(result.checks.validate, expected);
+    }
+    const unknown = await api.collectReleaseFacts({ ...options, phase: 'preflight', env: {} });
+    assert.deepEqual(unknown.event, { name: '', ref: '', repository: '', commit: '' });
+    assert.deepEqual(unknown.run, { id: null, attempt: null, workflowRef: null });
+    assert.deepEqual(unknown.environment, { name: null });
+    const packagePath = join(root, 'package.json');
+    const originalPackage = await readFile(packagePath);
+    for (const content of [null, '{']) {
+      if (content === null) await rm(packagePath); else await writeFile(packagePath, content);
+      const result = await api.collectReleaseFacts({ ...options, phase: 'preflight' });
+      assert.deepEqual(result.package, { name: '', version: '', registryName: '', channel: 'invalid' });
+    }
+    await writeFile(packagePath, originalPackage);
+    // Poison paths would fail digest collection and artifact shape if publish read them.
+    await rm(artifactDir, { recursive: true }); await writeFile(artifactDir, 'not a directory');
+    await rm(installDir, { recursive: true }); await mkdir(installDir);
+    await symlink(join(root, 'scripts'), join(installDir, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+    for (const dirs of [{}, { artifactDir, installDir }]) {
+      const pre = { ...options, phase: 'preflight', ...dirs };
+      if (!Object.keys(dirs).length) { delete pre.artifactDir; delete pre.installDir; }
+      const result = await api.collectReleaseFacts(pre);
+      assert.deepEqual(result.artifact, { state: 'missing', filename: null, sha256: null, bytes: null });
+      assert.deepEqual(result.packedInputs, { state: 'missing', algorithm: null, digest: null });
+      verdict(api, result);
+    }
+  });
+});
+
+test('B2 collector: status-only git argv, normalised errors and skip rules', async () => {
+  const api = await policy();
+  await withReleaseFixture(async ({ facts, options, saveAcceptance, acceptancePath }) => {
+    facts.acceptance.record.candidateCommit = 'd'.repeat(40); await saveAcceptance();
+    for (const phase of ['preflight', 'publish']) {
+      for (const [status, expected] of [[0, true], [1, false], [128, 'unknown']]) {
+        const calls = [];
+        const git = (...args) => {
+          calls.push(args);
+          return { status, get stdout() { throw Error('BOM/CRLF/localised stdout must not be read'); },
+            get stderr() { throw Error('stderr must not be read'); } };
+        };
+        const result = await api.collectReleaseFacts({ ...options, phase, git });
+        assert.deepEqual(calls, [[['merge-base', '--is-ancestor', facts.event.commit, 'origin/main']],
+          [['merge-base', '--is-ancestor', facts.acceptance.record.candidateCommit, facts.event.commit]]]);
+        assert.equal(result.candidate.mainContains, expected); assert.equal(result.acceptance.ancestor, expected);
+      }
+      for (const git of [() => ({}), () => ({ status: '0' }), () => ({ status: null }),
+        () => ({ status: 0, error: Error('private detail') }), () => { throw Error('private detail'); }]) {
+        await assert.rejects(api.collectReleaseFacts({ ...options, phase, git }),
+          (error) => error instanceof api.ReleasePolicyError && error.code === 'GIT_UNAVAILABLE');
+      }
+      let calls = 0;
+      const count = () => { calls++; return { status: 0 }; };
+      const invalid = await api.collectReleaseFacts({ ...options, phase, env: { ...options.env, GITHUB_SHA: 'bad' }, git: count });
+      assert.equal(calls, 0); assert.equal(invalid.candidate.mainContains, 'unknown');
+      assert.equal(invalid.acceptance.ancestor, 'unknown');
+      for (const content of [null, '{', '{}', JSON.stringify({ ...facts.acceptance.record, candidateCommit: 'bad' }),
+        JSON.stringify({ ...facts.acceptance.record, verification: null })]) {
+        if (content === null) await rm(acceptancePath);
+        else await writeFile(acceptancePath, content);
+        calls = 0;
+        const result = await api.collectReleaseFacts({ ...options, phase, git: count });
+        assert.equal(calls, 1); assert.equal(result.acceptance.ancestor, 'unknown');
+        await saveAcceptance();
+      }
+    }
+  });
+});
+
+test('B2 collector: real isolated git proves independent ancestry and missing main', async () => {
+  const api = await policy();
+  await withReleaseFixture(async ({ facts, options, git, saveAcceptance }) => {
+    git('init', '--quiet');
+    git('-c', 'core.hooksPath=disabled-hooks', 'commit', '--allow-empty', '-m', 'accepted');
+    const first = git('rev-parse', 'HEAD');
+    git('-c', 'core.hooksPath=disabled-hooks', 'commit', '--allow-empty', '-m', 'tag candidate');
+    const second = git('rev-parse', 'HEAD');
+    git('checkout', '--orphan', 'unrelated', '--quiet');
+    git('-c', 'core.hooksPath=disabled-hooks', 'commit', '--allow-empty', '-m', 'unrelated');
+    const unrelated = git('rev-parse', 'HEAD');
+    const real = { ...options, env: { ...options.env, GITHUB_SHA: second } };
+    delete real.git;
+    for (const phase of ['preflight', 'publish']) {
+      for (const [main, accepted, mainContains, ancestor] of [
+        [second, first, true, true], [first, second, false, true],
+        [second, unrelated, true, false], [null, first, 'unknown', true],
+      ]) {
+        if (main) git('update-ref', 'refs/remotes/origin/main', main);
+        else git('update-ref', '-d', 'refs/remotes/origin/main');
+        facts.acceptance.record.candidateCommit = accepted; await saveAcceptance();
+        const result = await api.collectReleaseFacts({ ...real, phase });
+        assert.equal(result.candidate.mainContains, mainContains);
+        assert.equal(result.acceptance.ancestor, ancestor);
+        verdict(api, result, [...(mainContains === true ? [] : ['MAIN_ANCESTRY_UNAVAILABLE']),
+          ...(ancestor === true ? [] : ['ACCEPTANCE_ANCESTOR_INVALID'])]);
+      }
+    }
+  });
+});
+
+test('B2 collector: actual bytes, manifest correspondence and mixed candidates', async () => {
+  const api = await policy();
+  await withReleaseFixture(async ({ root, facts, options, artifactDir, installDir }) => {
+    const archive = join(artifactDir, facts.artifact.filename);
+    const manifestPath = join(artifactDir, 'artifact.json');
+    const manifest = { schemaVersion: 2, package: facts.package.name, version: facts.package.version,
+      filename: facts.artifact.filename, sha256: facts.artifact.sha256, bytes: facts.artifact.bytes,
+      files: [{ path: 'entry.js', size: 1 }], node: process.versions.node, platform: process.platform,
+      packedInputs: { algorithm: facts.packedInputs.algorithm, digest: facts.packedInputs.digest }, cleanup: 'pass' };
+    const collect = () => api.collectReleaseFacts(options);
+    const valid = async () => { const result = await collect(); assert.deepEqual(result.artifact, facts.artifact);
+      assert.deepEqual(result.packedInputs, facts.packedInputs); verdict(api, result); };
+    await valid(); // Optional manifest is never the source of the recomputed facts.
+    for (const [path, value] of [['schemaVersion', 1], ['package', 'other'], ['version', '0.1.0-preview.3'],
+      ['filename', 'other.tgz'], ['sha256', 'f'.repeat(64)], ['bytes', 0], ['packedInputs.digest', 'f'.repeat(64)]]) {
+      const changed = structuredClone(manifest); set(changed, path, value);
+      await writeFile(manifestPath, JSON.stringify(changed));
+      assert.equal((await collect()).artifact.state, 'malformed', path);
+      await writeFile(manifestPath, JSON.stringify(manifest)); await valid();
+    }
+    await writeFile(manifestPath, '{'); assert.equal((await collect()).artifact.state, 'malformed');
+    await rm(manifestPath);
+    for (const name of ['second.tgz', 'unexpected.txt', 'unexpected-directory']) {
+      const path = join(artifactDir, name);
+      if (name.endsWith('directory')) await mkdir(path); else await writeFile(path, 'extra');
+      assert.equal((await collect()).artifact.state, 'malformed', name);
+      await rm(path, { recursive: true }); await valid();
+    }
+    await rm(archive); assert.equal((await collect()).artifact.state, 'missing');
+    await writeFile(archive, 'changed tarball'); await writeFile(join(installDir, 'entry.js'), 'changed installed bytes');
+    const mixed = await collect();
+    assert.equal(mixed.artifact.sha256, createHash('sha256').update('changed tarball').digest('hex'));
+    assert.equal(mixed.artifact.bytes, Buffer.byteLength('changed tarball'));
+    verdict(api, mixed, ['ARTIFACT_MISMATCH', 'PACKED_INPUTS_MISMATCH']);
+    await rm(join(root, 'LICENSE'));
+    await assert.rejects(collect(), (error) => error instanceof api.ReleasePolicyError && error.code === 'DIGEST_UNREADABLE');
+  });
+});
+
+test('B2 collector fixture calibration: real local git and independent digest setup clean up', async () => {
+  const api = await core();
+  await withReleaseFixture(async ({ facts, options, root, installDir, git }) => {
+    const computed = await api.computePackedInputs({ root, installDir });
+    assert.equal(computed.digest, facts.packedInputs.digest);
+    git('init', '--quiet');
+    git('-c', 'core.hooksPath=disabled-hooks', 'commit', '--allow-empty', '-m', 'calibration');
+    assert.match(git('rev-parse', 'HEAD'), /^[a-f0-9]{40}$/);
+    git('merge-base', '--is-ancestor', 'HEAD', 'HEAD');
+    assert.equal(options.git().status, 0);
+  });
 });

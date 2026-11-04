@@ -2,6 +2,8 @@
 
 ## Current preview delivery - authoritative completion map
 
+- [ ] PREVIEW-B2-collector [Collector/artifact preparation](slices/04b2-collector-artifact.md): accepted complete-core baseline `dd53fac9`, source boundary240/packet600. Actual preparation325, revised complete forecast590 including25 future evidence. Combined collector/CLI cut split for readable fit, not a cap waiver. Collector facts first, then separately prepared CLI/runner handoff, then workflow. Calibration5/5 PASS, final affected25PASS/6 mandatory downstream failures, collector assertions import-blocked. Focused combined review pending, no implementation or downstream authority.
+
 The approved preview boundary in [proposal](proposal.md#approved-preview-boundary-and-scoped-risk-acceptance) and [design](design.md) section 8 governs completion. Historical checkpoint lists below retain failures, preparation RED and superseded sequencing. Their unchecked entries are not automatically current preview obligations or passing checks. No incomplete delta may be archived.
 
 - [x] PREVIEW-native Bounded native P3 accepted at `fdd8ee95`, production `d66e7613`, disclosure evidence `c69ae344`. Current full-controller prerequisite accepted at `fba1f4c6`, evidence `488dd407`. Assertion scopes and overlaps remain in the historical sections. Neither is live/first-use or integrated preview acceptance.
@@ -22,7 +24,7 @@ The approved preview boundary in [proposal](proposal.md#approved-preview-boundar
 
 Deferred observations, UNVERIFIED and not passing checkboxes: live empty-state Telegram pairing/presentation/Approve/Reject/exact Respond, first-host routing/private authority retention and useful assistant acknowledgement. Manual post-install testing needs separate access authorization. Unreachable blocked-ledger/divergence scenarios retain their existing unexecuted disposition, not a waiver or PASS.
 
-Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, status active/retain. Next action coordination may separately authorize collector preparation/consumption of complete core `a9fe8ee2`. B2-CONFIG-STATE-001 closed attempt1. Accepted foundation/evaluator remain intact. Collector/artifact/CLI/workflow, action-pin provenance, actual authorized CI and assembled-candidate verification remain pending. Scoped package evidence, retained B1 artifact and preserved source/owner/unknown material remain retained. Owned fixture cleanup PASS separately from assertions, worktree removal not due. Publishing rights/authentication and Registry schema remain later gates.
+Lifecycle: path `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, status active/retain. Next action focused combined collector/artifact preparation review, then separate implementation authorization against complete core `a9fe8ee2`. B2-CONFIG-STATE-001 closed attempt1. Accepted foundation/evaluator remain intact. Collector/artifact/CLI/workflow, action-pin provenance, actual authorized CI and assembled-candidate verification remain pending. Scoped package evidence, retained B1 artifact and preserved source/owner/unknown material remain retained. Owned fixture cleanup PASS separately from assertions, worktree removal not due. Publishing rights/authentication and Registry schema remain later gates.
 
 ## Historical checkpoint records
 
