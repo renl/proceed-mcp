@@ -44,3 +44,32 @@ export const abortable = ({ signal }) => new Promise((_, reject) => {
   signal.throwIfAborted();
   signal.addEventListener('abort', () => reject(Error('SYNTHETIC-private-error')), { once: true });
 });
+
+export const noncooperative = () => new Promise(() => {});
+export const turn = () => new Promise(resolve => setImmediate(resolve));
+export function assertResult(result, expected) {
+  assert.deepEqual(Object.keys(result).sort(), ['assertion', 'cleanup', 'code', 'retained']);
+  for (const [key, value] of Object.entries(expected)) assert.equal(result[key], value, key);
+  assertRedacted(result);
+}
+export function assertContext(context, p, setup = false) {
+  assert.deepEqual(Object.keys(context).sort(), ['candidate', 'deadline', 'directory', 'port',
+    'signal', 'state', ...(setup ? ['environments'] : [])].sort());
+  assert.equal(context.directory, namespace(p));
+  assert.equal(context.state, join(namespace(p), 'state'));
+  assert.equal(context.candidate, p.candidate);
+  assert.equal(context.port, p.port);
+  assert.ok(context.signal instanceof AbortSignal);
+  assert.ok(Number.isFinite(context.deadline));
+  if (!setup) assertRedacted(context);
+}
+export function callerCancellation() {
+  const controller = new AbortController(), signal = controller.signal;
+  const counts = { add: 0, remove: 0 };
+  for (const [method, key] of [['addEventListener', 'add'], ['removeEventListener', 'remove']]) {
+    const original = signal[method].bind(signal);
+    signal[method] = (...args) => { if (args[0] === 'abort') counts[key]++; return original(...args); };
+  }
+  Object.defineProperty(signal, 'reason', { get() { throw Error('caller reason must not be read'); } });
+  return { signal, counts, abort: () => controller.abort(fakeToken) };
+}
