@@ -585,6 +585,8 @@ Worktree lifecycle: retain the same path/branch/change and pinned project baseli
 
 ### Active portable commands versus historical tests
 
+Integrated mapping gap `B2-INTEGRATED-VERSION-001`, attempt1: [contract-based triage and proposed disposition](slices/04e-final-candidate-selection.md#version-mapping-triage---2026-11-05). Await coordination decision and independent affected revalidation. No historical assertion is removed or passed.
+
 Use project Node 24 and the exact commands in [03A](slices/03a-portable-shared-waiting.md#run-sequence-and-evidence). `npm test` currently discovers legacy criteria too; it is **not** a reconciled portable acceptance command. This is explicit retirement/re-scope by test ownership, not permission for implementation to rewrite tests, add skip flags, or report excluded tests passed.
 
 | Files / command scope | Current disposition |
@@ -607,7 +609,7 @@ Journal format-2 creation and byte-preserving format-1 refusal are active execut
 Refinement evidence at authoring parent `f0359ce`: project Node 24.22.2 Windows, combined portable setup/waiting command exit 1, **1 fixture PASS / 6 schema-prerequisite RED / 0 cancelled/skipped**; assertions past schema 1 versus 2 remain unexecuted. Syntax/format/owned whitespace checks exit 0; cleanup PASS, run-owned artifact directory empty. [Exact command, scope and limitations](slices/03a-portable-shared-waiting.md#run-sequence-and-evidence). Approved decomposition is recorded above; first SE review must resolve a bounded additive seam or <=600-gross coherent switch, not request a blanket approval or claim full PORT-A acceptance.
 
 Parent: [proposal](proposal.md). Contract: [design](design.md). First executable checkpoint: [01 setup](slices/01-setup.md).
-Production review sizing and local freshness snapshot: [02E review plan](slices/02e-review-plan.md) (nine bounded review packets; no feature verification).
+Historical production sizing referenced `slices/02e-review-plan.md` (nine bounded review packets, no feature verification). That preserved untracked artifact is excluded from the selected candidate and is not delivered evidence.
 Affected corrections: [02F ownership](slices/02f-ownership-regression.md) attempt 1 has ten diagnostic affected assertions PASS; full acceptance pending. [02G version admission attempt 1](slices/02g-version-regression.md#attempt-1--independent-affected-verdict-2026-10-31) has one diagnostic public negative assertion PASS at `ad5663e`; Node 24, delivery/retry and external host proof remain pending. Neither is feature verification.
 External host calibration: [02H staged review input](slices/02h-host-calibration.md). Packet A is test-owned preliminary runner preparation; B real-MCP timeout binding and C complete host matrix remain unimplemented/RED. No support promotion or live execution is authorized.
 
@@ -702,7 +704,7 @@ Checkpoint prerequisite disposition: [independent checkpoint 1 evidence and chec
 
 - `TIMEOUT-PROOF-001` remains **OPEN**, correction attempts **2**. Parent `cb84297956d3ccbac2755d0817b9b94083f5b481`; same retained worktree/branch/baseline. [Consolidated scope, boundary supplement, exact acceptance and evidence](slices/02b-executable-readiness.md). One review package, internally phased, not readiness declarations for micro-subsets.
 - Offline collector/extraction, HTTP fault and registered-process/listener tests pass. Actual public `serve`/`status` prerequisite test is RED (both exit 2 rather than unavailable-prerequisite exit 3); no fixture fallback, skip or production feature claim. Product commit-before-effect/OS flush/restart proof is required, not supplied by assertion-library self-tests.
-- Assistant shape is source-grounded by [supplemental research](assistant-schema-research.md), SHA-256 `92CC33EF9A107C8AF6295E6FCBDF6D339D4374955910924456BD91A76844A5DB`. That parallel owner's file is excluded from this test commit. Host-schema comparison/history capture remain live gates, not source-extraction implementation blockers.
+- Historical assistant-shape grounding referenced `assistant-schema-research.md`, SHA-256 `92CC33EF9A107C8AF6295E6FCBDF6D339D4374955910924456BD91A76844A5DB`. That preserved untracked artifact is excluded from the selected candidate, not delivered evidence. The historical host-schema comparison/history-capture gates are subject to the portable-versus-historical dispositions above.
 - **Offline package ready for architecture review; not SE implementation-ready or live-ready.** All five decomposition triggers remain YES. New fault topology/test-only consumers require interface/test-artifact review through coordination. No later checkpoint, allowlist, first-use or release gate passed. No production/dependency/configuration/owner-document edit, credential access, Telegram call, current-user host access, push, PR or archive.
 
 ### Checkpoint 2C product-boundary preparation (2026-10-31)
