@@ -94,7 +94,7 @@ Malformed/uncorrelated exact guidance, unauthorized silence and scalar/verbatim 
 
 ## Next real Telegram prerequisites - preparation only
 
-Authority: [design5/7](../design.md), [Telegram first pairing](../specs/telegram-approval/spec.md), [portable delivery](../specs/opencode-session-continuation/spec.md), [empty-state first use](../specs/npm-distribution/spec.md) and [operations readiness](../../../../docs/operations/integration-readiness.md). No live access is authorized here.
+Authority: [design5/7](../design.md), [Telegram first pairing](../specs/telegram-approval/spec.md), [portable delivery](../specs/opencode-session-continuation/spec.md) and [empty-state first use](../specs/npm-distribution/spec.md). Local operations readiness notes are untracked and excluded from delivery, not committed readiness proof. References below to those dated notes retain historical context only and do not resolve the listed unknowns or authorize live access.
 
 | Prerequisite | Existing requirement and precise unknown |
 |---|---|
