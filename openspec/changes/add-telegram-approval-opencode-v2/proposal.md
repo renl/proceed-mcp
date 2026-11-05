@@ -1,6 +1,6 @@
 # Proposal
 
-Status: Active change with user-approved preview scope. First npm preview manually published before implementation merge. Integrated landing and distinct Registry delivery remain unresolved. Parent: [project direction](../../../AGENTS.md). Read next: capability specs below.
+Status: Active change with user-approved preview scope. First npm preview manually published before implementation merge. Public MCP Registry listing is observed separately from npm delivery. Final evidence reconciliation, archive and integrated landing remain pending. Parent: [project direction](../../../../AGENTS.md). Read next: capability specs below.
 
 ## Why
 
@@ -71,7 +71,7 @@ The user selected manual first preview publication and moved future collector, C
 - The user controls publisher authentication and any required interactive 2FA. Agents must not read npm credential files or tokens. Record the actual `preview`/`latest` mapping and rejected removal honestly. Do not retry removal, unpublish or republish as a workaround.
 - This exception applies only to the first npm preview publication. It adds no permanent manual-only release route or token fallback. Pull-request CI remains non-publishing. No subsequent version or publishing route is authorized here.
 - Protected trusted-publisher automation, its collector/CLI/release-workflow work and its blocked qualification are deferred follow-up obligations, not first-preview completion gates. Preserve prepared work and failed/unreached evidence without marking it passed. Future automation must retain fail-closed validation and separate authorization. Manual publication proves neither trusted-publisher operation nor provenance.
-- Exact-version public npm installation/startup and dist-tag readback remain delivery obligations. Supplied installation/live results and independent byte equality have their distinct evidence limits above. MCP Registry schema validation, authentication, namespace rights and listing readback remain separate pending requirements for `io.github.renl/proceed-mcp`, not canceled or passed.
+- Exact-version public npm installation/startup and dist-tag readback retain their delivery criteria. Supplied installation/live results and independent byte equality have their distinct evidence limits above. The qualified official publisher validated the accepted Registry manifest and the user reported successful publication. Unauthenticated exact-version readback at `2026-11-05T13:45:07.2167022Z` returned HTTP 200 with active `io.github.renl/proceed-mcp` version `0.1.0-preview.1`, the correct npm package, repository, stdio transport and five ordered arguments. This evidences the actual listing attempt, not future namespace rights. Two optional `isSecret:false` properties are omitted in readback. The architecture review accepts that omission as non-blocking under the schema's false default and publisher serialization. Exact JSON equality is not passed, and Registry-consuming client behavior remains untested. Final independent evidence reconciliation remains required, not a new publication or full-release claim.
 
 After these applicable pre-archive gates and owned design/task reconciliation, this bounded change may be completed and archived through the authorized lifecycle without implementing deferred features or falsely ticking old Events/live requirements. Publication and postpublication registry delivery retain their separate evidence gates. This correction grants no merge, archive, publication, live-credential access, new harness development or Ctrl+Break implementation authority.
 
@@ -85,13 +85,13 @@ Selected activation wording and its selection rules are retained in the [C3 prod
 
 ### Shared-connection security decision - approved request-key ownership
 
-The user explicitly approved request-specific bearer authority after disclosure of same-principal key transfer, as linked from the [project index](../../../AGENTS.md) and recorded in the [latest milestone](../../../docs/status_log.md#2026-10-31--portable-waiting-call-direction-and-request-key-approval). A request key (called a request capability in the [design, decisions 2–3](design.md)) plus its protected transport principal authorizes that request. The trusted harness routes each original result to its invoking context and keeps capabilities private. Labels and request IDs grant no authority. Capabilities must not appear in Telegram, logs, assistant acknowledgements, or published evidence. Preparation before waiting lets a caller retain authority for cancellation or retrieval if the waiting result is lost; it is not a replacement for the actual human outcome.
+The user explicitly approved request-specific bearer authority after disclosure of same-principal key transfer, as linked from the [project index](../../../../AGENTS.md) and recorded in the [latest milestone](../../../../docs/status_log.md#2026-10-31--portable-waiting-call-direction-and-request-key-approval). A request key (called a request capability in the [design, decisions 2–3](design.md)) plus its protected transport principal authorizes that request. The trusted harness routes each original result to its invoking context and keeps capabilities private. Labels and request IDs grant no authority. Capabilities must not appear in Telegram, logs, assistant acknowledgements, or published evidence. Preparation before waiting lets a caller retain authority for cancellation or retrieval if the waiting result is lost; it is not a replacement for the actual human outcome.
 
 A valid capability shared with another context on the same principal grants that context request access, including retrieval or cancellation. This is approved behavior, not an isolation defect. The capability does not authorize a different transport principal. Ordinary shared-principal MCP does not authenticate a nontransferable agent-session identity. Original-call correlation, including reverse-order results, is a separate routing obligation, not proof of that stronger identity. `Exact originating-session delivery` retains its name for traceability and states this approved boundary. The ownership-approval blocker is resolved. Verification must retain its recorded scope and limits. Neither possession of a key nor retrieval wakes an agent. Enhanced exact-session event routing is deferred outside this preview and is not established by a request capability.
 
 External contracts for included behavior retain source-grounded MCP and Telegram requirements. Waiting-call proof must not depend on an OpenCode API support allowlist. Event-wire research and enhanced-path proof are future work, not preview gates. Generic notifications, retained history or explicit retrieval must never be described as automatic agent resumption.
 
-MIT, copyright attribution Ng Cheng Leong, npm artifact `@meshimize/proceed-mcp`, publisher account `davemeshimize`, and Registry identity `io.github.renl/proceed-mcp` are selected. Public npm publication is observed. Licensing authority, future publishing rights, broader support qualification, deferred publisher setup and Registry authorization retain their separate evidence limits. Never commit credentials. Direct OpenCode API/password setup is paused. This correction authorizes neither an unauthenticated replacement nor weaker ownership/privacy controls. No event compatibility, independent full live-integration verdict or Registry listing success is claimed here.
+MIT, copyright attribution Ng Cheng Leong, npm artifact `@meshimize/proceed-mcp`, publisher account `davemeshimize`, and Registry identity `io.github.renl/proceed-mcp` are selected. Public npm publication and the separate active Registry listing are observed within the evidence limits above. Licensing authority, future publishing rights, broader support qualification and deferred publisher setup retain their separate evidence limits. Never commit credentials. Direct OpenCode API/password setup is paused. This correction authorizes neither an unauthenticated replacement nor weaker ownership/privacy controls. No event compatibility, independent full live-integration verdict or Registry-consuming client certification is claimed here.
 
 ## Correction Traceability
 
@@ -149,7 +149,7 @@ After durable commit/install and matching-wait wake, compose exactly `prefix + "
 
 Foreign callbacks never disclose a private outcome. Admission, cursor durability and no-effect/refusal selection follow the cited C3 clauses. Neutral spinner dismissal may precede processing. No recorded-choice message precedes durable installation/wake, and failed UI acknowledgement never reverses the outcome.
 
-Preserve `renderPortableReplyPrompt` in [portable-render.js](../../../src/telegram/portable-render.js) exactly, including its full request ID and line breaks. Preserve the accepted question layout, identity fields and 4096-character bound. This annex changes neither rendering nor length rules.
+Preserve `renderPortableReplyPrompt` in [portable-render.js](../../../../src/telegram/portable-render.js) exactly, including its full request ID and line breaks. Preserve the accepted question layout, identity fields and 4096-character bound. This annex changes neither rendering nor length rules.
 
 ### Onboarding, CLI and MCP activation copy
 
@@ -181,5 +181,5 @@ For terminal human outcomes, use the recorded-outcome prefixes above with actual
 
 ## Related Artifacts
 
-- [Project status](../../../docs/status_log.md)
+- [Project status](../../../../docs/status_log.md)
 - Product acceptance: the three capability deltas linked above.

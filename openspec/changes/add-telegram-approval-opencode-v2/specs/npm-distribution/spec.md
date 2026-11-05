@@ -182,7 +182,7 @@ Verified npm preview delivery MUST include installation and startup of the exact
 ### Requirement: Distinct MCP Registry publication
 The intended MCP Registry listing MUST be tracked separately from npm package publication. Its package identity, preview version, installation metadata and limitations MUST match the actual npm preview and README.
 
-The listing remains an approved pending delivery obligation, not deferred publishing-automation work, canceled scope or a passed check. Schema validation, compatible publisher authentication, namespace rights and listing readback remain unresolved until evidenced.
+The listing is a distinct delivery obligation, not deferred publishing-automation work. The qualified official publisher validated the accepted manifest, and the user reported successful publication.
 
 #### Scenario: Assess listing rights and claims
 - **GIVEN** an intended MCP Registry listing
@@ -196,6 +196,9 @@ The listing remains an approved pending delivery obligation, not deferred publis
 - **GIVEN** the exact npm preview version is published and registry publication is authorized with confirmed rights
 - **WHEN** the listing is published and checked
 - **THEN** the listing points to that installable preview with accurate metadata, and registry success is recorded separately from npm delivery and deferred live testing.
+- **AND** public exact-version readback at `2026-11-05T13:45:07.2167022Z` returned HTTP 200 with active `io.github.renl/proceed-mcp` version `0.1.0-preview.1`, matching npm identity/version, repository, stdio transport and five ordered arguments. This evidences the actual publication attempt, not future namespace rights or runtime behavior.
+- **AND** readback omits two optional `isSecret:false` properties. Architecture review accepts that serialization omission as non-blocking under the schema's false default and publisher serialization, not exact JSON equality or proof of Registry-consuming client behavior.
+- **AND** final independent evidence reconciliation remains required. The acceptance scenarios are unchanged.
 
 #### Scenario: Registry listing is unavailable
 - **GIVEN** npm publication succeeded but registry rights, prerequisites or publication are unavailable
