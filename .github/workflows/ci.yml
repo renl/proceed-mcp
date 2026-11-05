@@ -5,7 +5,7 @@ permissions:
   contents: read
 jobs:
   validate:
-    runs-on: windows-2025
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -14,20 +14,25 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: 24.22.2
-      - run: |
+      - shell: bash
+        run: |
           node --version
-      - run: |
+      - shell: bash
+        run: |
           npm ci --ignore-scripts
-      - run: |
+      - shell: bash
+        run: |
           node --test tests/release-metadata.test.mjs tests/release-preview-ci.test.mjs tests/release-artifact.test.mjs
-      - run: |
+      - shell: bash
+        run: |
           node node_modules/prettier/bin/prettier.cjs --check .github/workflows/ci.yml
-      - run: |
+      - shell: bash
+        run: |
           node scripts/build.mjs
-      - run: |
-          $npmCli = Join-Path (Split-Path (Get-Command node).Source) 'node_modules/npm/bin/npm-cli.js'
-          if (-not (Test-Path -LiteralPath $npmCli)) { throw 'npm-cli.js not found' }
-          $env:PROCEED_TEST_NPM_CLI = $npmCli
-          node tests/release-pack.mjs
-        shell: pwsh
+      - shell: bash
+        run: |
+          npmCli="$(readlink -f "$(command -v npm)")"
+          test "$npmCli" = "$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")/lib/node_modules/npm/bin/npm-cli.js"
+          test -f "$npmCli"
+          PROCEED_TEST_NPM_CLI="$npmCli" node tests/release-pack.mjs
         timeout-minutes: 5
