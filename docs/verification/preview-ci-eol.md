@@ -270,3 +270,79 @@ owner, and test semantics to the canonical contract owner. No blind retries,
 host-specific assertion patches, Telegram, archive edits or publication follow.
 All 104 immutable archive hashes are reused unchanged. Concurrent status edits,
 six excluded originals, three recovery notes and retained artifacts stay untouched.
+
+## Architect-audited timing correction: blocked on cleanup coverage
+
+Audited candidate: `cf512ea9873688c4c6ca249aa76c711025889ce8`, target
+`de1c5802`. Supplied actual CI merge candidate `463dd281` contains that head.
+Its supplied Windows image is `20261030.294.1`. The earlier image claim above
+belongs to its historical run and is not silently replaced. The 5246ms diagnostic
+is cumulative smoke elapsed time, not an ACL measurement or pure runner cost.
+
+Root-cause classification: test budgets undercut reachable production deadlines.
+This establishes a harness defect, not whether production would succeed with a
+valid budget. No five-second init performance promise is established. Production
+code, public assertions and installed-byte equality must remain unchanged.
+
+The audit permits these ceilings, clipped to an absolute remaining work deadline:
+
+| Phase | Ceiling | Reachable dependency |
+|---|---|---|
+| init, owner-add, broker-ready | 45s each | Two sequential 20s ACL helpers plus 5s orchestration |
+| status, status-after | 15s each | 10s HTTP inactivity deadline |
+| prepare | 25s | Registration and preparation exchanges |
+| unpaired-refusal | 15s | Public refusal exchange |
+| Lightweight CLI / protocol | Existing 5s / 8s | No longer dependency |
+
+Shared managed work is 120s, not the sum of all phase ceilings. A phase must not
+start without remaining work budget. Reserve at least 13s for two resources:
+2 x (3s tree termination + 3s absence verification) + 600ms filesystem retry
+backoff. Proposed outer limits remain smoke test 140s, child 145s, package 150s,
+local command 180s and workflow 5min. The package must refuse to start smoke
+unless a full 145s remains after its own 5s cleanup reserve. This is feasible
+only if preceding package work fits the remaining allowance. These ceilings are
+not performance promises and do not allow every phase to consume its maximum.
+
+Feasibility review stops before implementation for these concrete reasons:
+
+- `tests/release-installed.test.mjs:111-118` uses transient `spawnSync` CLI
+  children outside `context.resources`. Timeout can terminate their Node root
+  while PowerShell/icacls descendants remain. The synchronous wait also prevents
+  the managed JavaScript timer from interrupting it.
+- `tests/support/managed-spike.mjs:43-50,75-96` can terminate a still-live tree
+  with `taskkill /T` and check root plus explicitly reported descendant PIDs.
+  `tests/fixtures/release-observer.mjs` reports readiness, not descendant PIDs.
+  Once an unreported parent exits, these facilities cannot establish absence of
+  its surviving descendants. Registering the CLI root alone does not close this
+  gap. No orphan has been observed in this review. The issue is missing proof.
+- Production `src/state/protection.js:73-84` runs a 20s `execFile` PowerShell
+  helper whose script invokes icacls at line 29. Parent/helper timeout paths
+  therefore have a real descendant risk, not only a hypothetical test fixture.
+- Managed `totalMs` ends before cleanup. Its filesystem retry settings bound
+  retry backoff, not every filesystem operation's duration. An unconditional
+  hard cleanup guarantee cannot be inferred from the 600ms setting.
+
+Verdict: BLOCKED within the authorized files and existing facilities. No timing
+code is changed, no calibration or installed-smoke pass is claimed, and no CI
+push/rerun is ready. Raising only constants would leave the exact failure path
+unowned and would misrepresent the cleanup floor. General process containment,
+observer changes and shared-harness changes remain outside this authorization.
+
+Practical decision for project coordination: keep the gate blocked, or request
+explicit user acceptance for one diagnostic run on a disposable Windows CI
+runner with possible unverified descendants until runner disposal. The latter
+is a scoped cleanup-risk exception, not successful cleanup or merge permission.
+Recommend keeping the gate blocked unless that diagnostic risk is accepted.
+Without an exception, stronger descendant ownership requires separate scope.
+
+Before growth, this blocked evidence-only unit forecasts at most 100 gross lines,
+below 600. Earlier EOL history remains 382 gross and diagnostic history remains
+218 gross, separately recorded without resetting or relabeling either. No new
+fixture, npm tooling, process, package or artifact is created by this review.
+
+Review checks PASS on Windows Node 24.22.2: both release-runner syntax checks,
+brief Prettier and whitespace. All 104 archive blobs match HEAD. Three recovery
+note hashes, custody manifest and retained published tarball match their recorded
+hashes. The index was empty at intake. Coordination status dirt and six excluded
+originals remain unselected. No resource-owning validation was started, so there
+is no new process-cleanup result. Actual Windows CI remains required and blocked.
