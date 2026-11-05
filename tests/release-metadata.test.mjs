@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { parseArguments, requireOptions } from '../src/cli/args.js';
 
 const json = async (path) => JSON.parse(await readFile(new URL(`../${path}`, import.meta.url), 'utf8'));
 const manifest = await json('package.json');
@@ -111,8 +112,90 @@ test('PREVIEW-REGISTRY: owner-approved namespace and consistent listing', async 
   assert.equal(packages[0].identifier, manifest.name);
   assert.equal(packages[0].version, manifest.version);
   assert.equal(packages[0].transport.type, 'stdio');
-  assert.ok(packages[0].packageArguments.some((arg) => arg.value === 'mcp'));
-  assert.ok(packages[0].packageArguments.some((arg) => arg.name === '--owner'));
-  assert.ok(packages[0].packageArguments.some((arg) => arg.name === '--state-dir'));
   assert.doesNotMatch(JSON.stringify(listing), /PROCEED_TELEGRAM_BOT_TOKEN/);
+});
+
+// TEST ONLY: this fixed five-slot schema mapping is not a consuming-client renderer.
+const operatorInputs = {
+  'operator-owner-id': 'metadata-test-owner',
+  'operator-state-dir': 'C:\\Synthetic State\\approval data',
+};
+const expectedArgv = ['mcp', '--owner', operatorInputs['operator-owner-id'],
+  '--state-dir', operatorInputs['operator-state-dir']];
+
+function registryArguments(args) {
+  assert.equal(args.length, 5);
+  const slots = ['mcp', '--owner', 'operator-owner-id', '--state-dir', 'operator-state-dir'];
+  for (const [index, slot] of slots.entries()) {
+    const arg = args[index];
+    assert.equal(arg.type, 'positional');
+    assert.equal(arg.isRequired, true);
+    assert.equal(typeof arg.description, 'string');
+    assert.ok(arg.description.trim().length > 0);
+    for (const key of ['name', 'default', 'variables', 'choices', 'isRepeated']) {
+      assert.equal(Object.hasOwn(arg, key), false, `${slot}: unexpected ${key}`);
+    }
+    if (Object.hasOwn(operatorInputs, slot)) {
+      assert.equal(Object.hasOwn(arg, 'value'), false);
+      assert.equal(arg.valueHint, slot);
+      assert.equal(arg.placeholder, slot);
+      assert.equal(arg.format, 'string');
+      assert.equal(arg.isSecret, false);
+    } else {
+      assert.equal(arg.value, slot);
+    }
+  }
+  const argv = args.map(arg => Object.hasOwn(arg, 'value') ? arg.value : operatorInputs[arg.valueHint]);
+  assert.deepEqual(argv, expectedArgv);
+  const parsed = parseArguments(argv, { valueOptions: ['owner', 'state-dir'] });
+  requireOptions(parsed.options, ['owner', 'state-dir']);
+  assert.deepEqual(parsed.positionals, ['mcp']);
+  assert.deepEqual([...parsed.options], [['owner', operatorInputs['operator-owner-id']],
+    ['state-dir', operatorInputs['operator-state-dir']]]);
+  assert.equal(parsed.flags.size, 0);
+}
+
+test('PREVIEW-REGISTRY-ARGV: real metadata maps to published separate-token parser', () => {
+  const pkg = listing.packages.find(entry => entry.registryType === 'npm');
+  assert.equal(Object.hasOwn(listing, 'remotes'), false);
+  for (const key of ['environmentVariables', 'runtimeArguments']) {
+    assert.equal(Object.hasOwn(pkg, key), false);
+  }
+  registryArguments(pkg.packageArguments);
+});
+
+test('PREVIEW-REGISTRY-ARGV-CONTROLS: exact mapping accepts positional fixture and rejects mutations', () => {
+  const fixed = value => ({ type: 'positional', value, isRequired: true, description: `Literal ${value}` });
+  const input = valueHint => ({ type: 'positional', valueHint, placeholder: valueHint,
+    format: 'string', isRequired: true, isSecret: false, description: `Operator input ${valueHint}` });
+  const correct = [fixed('mcp'), fixed('--owner'), input('operator-owner-id'),
+    fixed('--state-dir'), input('operator-state-dir')];
+  registryArguments(correct);
+  const mutations = [
+    args => { args.splice(2, 1); },
+    args => { [args[2], args[4]] = [args[4], args[2]]; },
+    args => { args[1].value = '--owner=metadata-test-owner'; },
+    args => { args[1].value = '--owner metadata-test-owner'; },
+    args => { args[3].type = 'named'; args[3].name = '--state-dir'; },
+    args => { args[4].value = 'C:\\default'; },
+    args => { args[2].default = 'invented-owner'; },
+    args => { args[2].isRequired = false; },
+    args => { args[4].isSecret = true; },
+    args => { args[4].placeholder = '"operator-state-dir"'; },
+    args => { args[3].value = '"--state-dir"'; },
+  ];
+  for (const mutate of mutations) {
+    const args = structuredClone(correct);
+    mutate(args);
+    assert.throws(() => registryArguments(args), assert.AssertionError);
+  }
+  for (const argv of [
+    ['mcp', '--owner=metadata-test-owner', '--state-dir', operatorInputs['operator-state-dir']],
+    ['mcp', '--owner metadata-test-owner', '--state-dir', operatorInputs['operator-state-dir']],
+    ['mcp', '--owner', '--state-dir', operatorInputs['operator-state-dir']],
+  ]) assert.throws(() => parseArguments(argv, { valueOptions: ['owner', 'state-dir'] }), /unknown option|requires a value/);
+  const missing = parseArguments(['mcp', '--owner', operatorInputs['operator-owner-id']],
+    { valueOptions: ['owner', 'state-dir'] });
+  assert.throws(() => requireOptions(missing.options, ['owner', 'state-dir']), /--state-dir is required/);
+  // The parser permits option reordering. Only the approved metadata ordering is pinned above.
 });
