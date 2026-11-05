@@ -1,0 +1,11 @@
+# Vendored and generated content is not owned by the formatter.
+node_modules/
+.opencode/
+
+# Owner-authored planning and product artifacts, and test engineering sources,
+# are formatted by their owners.
+openspec/
+docs/
+tests/
+AGENTS.md
+package-lock.json

@@ -1,20 +1,17 @@
 # proceed-mcp
 
+Telegram approvals for MCP agents.
+
 An MCP server that sends an approval request to a private Telegram chat and returns the paired
 human's decision through the waiting MCP call. The human can Approve, Reject, or Respond from
 Telegram. `proceed-mcp` records the outcome. It does not execute the requested action.
 
-**Preview status: `@meshimize/proceed-mcp@0.1.0-preview.1` is published on npm. Live use is not
-verified.** The source has offline test evidence on Windows with Node 24.22.2. Publication was a
-manual step performed before the change merged. Both the `preview` and `latest` dist-tags currently
-point to this version, because npm rejected a request to remove `latest` with HTTP 400. Pin the
-exact version instead of relying on either tag. No real Telegram pairing, question delivery, human
-decision, OpenCode V2 host run, or clean public npm installation has been verified for this preview.
+> **Preview:** `@meshimize/proceed-mcp@0.1.0-preview.1` is published on npm and listed in the
+> official MCP Registry. Pin the exact version. MCP Events, automatic continuation after a timeout,
+> `doctor`, and `retry` are not implemented in this preview.
 
 The implemented scope is the loopback broker, private Telegram pairing and question display,
 Approve/Reject/Respond, expiry, cancellation, capability-authorized retrieval, and acknowledgement.
-MCP Events, automatic continuation after a timeout, `doctor`, and `retry` are not implemented in this
-preview.
 
 ## Distribution
 
@@ -23,27 +20,16 @@ and its runtime sources. It is not a hosted MCP endpoint, and there is no cloud 
 adapter and the broker run on your machine. The broker listens only on `127.0.0.1` and calls
 `https://api.telegram.org` for Telegram.
 
-The published npm artifact is the public preview `@meshimize/proceed-mcp` version
-`0.1.0-preview.1`. It was published under the `preview` dist-tag, and the `latest` tag also points
-to it: npm rejected a request to remove `latest` with HTTP 400. Pin the exact version rather than
-depending on either tag. This was a manual publication performed before the change merged, not a
-release-workflow result. Guarded publication through release automation is planned but not
-implemented, and no automated publishing has run.
+- npm: [@meshimize/proceed-mcp](https://www.npmjs.com/package/@meshimize/proceed-mcp)
+- MCP Registry: [io.github.renl/proceed-mcp](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.renl%2Fproceed-mcp)
 
-An official MCP Registry listing is an approved delivery task for this preview, tracked and
-reported separately from npm package publication. A listing is discovery metadata only: it would
-point to the npm package and would not host or run the broker. It is planned only after the npm
-preview is published and its exact-version installation check passes. The selected listing name is
-`io.github.renl/proceed-mcp` for the repository `https://github.com/renl/proceed-mcp`. That
-selection requires confirmed registry namespace and registry publishing rights, which remain
-unresolved, and it asserts no registry authentication or schema validation. No listing has been
-published, and no registry delivery is verified. A blocked or pending listing does not change or
-hide the npm publication result.
+The current version is `0.1.0-preview.1`. Both the `preview` and `latest` dist-tags point to it, so
+pin the exact version rather than relying on either tag. Publishing automation is planned but not
+implemented.
 
 ## Requirements
 
-- Node.js 24 or newer. `package.json` declares `>=24`. This preview was exercised only on Windows
-  with Node 24.22.2. Other operating systems and Node versions are untested.
+- Node.js 24 or newer. `package.json` declares `>=24`.
 - One dedicated Telegram bot and one private chat with that bot. Do not share the bot with another
   poller or a webhook.
 - The broker and the MCP adapter must run on the same machine. The human may be remote.
@@ -66,10 +52,7 @@ Or run it without a global install:
 npx --yes --package @meshimize/proceed-mcp@0.1.0-preview.1 -- proceed-mcp --help
 ```
 
-The scoped package installs the same `proceed-mcp` command. Version `0.1.0-preview.1` is published
-under the `preview` tag, and the `latest` tag also points to it, so pin the exact version rather
-than relying on either tag. A successful install is the first release check, not proof that the
-live approval flow works, and a clean public installation is not verified.
+The scoped package installs the same `proceed-mcp` command.
 
 ## Set up the broker and Telegram
 
@@ -304,7 +287,7 @@ Use a harmless action. The product never executes it.
    the returned `decision_id` with `acknowledge_approval`. No file or command action needs to run.
 5. In the next assistant turn, check the follow-up acknowledgement. It must name the same
    `request_id` and the recorded outcome `approved`. It must not repeat the `request_capability` and
-   must not perform the action. This is a required manual check, not a verified preview result.
+   must not perform the action.
 6. Repeat with a fresh prepared handle and `client_request_id` `manual-reject-1`, then press Reject.
    The call should return `rejected`, not authorization to perform the action. Check the next
    assistant turn the same way: matching `request_id` and outcome `rejected`, no capability echo, no
@@ -397,11 +380,16 @@ journal. There is no automatic stale-lock recovery in this preview.
 - No recovery of an exited MCP client or harness process, and no automatic session reattachment.
 - OpenCode V2 is the first validation harness. Other harnesses are not tested. The generic stdio
   command is available, but no multi-harness compatibility is claimed.
-- Node.js 24 or newer is the manifest floor. Only Windows with Node 24.22.2 has offline test
-  evidence. Do not assume other operating systems or Node versions are supported.
+- Node.js 24 or newer is the manifest floor. Other operating systems and Node versions have not been
+  tested.
 - `doctor` is not implemented. `retry` reports unavailable.
-- The npm preview is published. A clean public install, and live Telegram or OpenCode results, are
-  not verified.
+
+## Preview status
+
+This preview is published on npm and listed in the MCP Registry. Manual first use of the published
+package reported a working approval flow, and offline test evidence covers Windows with
+Node.js 24.22.2. Wider environments and broader failure paths have not been exercised. Publishing
+automation is not implemented.
 
 ## License
 

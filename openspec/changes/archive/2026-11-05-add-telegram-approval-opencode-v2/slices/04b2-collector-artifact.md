@@ -1,0 +1,67 @@
+# B2 collector and artifact facts - preparation
+
+Parent: [CI index](04b-preview-ci.md), [accepted core index](04b1-release-policy-core.md). Authority: [design section 8](../design.md#8-package-and-release-architecture), [npm delta: Validated version-tag publication](../specs/npm-distribution/spec.md#requirement-validated-version-tag-publication). Existing private binding sections2-4/6/8/10/15 supply exact interfaces, not new normative requirements.
+
+## Outcome, baseline and ownership
+
+Can subsequent preview validation obtain actual local ancestry and byte facts without trusting a manifest or treating those facts as publication authority? Collector assertions directly prove that bounded question. They are enabling/proxy evidence for protected CI and public delivery. Dummy archive/installed files are not actual package installation or reproduction proof.
+
+- Same worktree `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, status active/retain. One OpenSpec change and final PR to `main`, no partial landing.
+- Preparation baseline `dd53fac9dd668a0f30499283a4b6bdf2f1e46631`. Complete-core prerequisite `a9fe8ee2ed3c7998bc1f65990daa60217f37e263` is present and independently accepted at that baseline. Reuse selected18/18, independent canonical oracle/rejection and foundation/evaluator evidence by unchanged scope. Core and ten exports remain untouched.
+- Live HEAD, empty index and existing owner/unknown dirt confirmed once. Preserve all such paths and original B1 tarball/manifest unchanged. Production, workflows, package, README, canonical design/specs, private binding and real acceptance/configuration records remain read-only during preparation.
+
+## Concrete split and complete forecast
+
+Former collector180/workflow70 were provisional estimates, not established ceilings. Readable combined collector/artifact/CLI source is forecast290, tests/fixtures including CLI/runner about390, docs/evidence90, total770. That cannot safely fit source260 or packet600. Do not compress validations or substitute synthetic facts for provenance.
+
+| Ordered checkpoint | Exact future source boundary and ceiling | Complete forecast and dependency |
+|---|---|---|
+| This collector/artifact checkpoint | ONLY `scripts/release-policy.mjs`, source240 gross | source240 + tests/fixtures240 + docs/evidence90 =570/600, chained on accepted complete core |
+| Later CLI/runner handoff | Same source file, incremental source90 gross | source90 + tests/runner150 + docs/evidence80 =320/600, prepare separately after independent collector acceptance |
+| Later workflow | `release.yml` and selected `ci.yml` format arguments |70 source remains provisional, reforecast all tests/docs/evidence before its dispatch against accepted CLI/runner |
+
+First checkpoint implements complete `collectReleaseFacts` and identical core reexports, no CLI execution or workflow. Second binds guarded import, exact CLI0/1/2 and redacted errors, then test-owned `tests/release-pack.mjs` schema2 computation after installed assertions/before retention. Use fresh owned outputs and affected runner provenance proof, never overwrite/repack retained B1 bytes. Existing CLI RED remains mandatory now, not skipped or waived. Same contract, branch and final PR, no new production path/framework or early consumer enablement.
+
+Shared preparation is charged once to this collector checkpoint. Foundation372, corrected evaluator484, digest148, historical451 and sequential preparation797 remain visible history, not cumulative caps across separate checkpoints. Future genuine records are charged when authored, not free or fabricated now. Whole-PR disposition remains separate. Gross means additions plus deletions against the pinned baseline including shared churn/new-file blank lines. Source fit remains an implementation feasibility estimate. Stop with concrete affected split analysis before exceeding240 source or600 packet.
+
+## Source constraints and executable mapping
+
+Tests stay in ONE `tests/release-ci.test.mjs` suite. The proposed test-only support partition is in the correction brief below, not implementation authority. Pack runner and retention files stay unchanged. Production must not import tests, change accepted modules, write files, publish, read credentials or use network. Entry -> accepted core remains the only local production dependency direction, with no shell, new dependency, host/API behavior or auth mechanism.
+
+- Export exactly the ten identical core bindings plus `collectReleaseFacts({phase,root,env,artifactDir,installDir,git})`, same `ReleasePolicyError`. Import performs no CLI parsing/output/exit. Collector alone owns clock, package/record/artifact reads and Git invocation. Complete facts follow binding section3, including sentinels/platform variables and one `checks.validate`. Those variables never authorize.
+- `B2 collector: phase requirements...`: own required `phase` exactly `preflight|publish`, publish requires both directories, relative paths resolve against root, absolute allowed. Shared `USAGE_INVALID`. Exact collected facts except bounded timestamp, identical reexports/error identity. Preflight neither requires nor reads artifact/install paths, returns missing/null groups even with poisoned paths. Collected facts must satisfy accepted evaluator and always report `authorization: not-assessed`.
+- `B2 collector: status-only git...`: exactly one array argument per call, `merge-base --is-ancestor <event.commit> origin/main`, then `<accepted.commit> <event.commit>`. Numeric0/1/128 -> true/false/unknown. Throwing output getters ensure no stdout/stderr consumption. Non-numeric status, result.error or thrown callback -> shared `GIT_UNAVAILABLE`. Invalid event SHA skips both calls. Missing/schema-invalid acceptance skips only second. Both phases, no CLI/env injection access.
+- Default Git stays binding section2: `spawnSync('git', ['-C', root, ...args], {cwd:root,encoding:'utf8',windowsHide:true,maxBuffer:1048576})`, inherited environment, no added variables. `B2 collector: real isolated git...` MUST actually use default Git on a fresh repository. Two related commits, an orphan and local `refs/remotes/origin/main` distinguish main inclusion, accepted ancestry, self-ancestry and missing-main unknown in both phases. Exact blockers prove neither relation substitutes for the other. No fetch/tag/push/network.
+- `B2 collector: actual bytes...`: independently encoded fixture digest, actual archive SHA-256/length and installed/root digest. Optional manifest supplies no facts. Schema2 agrees on package/version/filename/hash/length/digest. Schema1, malformed JSON, each contradiction, multiple tarballs and extra file/directory -> malformed. No tarball -> missing. Mutations restore positive controls. Mixed changed tarball/installed bytes -> both `ARTIFACT_MISMATCH` and `PACKED_INPUTS_MISMATCH`. Missing mandatory input -> shared `DIGEST_UNREADABLE`.
+- Historical `B2 collector fixture calibration...` exercises setup/local Git/independent digest without collector source. Its elapsed-time assertion does NOT enforce the production-default Git deadline. The correction brief proposes supervised execution and new calibration before collector acceptance. Existing cleanup-pass evidence covers executed fixture removal only. No dummy archive is installed or promoted.
+
+## Boundary Verification and combined review
+
+Design section8 governs candidate/trust semantics. Existing private field/error/schema2 names are used unchanged. No wire URL/auth check applies to local file/Git collection. Actual protected environment, native OIDC/npm permission, GitHub execution and public exact-version install remain separate pending real-boundary proof. Policy cannot prove the install came from the tarball or validate-run identity. Later real runner handoff plus workflow upload/download/order assertions remain necessary, not replaced by this fixture.
+
+Trigger checklist:1YES (facts feed CLI/workflow),2NO (fresh owned bytes, retained bytes untouched/unread),3NO (no receiver),4YES (collector -> CLI/runner -> workflow chain),5YES (synthetic collector proof versus later installed handoff). Request ONE focused combined decomposition/test-only/boundary review through coordination. Prepared for review only, not source-implementation-ready, independently accepted, feature-verified or release-ready.
+
+## Run sequence and lifecycle
+
+Windows PowerShell, project Node24.22.2 at `../../.tools/readiness-node24/node_modules/node-win-x64/bin/node.exe`. Native checks represent local file/Git behavior, not GitHub. No install/build/pack/application/network operation now.
+
+1. Syntax both changed test files, scoped `git diff --check`, existing Prettier `--check` on owned tests/tasks/slice (20s). Tests/OpenSpec are formatter-excluded, claim policy execution only and review readability.
+2. `node --test --test-reporter=tap --test-name-pattern=calibration tests/release-ci.test.mjs` (20s), collector selection with `--test-name-pattern='B2 collector:'` (20s), affected `node --test --test-reporter=tap tests/release-ci.test.mjs tests/release-artifact.test.mjs` (30s). Preserve absent entrypoint/workflow RED and precise assertion reach, no skips. Do not replay unchanged core separately.
+3. Check live relative targets, not remote URLs/anchors. Bounded logs/exits in ignored `.scratch/preview-prep/collector-prep/`. Preserve failures. Record cleanup separately.
+4. After separately reviewed implementation, static/collector/affected commands must reach default-Git/artifact assertions before independent collector acceptance. Mandatory CLI/workflow RED remains later work. No downstream consumption before acceptance.
+
+Lifecycle next action: focused combined review, then separately authorized collector implementation only if measured fit remains credible. Existing worktree/branch/change retained under test-engineering ownership. Cleanup limited to fixture absence. No worktree removal, unknown cleanup, live operations, credential access or publishing authority.
+
+## Preparation evidence - 2026-11-05
+
+- Windows Node24.22.2 syntax2 PASS, scoped whitespace PASS, Prettier policy PASS. Tests/OpenSpec remain excluded, not formatting-proved. Readability reviewed. Live local link targets213 PASS, not anchors/remote URLs. No normative change or OpenSpec CLI validation claim.
+- Calibration exit0,5/5 PASS, including new real local Git init/commit/self-ancestry and independent fixture digest setup. Unchanged four calibration cases remain intact. Collector selection exit1,0PASS/4 expected RED. Initial affected25PASS/6FAIL and final affected25PASS/6FAIL, exit1. Zero skipped/cancelled/todo. Final affected includes calibration and unchanged core/retention regressions, not extra independent workflow proof.
+- Five failures are absent `scripts/release-policy.mjs`: four collector cases and existing CLI. Their post-import assertions, including default-Git ancestry, phase/skip/error/manifest correspondence and CLI output, remain UNREACHED, not passed. Sixth is missing `release.yml`, whose real-file assertions remain UNREACHED. No source implementation or fake passed records were created.
+- Evidence retained under `.scratch/preview-prep/collector-prep/`: calibration/collector-red/affected/final-affected TAP and matching stderr, exits.json/final-exits.json and links.txt. Initial RED remains truthful. Final additional sentinel and schema-invalid skip cases are syntax-checked but remain import-blocked.
+- Cleanup separately PASS: each executed calibration helper finally asserted fixture-root absence and persisted cleanup-pass. Affected digest/readers/retention finally checks PASS. Collector-specific fixture setup remains UNREACHED. No services or installed runner started. Worktree, original B1 artifact/manifest and owner/unknown work retained, no artifact rehash or unknown cleanup.
+- Actual preparation325 gross/5 paths against `dd53fac9`: tests256, core index2, tasks4, new brief63, source0. Tests exceed initial240 allocation by16. Revised complete forecast325 + source240 + future evidence25 =590/600. The25 reserve includes implementation/independent evidence and any corrections, not free allowance. Reforecast/stop before overrun. Later CLI/runner320 forecast stays separate, shared preparation charged only here.
+- Recommendation: ready for the focused combined review only. Collector source fit is not demonstrated. CLI/runner and workflow preparation still require their own pinned prerequisites. Native protections/OIDC/npm/public Registry and whole-change acceptance remain pending, never passed or waived. This prep commit changes tests, not docs-only finalization.
+
+## Open test-boundary correction
+
+[B2-COLLECTOR-GIT-PROOF-001 attempt1](04b2a-collector-test-boundary.md) supersedes readiness and deadline claims above. Planning only: original325 remains charged once, correction395 and collector590 give sequential985 forecast. Focused mechanism/decomposition review and separate execution authority are required. Collector assertions remain import-blocked, gap OPEN, no implementation or downstream acceptance.

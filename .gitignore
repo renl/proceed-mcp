@@ -8,8 +8,17 @@
 node_modules/
 dist/
 
+# Project-local CLI tooling
+.tools/
+
 # Logs
 *.log
+
+# Test-run artifacts (owned by the test harness, never committed)
+tests/.artifacts/
+
+# Implementation scratch: disposable diagnostic scripts, state and logs
+.scratch/
 
 # OS and editor noise
 .DS_Store

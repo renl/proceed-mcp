@@ -1,0 +1,58 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.renl/proceed-mcp",
+  "description": "Preview Telegram approval broker for MCP clients; live first use unverified.",
+  "version": "0.1.0-preview.1",
+  "repository": {
+    "url": "https://github.com/renl/proceed-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@meshimize/proceed-mcp",
+      "version": "0.1.0-preview.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "isRequired": true,
+          "description": "Run the stdio MCP adapter instead of the CLI or the broker."
+        },
+        {
+          "type": "positional",
+          "value": "--owner",
+          "isRequired": true,
+          "description": "Separate token introducing the owner option; the owner id is the next argument."
+        },
+        {
+          "type": "positional",
+          "valueHint": "operator-owner-id",
+          "placeholder": "operator-owner-id",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": false,
+          "description": "Owner id the operator added locally; an identifier, not a secret."
+        },
+        {
+          "type": "positional",
+          "value": "--state-dir",
+          "isRequired": true,
+          "description": "Separate token introducing the state directory option; the absolute path is the next argument."
+        },
+        {
+          "type": "positional",
+          "valueHint": "operator-state-dir",
+          "placeholder": "operator-state-dir",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": false,
+          "description": "Absolute protected state directory created by proceed-mcp init."
+        }
+      ]
+    }
+  ]
+}

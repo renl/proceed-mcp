@@ -1,0 +1,57 @@
+# C2c-P2: public terminal edit proof
+
+## Scope and outline before writing
+
+- Goal: prove a real public waiting request can be cancelled and its mapped question can retire controls before showing its exact terminal status, without changing the original MCP result.
+- Baseline `430def24b58e91d8044b6885537a72421e636720`, accepted source `8a3b24631728a0c3eebddf946401e3e9f70aa6c7`. Prerequisite P1 is present on this same change branch. Target remains `main`, one eventual change PR, no partial promotion.
+- Retain `.worktree/add-telegram-approval-opencode-v2`, branch/change `add-telegram-approval-opencode-v2`, owner test engineering, active. No new worktree or cleanup eligibility.
+- Outline: public setup/pairing/MCP creation/question/mapping/cancellation, both exact client payloads and flush order, both-method invalid/rejected/not-modified results, credential-global stop with usable local service, actual retry/rate floor, lost receipt/restart, in-flight abort and admitted receipt flush drain.
+- Forecast: tests230-300, support70-100, shared preload15-30, docs60-80 =375-510 gross. Full multi-copy construction and real ledger-transition stale completion need an additional coherent fixture/public-flow packet, forecast150-230 more. Use the authorized bounded primary/fault fallback rather than exceed600 or seed the primary chain. Those obligations still block full C2.
+- Authorized paths: new `tests/portable-edits-public.test.mjs`, `tests/support/edits-public.mjs`, existing `tests/fixtures/poller-public-preload.mjs`, this slice and `../tasks.md`. Existing `portable-waiting.mjs` already returns full addressed edit Messages at baseline, so no rebinding is necessary. Boolean negatives are explicitly scripted here.
+- No source, contracts, config, README, owner documents, ordinary credentials/state, external network or unknown cleanup. No human decisions are seeded. C3 incoming `date`/`from.is_bot` repairs and PORT-A/B remain unpassed.
+
+## Boundary Verification
+
+- Authority: active [design](../design.md) sections5/7 C2c, [Telegram delta](../specs/telegram-approval/spec.md) persistence/single-resolution/fail-closed requirements, [research](../research.md) Bot API10.3 edit methods. Source cross-check: actual client, worker, runtime and Journal at accepted source above.
+- Actual public CLI `init`, owner setup, `serve`, `pair` and classic MCP stdio initialize/tools calls create all primary business state. Existing protected local HTTP connects real adapter to real broker. No seeded request, terminal, mapping or completion mutation.
+- Preload interception is installed before production import. Actual client constructs `https://api.telegram.org/bot<synthetic-token>/editMessageReplyMarkup` and `/editMessageText`, POST JSON with token only in path, 20000ms deadline. Assert exact tuple/empty keyboard or complete captured terminal rendering. Accessible positive-safe private Message must match chat and message ID. Boolean/invalid/wrong tuple/not-modified results confer no receipt.
+- Controls receipt must flush/install before status admission. Status receipt must bind the exact captured decision/delivery pair. Inspect real Journal events for the durable floor, not fake-client callback counts.
+- Proof: controlled local public process/client/Journal behavior. Proxy only for Telegram wire/TLS acceptance or human receipt. No observed frame is human/model receipt. Real Telegram/human first use remains BLOCKED, not waived.
+- Decomposition triggers1YES (receipt proof feeds C2),2NO (empty isolated state),3YES (preload before startup),4YES (ordered process/Journal chain),5YES (test-only interception). Request ONE combined boundary/decomposition/test-artifact owning review. Do not mark full C2 accepted.
+
+## Execution and exact remainder
+
+Windows PowerShell, retained worktree. `$node` is project-root `.tools/readiness-node24/node_modules/node-win-x64/bin/node.exe`, Node24.22.2. Native Windows represents this local process/stdio/Journal contract, not all-OS compatibility or elapsed Telegram guarantees.
+
+1. Cheap `$node --check` on changed executable files, scoped Prettier check using repository ignore policy, then `git diff --check` and relative-link checks. Tests/docs are owner-formatted under `.prettierignore`.
+2. Full unfiltered `$node --test --test-reporter=tap tests/portable-edits-public.test.mjs`, outer450s. Maintained `publicPoller` runner aggregate24s, work16s, request3s, readiness3s, bounded process cleanup. Progress `.scratch/c1-poller-public/progress.log`. Owned processes, streams, locks, ports and isolated run directories must be absent after teardown. Logs only in ignored `.scratch/c2c-public/`.
+3. Affected existing `portable-question-public.test.mjs` and `portable-poller-public.test.mjs`, outer450s, because shared preload changes. No other helper consumers changed.
+4. Reuse accepted native75/critical17/composition4/diagnostics2 and status-core evidence at unchanged source by assertion scope from [P1](03c2c-iii-terminal-edits.md). Pure timing/type/race assertions remain native ordering proof, not elapsed Telegram guarantees. New public coverage does not reuse away the public client/Message/Journal floor.
+
+Mandatory blocking remainder: multiple independently mapped copies, partial failure with sibling progression, stale captured status completion after real ack/returned transition and current-pair rederivation. Original-frame equality and the subsequent real automatic returned report are distinct assertions. A supplementary genuine-producer path may support the remainder but must not replace this primary public chain. Also retain public expiry-terminal coverage if not executed here. Review all remainder before any full C2 acceptance. C3/PORT-A/B, known CLI prerequisites, live Telegram/human, feature and release gates remain unpassed. Next action: owning combined review of this bounded packet, then separately route exact remainder. Preserve all owner/unknown work.
+
+## Failure disclosure
+
+- Initial `packet.tap` exceeded the too-small240s suite bound, with26 failing leaves and no suite summary. The oracle incorrectly required the cancel response's `delivery_state:pending` to remain the later ledger state. Actual public adapter write completion reports `request.returned`, as required by design7. The original typed-id42 frame remains asserted exactly equal to the cancellation result. A separate real returned commit and exact later public view now establish the captured pair. No production fault or weakened original-result assertion.
+- Focused lifecycle calibration after that correction: exit0,1/1PASS,11315.9364ms, `calibration.tap`. The interrupted task's last directory was identified by its own persisted progress record. Bounded process queries found no surviving owned runner/child for that run, then only that exact owned directory was removed and absence asserted. The interrupted run has no successful teardown claim. Later complete runs must separately assert their own cleanup.
+
+## Bounded primary verdict - 2026-11-03
+
+- Full unfiltered new packet27/27PASS, exit0,286019.2988ms, zero failed/cancelled/skipped/todo, `.scratch/c2c-public/packet-final.tap`. Source remains accepted `8a3b2463`, evidence baseline `430def24`. Finalization after these executions is owned Markdown only.
+
+| New case group | Assertions and result |
+|---|---|
+| LIFECYCLE1 | PASS real protected pairing and adapter creation, original numeric-id42 cancellation result, separate real returned report, exact controls/status POSTs, full addressed Message results, separate matching receipts, commit before status, no repeated edits after restart |
+| INVALID8 | PASS both methods reject boolean true, wrong message, wrong chat and missing date. No success receipt, downstream status or busy retry. Local public view remains usable |
+| REJECT6 | PASS both methods403/404/not-modified400 leave work unfinished, fixed redacted method diagnostic, no credential misclassification, exact safe edit rederived after restart. Recovered retirement suppresses controls when retrying status |
+| RETRY6 | PASS both actual methods rate429/retry_after2, timeout callback and transport error. No receipt before a valid matching retry result, identical payload, observed local retry floor, then both durable completions |
+| CREDENTIAL2 | PASS actual401 from either edit aborts actual poll, stops further Telegram requests despite late poll callback, leaves terminal public read usable and supplies no edit receipt |
+| STOP2 | PASS actual in-flight edit destroyed, deliberately delivered late callback ignored after client cancellation, no fabricated receipt/new edit. Restart repeats safe unfinished edit, not an exactly-once claim |
+| DRAIN2 | PASS valid Message already admitted to actual receipt fsync hold prevents storage close during stop. Release commits before close, no next edit during shutdown. Restart preserves retirement-before-status and suppresses completed work |
+
+- Affected shared-preload consumers: full unfiltered question/poller53/53PASS, exit0,125018.1587ms, zero failed/cancelled/skipped/todo, `.scratch/c2c-public/affected.tap`. These are new executions, not the six classification controls alone. Existing default question helper already supplies full Message results, no rebinding or consumer scope expansion.
+- Reused accepted P1 native75/critical17/composition4/diagnostics2 and core retirement/status33 by unchanged source/test inputs and assertion scope from the linked P1 evidence. Covers unchanged pure type/clock/race guards. Native ordering remains distinct from new process/client/Message/Journal proof and from unexecuted live Telegram proof.
+- Cheap syntax3, selected source Prettier5, whitespace and136 live relative-link targets PASS. Repository policy excludes tests/OpenSpec from Prettier. Those files were owner-reviewed, not falsely counted formatter-verified.
+- Final full-run assertion PASS and owned cleanup PASS separately. Maintained runner verifies own process-tree and run-directory absence, adapter EOF, owned broker lock absence and listener rebinding. Owned TAP files remain ignored. No unknown spikes, owner artifacts, existing state, worktree or branch were removed.
+- This is a bounded PRIMARY packet only, not full C2c-P2. The forecast-driven split was executed. The measured primary packet is smaller than its forecast, but that does not turn unprepared remainder into proof. Multi-copy/sibling progression and stale status after real ack/returned transitions remain mandatory. A result fulfilled by the actual client before stop but entering its receipt writer after stop is also not separately scheduled here: DRAIN covers the held admitted receipt, while STOP covers cancellation winning before a later callback. Keep that completion interleaving in the blocking remainder with public expiry. No source defect found within tested assertions. No C2/live/human/feature/release acceptance before owning review and completion of all required proof.
+- Actual packet260 gross/5 paths against `430def24`: tests117, helper71, shared preload7, slice57, tasks8. Includes additions plus deletions, blank lines and all owned evidence, no discarded committed packet or rebinding charge. Source0 and no cap exception. Source tree identity `642cece5326c2c482d847d89f01065a4fa3ad849` equals the accepted source. Unrelated owner/unknown dirty paths remain preserved and excluded from this owned commit, not from project status.
