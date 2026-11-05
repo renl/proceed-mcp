@@ -19,7 +19,7 @@ jobs:
       - run: |
           npm ci --ignore-scripts
       - run: |
-          node --test tests/release-metadata.test.mjs tests/release-ci.test.mjs tests/release-artifact.test.mjs
+          node --test tests/release-metadata.test.mjs tests/release-preview-ci.test.mjs tests/release-artifact.test.mjs
       - run: |
           node node_modules/prettier/bin/prettier.cjs --check .github/workflows/ci.yml
       - run: |
