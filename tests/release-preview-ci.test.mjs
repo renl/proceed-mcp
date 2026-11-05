@@ -4,6 +4,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { parseWorkflow, WorkflowModelError } from './support/workflow-model.mjs';
+import { mkdir, mkdtemp, writeFile, rm, access } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import * as prettier from 'prettier';
 
 function unprivileged(text) {
   // Conservative even in comments. A false positive requires review.
@@ -110,4 +114,58 @@ test('preview command selection calibration reaches actual-file policy after exa
   // Works both before and after correction, never substitutes for the real-file test.
   assert.ok(actual.includes('tests/release-ci.test.mjs') || actual.includes('tests/release-preview-ci.test.mjs'));
   validate(corrected);
+});
+
+// PREVIEW-CI-EOL-001: real Git checkout, not a textual rule-presence proxy.
+// Git semantics: https://git-scm.com/docs/gitattributes (text and eol).
+async function checkoutWorkflow(attributes) {
+  const root = resolve('.');
+  const parent = resolve('.scratch/preview-ci-eol');
+  await mkdir(parent, { recursive: true });
+  const fixture = await mkdtemp(join(parent, 'checkout-'));
+  try {
+    await mkdir(join(fixture, '.github/workflows'), { recursive: true });
+    await mkdir(join(fixture, 'empty-template'));
+    await writeFile(join(fixture, 'empty-config'), '');
+    const git = (...args) => {
+      const result = spawnSync('git', ['-c', 'core.autocrlf=true', '-c', 'core.safecrlf=false',
+        '-c', `core.attributesFile=${join(fixture, 'empty-config')}`, ...args], {
+        cwd: fixture, encoding: 'utf8', timeout: 10_000,
+        env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1',
+          GIT_CONFIG_GLOBAL: join(fixture, 'empty-config') },
+      });
+      assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    };
+    git('init', '--quiet', '--template=empty-template');
+    // Model the LF blob, regardless of the caller's current checkout convention.
+    const source = (await readFile(join(root, '.github/workflows/ci.yml'), 'utf8')).replace(/\r\n/g, '\n');
+    const workflow = join(fixture, '.github/workflows/ci.yml');
+    await writeFile(workflow, source);
+    if (attributes) await writeFile(join(fixture, '.gitattributes'), attributes);
+    git('add', '--', '.github/workflows/ci.yml', ...(attributes ? ['.gitattributes'] : []));
+    await rm(workflow);
+    git('checkout-index', '--', '.github/workflows/ci.yml');
+    const checkedOut = await readFile(workflow, 'utf8');
+    const options = JSON.parse(await readFile(join(root, '.prettierrc.json'), 'utf8'));
+    return { crlf: checkedOut.includes('\r\n'),
+      formatted: await prettier.check(checkedOut, { ...options, filepath: workflow }) };
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+    await assert.rejects(access(fixture), { code: 'ENOENT' });
+  }
+}
+
+test('workflow checkout calibration distinguishes absent, wrong and LF attributes', { timeout: 60_000 }, async () => {
+  for (const attributes of ['', '.github/workflows/*.yml text eol=crlf\n',
+    '.github/workflows/*.yaml text eol=lf\n']) {
+    assert.deepEqual(await checkoutWorkflow(attributes), { crlf: true, formatted: false });
+  }
+  assert.deepEqual(await checkoutWorkflow('.github/workflows/*.yml text eol=lf\n'),
+    { crlf: false, formatted: true });
+});
+
+test('repository attributes keep CI checkout LF and formatted with autocrlf=true', { timeout: 30_000 }, async () => {
+  const attributes = await readFile(new URL('../.gitattributes', import.meta.url), 'utf8')
+    .catch((error) => { if (error.code === 'ENOENT') return ''; throw error; });
+  assert.deepEqual(await checkoutWorkflow(attributes), { crlf: false, formatted: true });
 });
