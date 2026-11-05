@@ -19,20 +19,37 @@
         {
           "type": "positional",
           "value": "mcp",
+          "isRequired": true,
           "description": "Run the stdio MCP adapter instead of the CLI or the broker."
         },
         {
-          "type": "named",
-          "name": "--owner",
-          "valueHint": "operator-owner-id",
+          "type": "positional",
+          "value": "--owner",
           "isRequired": true,
+          "description": "Separate token introducing the owner option; the owner id is the next argument."
+        },
+        {
+          "type": "positional",
+          "valueHint": "operator-owner-id",
+          "placeholder": "operator-owner-id",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": false,
           "description": "Owner id the operator added locally; an identifier, not a secret."
         },
         {
-          "type": "named",
-          "name": "--state-dir",
-          "valueHint": "operator-state-dir",
+          "type": "positional",
+          "value": "--state-dir",
           "isRequired": true,
+          "description": "Separate token introducing the state directory option; the absolute path is the next argument."
+        },
+        {
+          "type": "positional",
+          "valueHint": "operator-state-dir",
+          "placeholder": "operator-state-dir",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": false,
           "description": "Absolute protected state directory created by proceed-mcp init."
         }
       ]
