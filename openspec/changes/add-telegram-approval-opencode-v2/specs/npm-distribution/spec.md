@@ -7,7 +7,13 @@ Make the Telegram approval preview installable from public npm with truthful set
 ## ADDED Requirements
 
 ### Requirement: Public package and explicit prerequisites
-The product MUST be available as the public npm preview `@meshimize/proceed-mcp@0.1.0-preview.1` with requested dist-tag `preview` and the user-selected MIT license. Copyright attribution, licensing rights and publisher identity MUST be confirmed, not fabricated. For this first publication only, the observed `latest` mapping is an exception to the original preview-only plan. Documentation MUST disclose that both tags point to this version and npm rejected removal of `latest` with HTTP 400. It MUST recommend exact-version installation and MUST NOT claim stable verified status or authorize future previews on `latest`.
+The product MUST be available as the public npm preview `@meshimize/proceed-mcp@0.1.0-preview.1` with requested dist-tag `preview` and the user-selected MIT license. Copyright attribution, licensing rights and publisher identity MUST be confirmed, not fabricated.
+
+#### Scenario: Disclose the first-publication tag exception
+- **GIVEN** for this first publication only, the observed `latest` mapping is an exception to the original preview-only plan
+- **WHEN** publication and installation are documented
+- **THEN** documentation MUST disclose that both tags point to this version and npm rejected removal of `latest` with HTTP 400.
+- **AND** documentation MUST recommend exact-version installation and MUST NOT claim stable verified status or authorize future previews on `latest`.
 
 #### Scenario: Confirm organization-scoped identity and affected evidence
 - **GIVEN** the user selects npm organization `meshimize` and publisher account `davemeshimize`
@@ -93,9 +99,21 @@ Pull-request CI MUST build and test the proposed package without publishing a pa
 - **THEN** build and test results are reported, no npm version is published, and publishing credentials are not exposed to that execution.
 
 ### Requirement: Validated version-tag publication
-First-preview acceptance MUST permit the approved user-controlled manual publication before implementation merge, without requiring collector, CLI or release-workflow publishing automation. Non-publishing PR validation and independent applicable integrated-candidate verification remain landing obligations. Deferred automation, including protected trusted publishing and its qualification, MUST NOT be reported as delivered or passed. No subsequent publication, permanent manual route or token fallback is authorized by this exception.
+First-preview acceptance MUST permit the approved user-controlled manual publication before implementation merge, without requiring collector, CLI or release-workflow publishing automation.
 
-The subsequent-version automation scenarios below retain deferred follow-up policy, not first-preview completion criteria or authority to implement or publish. In that future scope, an authorized preview-version tag MUST use protected trusted-publisher CI with tag/version agreement, build, tests, clean packaged installation/startup, secret-safe contents and independent applicable candidate verification. Missing or ambiguous prerequisites MUST block publication without a manual or token fallback. This follow-up MUST receive its own scope and authorization before work resumes.
+#### Scenario: Preserve first-preview acceptance boundaries
+- **GIVEN** the approved first-preview manual-publication exception
+- **WHEN** landing obligations and publication authority are assessed
+- **THEN** non-publishing PR validation and independent applicable integrated-candidate verification remain landing obligations.
+- **AND** deferred automation, including protected trusted publishing and its qualification, MUST NOT be reported as delivered or passed.
+- **AND** no subsequent publication, permanent manual route or token fallback is authorized by this exception.
+
+#### Scenario: Retain separately authorized subsequent-version policy
+- **GIVEN** the subsequent-version automation scenarios below retain deferred follow-up policy, not first-preview completion criteria or authority to implement or publish
+- **WHEN** that follow-up is considered or resumed
+- **THEN** this follow-up MUST receive its own scope and authorization before work resumes.
+- **AND** in that future scope, an authorized preview-version tag MUST use protected trusted-publisher CI with tag/version agreement, build, tests, clean packaged installation/startup, secret-safe contents and independent applicable candidate verification.
+- **AND** missing or ambiguous prerequisites MUST block publication without a manual or token fallback.
 
 #### Scenario: Establish publication prerequisites
 - **GIVEN** a preview candidate for publication
@@ -140,7 +158,14 @@ The subsequent-version automation scenarios below retain deferred follow-up poli
 - **THEN** it reports the release as blocked or failed without claiming publication or exposing credentials.
 
 ### Requirement: Verify registry delivery
-Verified npm preview delivery MUST include installation and startup of the exact published version from public npm in a clean supported environment. A successful build, locally packed artifact or archive operation alone MUST NOT count as public delivery evidence. This postpublication check is distinct from prepublication package validation and MUST NOT be claimed before it runs. Supplied manual public-install evidence MUST be distinguished from independent reproduction. Successful npm installation MUST NOT imply verified live Telegram/OpenCode behavior or stable release readiness.
+Verified npm preview delivery MUST include installation and startup of the exact published version from public npm in a clean supported environment. A successful build, locally packed artifact or archive operation alone MUST NOT count as public delivery evidence.
+
+#### Scenario: Preserve public-install evidence boundaries
+- **GIVEN** the npm preview delivery check
+- **WHEN** delivery evidence or readiness is reported
+- **THEN** this postpublication check is distinct from prepublication package validation and MUST NOT be claimed before it runs.
+- **AND** supplied manual public-install evidence MUST be distinguished from independent reproduction.
+- **AND** successful npm installation MUST NOT imply verified live Telegram/OpenCode behavior or stable release readiness.
 
 #### Scenario: Confirm published artifact
 - **GIVEN** the authorized one-time user bootstrap or subsequent protected CI reports successful publication
