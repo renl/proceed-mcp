@@ -8,7 +8,7 @@ Stable project instructions and navigation. Current work and history live in the
 - Portable Telegram approval MCP. OpenCode V2 is the first validation harness, not a core dependency. Current capability contracts and historical proposal are linked below.
 - Canonical workflows: `workflow-routing`, `openspec-workflow`, `git-workflow`, `worktree-slicing`, `command-hygiene`. No approved local workflow deviations.
 - Application sources, tests and OpenSpec use repository-relative paths. Consult the status log for live branch, revision and lifecycle state before operating.
-- Validation uses project-local Node 24.22.2 on Windows. No all-OS or cross-harness compatibility is implied.
+- Primary CI uses Ubuntu 24.04 with Node 24.22.2. Verification records distinguish CI coverage, Windows evidence and package admission requirements without implying all-platform compatibility.
 
 ## Navigation
 
