@@ -4,6 +4,8 @@
 
 Let a paired human safely approve, reject, or instruct remote work through private Telegram messages. Parent: [proposal](../../proposal.md).
 
+Preview acceptance follows the proposal's [scoped risk acceptance](../../proposal.md#approved-preview-boundary-and-scoped-risk-acceptance). The behavior below remains required. Live first use was deferred from prepublication acceptance. Subsequent supplied manual evidence reports pairing and Approve/Reject/exact Respond with concurrent correlation and acknowledgements, not independent full-release verification. Unexecuted checks remain unverified. Controlled evidence alone does not establish human receipt or OpenCode compatibility.
+
 ## ADDED Requirements
 
 ### Requirement: Explicit first-use pairing
@@ -20,7 +22,21 @@ The product MUST start with no paired human, requests, or decisions. It MUST pro
 - **THEN** no pairing or decision is accepted and no request details are disclosed to that sender or group.
 
 ### Requirement: Distinguishable approval requests
-Each request MUST have a stable identity and originating-session association. The paired human MUST see the requested action, enough context to distinguish its session from other pending work, its expiry, and Approve, Reject, and Respond choices. A request MUST be durably recorded before it is presented as actionable.
+Each request MUST have a stable identity, capability-and-transport-principal ownership, and original-call correlation as defined by [delivery ownership](../opencode-session-continuation/spec.md). Originating-session associations in this spec mean that request context and routing, not independently authenticated nontransferable agent identity.
+
+#### Scenario: Present a durable distinguishable question
+- **GIVEN** a request for presentation to the paired human
+- **WHEN** the request is presented as actionable
+- **THEN** the paired human MUST see the requested action, enough context to distinguish its session from other pending work, its expiry, and Approve, Reject, and Respond choices.
+- **AND** a request MUST be durably recorded before it is presented as actionable.
+
+#### Scenario: Keep displayed context separate from private authority
+- **GIVEN** request preparation, presentation and associated request access
+- **WHEN** labels, request identity or capabilities are used
+- **THEN** displayed session labels MUST be identified as caller-supplied context, not authenticated agent identity.
+- **AND** request preparation alone MUST NOT create an actionable Telegram message.
+- **AND** request capabilities MUST NOT be included in Telegram messages, logs, assistant acknowledgements, or published evidence. Knowing a displayed request identity or label MUST NOT authorize MCP request access.
+- **AND** sharing a key within its bound transport principal transfers request access, not the paired human's authority to Approve, Reject, or Respond.
 
 #### Scenario: Parallel requests
 - **GIVEN** two sessions requesting approval at the same time
@@ -91,3 +107,14 @@ Silence, tool timeout, transport errors, and processing errors MUST NOT imply ap
 - **GIVEN** no explicit approval has been accepted
 - **WHEN** the human stays silent, the tool times out, or an error occurs
 - **THEN** the product records no approval and shows the applicable pending, closed, or failed state rather than success.
+
+#### Scenario: Waiting call ends before the human decides
+- **GIVEN** an unresolved, unexpired request with no explicit cancellation
+- **WHEN** its waiting tool call times out or its transport ends
+- **THEN** the request remains pending and can accept the paired human's decision until expiry or explicit cancellation, without claiming that session delivery succeeded.
+
+#### Scenario: Distinguish lost calls from request closure
+- **GIVEN** a request with a waiting call that can time out or be lost
+- **WHEN** request closure and accepted-decision retention are assessed
+- **THEN** tool timeout or loss of the waiting call alone MUST NOT expire or cancel a request.
+- **AND** an explicit supported cancellation or the disclosed expiry deadline is a separate closure condition. Accepted decisions remain subject to the durable single-resolution rules above.

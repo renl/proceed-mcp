@@ -1,227 +1,431 @@
 # proceed-mcp
 
-An MCP server that routes agent approval requests to a Telegram chat, so an operator can approve,
-reject or answer an action from a chat client instead of a terminal prompt. Each accepted outcome is
-delivered to the exact OpenCode V2 session that asked, including after the original MCP call has
-timed out while its host is still running.
+An MCP server that sends an approval request to a private Telegram chat and returns the paired
+human's decision through the waiting MCP call. The human can Approve, Reject, or Respond from
+Telegram. `proceed-mcp` records the outcome. It does not execute the requested action.
 
-**Status: minimum vertical path implemented, not verified against a live platform.** The package now
-provides the setup commands, a local broker with a durable journal, one-time Telegram pairing,
-request/decision handling, the stdio MCP adapter and the authenticated OpenCode admission and
-reconciliation path. Nothing here is a compatibility, support or release claim: no live Telegram
-chat, OpenCode host or packaged installation has been verified for this build, and no OpenCode
-version is admitted by a release allowlist yet. See [Limits](#limits) before relying on it.
+**Preview status: `@meshimize/proceed-mcp@0.1.0-preview.1` is published on npm. A user-supplied
+manual first use reports a working approval flow. It is not independent release acceptance.** The
+source has offline test evidence on Windows with Node 24.22.2. Publication was a manual step
+performed before the change merged. Both the `preview` and `latest` dist-tags currently point to
+this version, because npm rejected a request to remove `latest` with HTTP 400. Pin the exact version
+instead of relying on either tag.
+
+Evidence stands at separate levels. The independently downloaded public tarball matches the
+retained artifact byte for byte at 140852 bytes, SHA-256
+`43866cb0c8eaa3feb3d90c598d6ecbfdea8b7886f3af7e584a4e6b32b4fb9adc`, and all shipped runtime,
+package, and license files match the current checkout, with this README the only intentional
+difference. A setup transcript supplied by the user reports a pinned public installation, private
+pairing, five discovered tools, Approve, Reject, exact Respond text, and two concurrent calls whose
+results returned to their original waiting calls, with all five decisions acknowledged and no
+proposed action executed. That live result is supplied manual evidence, not an independently
+reproduced full integrated or release acceptance. Broker shutdown was not confirmed, broader
+failure and timeout paths were not exercised, the MCP Registry listing is still pending, and
+publishing automation remains deferred.
+
+The implemented scope is the loopback broker, private Telegram pairing and question display,
+Approve/Reject/Respond, expiry, cancellation, capability-authorized retrieval, and acknowledgement.
+MCP Events, automatic continuation after a timeout, `doctor`, and `retry` are not implemented in this
+preview.
+
+## Distribution
+
+`@meshimize/proceed-mcp` is the npm package for this product. It installs the `proceed-mcp` command
+and its runtime sources. It is not a hosted MCP endpoint, and there is no cloud broker. The MCP
+adapter and the broker run on your machine. The broker listens only on `127.0.0.1` and calls
+`https://api.telegram.org` for Telegram.
+
+The published npm artifact is the public preview `@meshimize/proceed-mcp` version
+`0.1.0-preview.1`. It was published under the `preview` dist-tag, and the `latest` tag also points
+to it: npm rejected a request to remove `latest` with HTTP 400. Pin the exact version rather than
+depending on either tag. This was a manual publication performed before the change merged, not a
+release-workflow result. Guarded publication through release automation is planned but not
+implemented, and no automated publishing has run.
+
+An official MCP Registry listing is an approved delivery task for this preview, tracked and
+reported separately from npm package publication. A listing is discovery metadata only: it would
+point to the npm package and would not host or run the broker. It is planned only after the npm
+preview is published and its exact-version installation check passes. The selected listing name is
+`io.github.renl/proceed-mcp` for the repository `https://github.com/renl/proceed-mcp`. That
+selection requires confirmed registry namespace and registry publishing rights, which remain
+unresolved, and it asserts no registry authentication or schema validation. No listing has been
+published, and no registry delivery is verified. A blocked or pending listing does not change or
+hide the npm publication result.
 
 ## Requirements
 
-- Node.js 24 LTS is the provisional target of this build. It is not yet verified: earlier
-  diagnostics ran on Node.js 22, which is not the release target.
-- Windows or a POSIX system that can restrict a directory to the current account. Setup and broker
-  start fail rather than continuing when that protection cannot be established and verified.
-- One dedicated Telegram bot token, used only by this broker. Sharing the token with a webhook or a
-  second poller is unsupported and is reported as a conflict.
-- One authenticated loopback OpenCode V2 host per configured origin. This build targets a single
-  host on the same machine; the approving human may be remote.
+- Node.js 24 or newer. `package.json` declares `>=24`. This preview was exercised only on Windows
+  with Node 24.22.2. Other operating systems and Node versions are untested.
+- One dedicated Telegram bot and one private chat with that bot. Do not share the bot with another
+  poller or a webhook.
+- The broker and the MCP adapter must run on the same machine. The human may be remote.
+- On Windows, `powershell.exe` and `icacls` must be available for the owner-only ACL check. On
+  POSIX, the state directory must support owner-only mode bits.
+- No build tool, native addon, or postinstall script is required.
 
-The package ships runnable JavaScript with no compile step, no native add-on and no postinstall
-script. `npm install` is only needed when working on the sources (the formatter is a development
-dependency).
+## Install
 
-## Run the executable
+Install the exact preview version globally:
 
 ```console
-node bin/proceed-mcp.js --help
+npm install --global @meshimize/proceed-mcp@0.1.0-preview.1
+proceed-mcp --help
 ```
 
-## Setup
-
-1. Create the state directory, an empty configuration, a local control credential and an empty
-   journal:
+Or run it without a global install:
 
 ```console
-node bin/proceed-mcp.js init
+npx --yes --package @meshimize/proceed-mcp@0.1.0-preview.1 -- proceed-mcp --help
 ```
 
-`init` refuses to overwrite existing state.
+The scoped package installs the same `proceed-mcp` command. Version `0.1.0-preview.1` is published
+under the `preview` tag, and the `latest` tag also points to it, so pin the exact version rather
+than relying on either tag. The user-supplied setup transcript reports this pinned install
+succeeding from public npm, and the downloaded public bytes have been independently matched to the
+retained artifact. Those are a supplied manual result and an artifact result. Neither is proof for
+your own environment, and independent integrated acceptance is still outstanding.
 
-2. Bind one OpenCode host origin:
+## Set up the broker and Telegram
+
+### 1. Create protected state
+
+Choose an absolute directory that is empty or does not exist yet. Keep it outside the repository.
 
 ```console
-node bin/proceed-mcp.js origin add <origin_id> --url http://127.0.0.1:<port> --password-env <PASSWORD_ENV>
+proceed-mcp init --state-dir <absolute-state-dir>
 ```
 
-- `<origin_id>` matches `[a-z0-9_-]{1,64}`.
-- `--url` must be `http`, the literal host `127.0.0.1`, an explicit port, and no path, query,
-  fragment or embedded credentials. A different address needs a new origin ID, because bindings are
-  immutable.
-- `--password-env` names the environment variable that will hold that host's OpenCode password. The
-  password itself is never written to state or passed on the command line. OpenCode's documented
-  loopback access uses Basic auth with the fixed username `opencode`, so configure that password on
-  the host yourself and keep the host listening on loopback only.
+`init` creates a protected `config.json`, a local control credential, and an empty journal. It
+refuses to overwrite existing state. It prints the state path, never a credential value.
 
-3. Start the broker in its own terminal or under a supervisor, with the secrets in its environment:
+### 2. Add one owner
+
+The owner is the transport principal used by the MCP adapter.
 
 ```console
-PROCEED_TELEGRAM_BOT_TOKEN=... <PASSWORD_ENV>=... node bin/proceed-mcp.js serve
+proceed-mcp owner add <owner-id> --label "<display-label>" --state-dir <absolute-state-dir>
 ```
 
-The broker owns its loopback port exclusively, recovers the journal, then prints one readiness line.
-It keeps running when the Telegram platform is temporarily unreachable and retries with backoff; it
-stops with a diagnostic if another consumer owns the bot's updates or the token is rejected.
+`<owner-id>` must match `[a-z0-9_-]{1,64}`. The label is display-only and appears in Telegram. Run
+this before the first `serve`, because `owner add` refuses while a broker ownership record exists.
+Owner records and credentials are immutable.
 
-4. Pair exactly one human private chat:
+### 3. Create a dedicated Telegram bot
+
+Create a new bot with @BotFather and keep its token private. Use this bot only for this broker. Do
+not configure a webhook for it and do not run another poller against it. `proceed-mcp` never deletes
+a webhook and never rewinds or drops pending updates. If Telegram reports a competing consumer,
+Telegram processing stops with a diagnostic, and you must repair the bot and restart `serve`.
+
+### 4. Start the broker in the foreground
+
+Put the token only in the broker's own process environment.
+
+PowerShell:
+
+```powershell
+$env:PROCEED_TELEGRAM_BOT_TOKEN = '<bot-token>'
+proceed-mcp serve --state-dir 'C:\absolute\path\to\proceed-state'
+```
+
+POSIX:
+
+```sh
+export PROCEED_TELEGRAM_BOT_TOKEN='<bot-token>'
+proceed-mcp serve --state-dir /absolute/path/to/proceed-state
+```
+
+Wait for `proceed-mcp: broker ready on http://127.0.0.1:43189` and the state directory line. Leave
+this terminal open.
+
+The token is read only from the broker process environment. It is never stored in the state
+directory, the journal, Telegram, or the request history. The product does not read `.env` files.
+Never put the token in the MCP adapter's environment or in the MCP client configuration.
+
+If the token is missing or empty, the broker still starts locally and prints a warning. A request
+cannot be created until a human is paired, so complete Telegram setup before testing. If the token is
+rejected, or another consumer owns the bot, Telegram processing stops with a diagnostic while the
+local broker keeps running. Fix the bot and restart `serve`.
+
+### 5. Pair the private chat
+
+In a second terminal:
 
 ```console
-node bin/proceed-mcp.js pair
+proceed-mcp pair --state-dir <absolute-state-dir>
 ```
 
-The command prints a one-use code valid for five minutes. In the private chat with the bot the human
-sends `/start`, then `/pair <code>`. `/start` alone grants nothing, group chats are refused, and the
-code is never logged or stored in plain text.
+The command prints `Pairing code:` and `Expires at:`. In a private chat with the bot, send `/start`,
+then send exactly `/pair <code>` before the expiry. Group chats are refused. `/start` alone grants
+nothing. A bot-suffixed or malformed command does not pair. The code is one-use, valid for five
+minutes, and is not stored in plaintext.
 
-5. Wire the MCP adapter into the OpenCode host as a local server:
+Only the first pairing succeeds. There is no in-chat re-pair or identity change.
 
-```json
+### 6. Connect an MCP client
+
+#### OpenCode V2
+
+Add a local server under `mcp.servers` in `opencode.jsonc`. This shape follows the
+[OpenCode V2 MCP documentation](https://opencode.ai/v2/docs/mcp-servers).
+
+```jsonc
 {
+  "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "servers": {
       "proceed": {
         "type": "local",
         "command": [
-          "node",
-          "/path/to/proceed-mcp/bin/proceed-mcp.js",
+          "npx",
+          "--yes",
+          "--package",
+          "@meshimize/proceed-mcp@0.1.0-preview.1",
+          "--",
+          "proceed-mcp",
           "mcp",
-          "--origin",
-          "<origin_id>"
+          "--owner",
+          "<owner-id>",
+          "--state-dir",
+          "/absolute/path/to/proceed-state",
         ],
-        "codemode": false
-      }
-    }
-  }
+        "codemode": false,
+      },
+    },
+  },
 }
 ```
 
-The adapter reads only that origin's local credential and never receives the Telegram token. The
-requesting session is taken solely from the host-supplied `_meta["ai.opencode/sessionID"]`, never from
-tool arguments.
+Replace `<owner-id>` and the state path. On Windows, escape backslashes or use forward slashes in
+the JSON string. `codemode: false` exposes the tools directly. OpenCode reloads MCP configuration
+after a save. Check the connection with `opencode mcp list`.
 
-All commands accept `--state-dir <directory>`. Resolution order is `--state-dir`, then
-`PROCEED_STATE_DIR`, then `<home>/.proceed-mcp`.
+The `--package` argument selects the scoped npm package, and the argument after `--` is the
+`proceed-mcp` command from that package. If you installed the package globally, start the `command`
+array with `proceed-mcp` and keep the same `mcp --owner ... --state-dir ...` arguments.
 
-### Environment variables
+With this server name, OpenCode exposes the tools as `proceed_prepare_approval`,
+`proceed_request_approval`, `proceed_get_approval`, `proceed_cancel_approval`, and
+`proceed_acknowledge_approval`. If you leave Code Mode enabled, OpenCode groups them under
+`tools.proceed`.
 
-| Variable                                   | Used by       | Meaning                                       |
-| ------------------------------------------ | ------------- | --------------------------------------------- |
-| `PROCEED_STATE_DIR`                        | every command | State directory when `--state-dir` is absent. |
-| `PROCEED_TELEGRAM_BOT_TOKEN`               | `serve`       | Telegram bot token. Required by `serve` only. |
-| _(operator-chosen, from `--password-env`)_ | `serve`       | Password for one bound OpenCode origin.       |
+Do not add `PROCEED_TELEGRAM_BOT_TOKEN` to `environment`. The adapter does not need it and must not
+receive it.
 
-Never commit these values. State writes them nowhere; only variable names are stored.
+#### Other stdio MCP clients
 
-### State directory contents
+Use this command in any client that can start a local stdio server:
 
-| Path                                   | Contents                                                                                |
-| -------------------------------------- | --------------------------------------------------------------------------------------- |
-| `config.json`                          | Schema version 1: Telegram token variable name, broker port, immutable origin bindings. |
-| `credentials/control.token`            | Local control credential for pairing, status and retry routes.                          |
-| `credentials/origin.<origin_id>.token` | Per-origin credential for MCP request routes.                                           |
-| `journal.log`                          | Append-only transaction journal; the only mutable product state.                        |
-| `broker.lock`                          | Ownership record written by a running broker; informational, removed on clean stop.     |
+```console
+proceed-mcp mcp --owner <owner-id> --state-dir <absolute-state-dir>
+```
 
-The state directory and its files are restricted to the current OS account: an owner-only ACL on
-Windows verified through the file system ACL, and owner-only mode bits on POSIX. Credential values
-are never printed by any command. Back up a **stopped** broker's entire state directory; there is no
-history deletion or compaction in this build.
+To run the published version without a global install:
 
-## Commands
+```console
+npx --yes --package @meshimize/proceed-mcp@0.1.0-preview.1 -- proceed-mcp mcp --owner <owner-id> --state-dir <absolute-state-dir>
+```
 
-| Command                                | Behaviour                                                                     |
-| -------------------------------------- | ----------------------------------------------------------------------------- |
-| `init`                                 | Create protected empty state (config, credentials, empty journal).            |
-| `origin add <id> --url --password-env` | Store one immutable origin binding; requires a stopped broker.                |
-| `serve`                                | Recover, own the port, poll Telegram, deliver decisions. Foreground process.  |
-| `pair`                                 | Ask the running broker for one pairing code; refuses when already paired.     |
-| `mcp --origin <id>`                    | Run the stdio MCP adapter for that origin.                                    |
-| `status [--request <id>] [--json]`     | Show resolution, Telegram presentation, delivery state and redacted error.    |
-| `retry <request_id>`                   | Resume a blocked or scheduled delivery with the persisted prompt ID and text. |
+The adapter needs no OpenCode API, password, provider credential, or proprietary session metadata.
+It connects only to the local broker. Keep `serve` running.
 
-`doctor` is a documented target that this build does not implement; it fails as an unknown command
-rather than pretending to check anything.
+The server advertises MCP protocol `2025-11-25` and exposes five tools: `prepare_approval`,
+`request_approval`, `get_approval`, `cancel_approval`, and `acknowledge_approval`.
 
 ## MCP tools
 
-| Tool               | Arguments                                                                                        | Effect                                                          |
-| ------------------ | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| `request_approval` | `client_request_id`, `action`, `context`, optional `expires_in_seconds` (60–86400, default 3600) | Durably create one pending request and return its receipt.      |
-| `get_approval`     | `request_id`                                                                                     | Read this session's own request, applying expiry first.         |
-| `cancel_approval`  | `request_id`                                                                                     | Cancel this session's pending request; terminal outcomes stand. |
+| Tool                   | Arguments                                                                                                       | Effect                                                                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `prepare_approval`     | optional `session_label`                                                                                        | Reserve a durable request identity and a private request capability. No Telegram question is sent.                          |
+| `request_approval`     | `request_handle`, `request_capability`, `client_request_id`, `action`, `context`, optional `expires_in_seconds` | Create or replay the one request, then wait for its resolution, expiry, or cancellation. A terminal replay returns at once. |
+| `get_approval`         | `request_id`, `request_capability`                                                                              | Read that authorized request and apply expiry first. No delivery side effect and no agent wake-up.                          |
+| `cancel_approval`      | `request_id`, `request_capability`                                                                              | Cancel that pending request. An already terminal outcome is returned unchanged.                                             |
+| `acknowledge_approval` | `request_id`, `request_capability`, `decision_id`                                                               | Record receipt of the matching terminal decision. Idempotent, and it creates no second decision.                            |
 
-The receipt is the request representation (`resolution`, `telegram_state`, `delivery_state`,
-`delivery_error` and so on), not an authorization flag. Creation does not wait for the human. A
-decision arrives as a new session input, not as the tool result, so an expired tool call does not
-lose the decision.
+`action` accepts 1-1000 Unicode scalars, `context` accepts 0-1000, and `session_label` accepts 1-128.
+`client_request_id` must match `[A-Za-z0-9_-]{1,128}`. `expires_in_seconds` is an integer from 60 to
+86400 and defaults to 3600.
 
-## Decision delivery
+`request_approval` is the waiting call. It returns the actual outcome, not a creation receipt.
+`prepare_approval` alone sends no Telegram question and creates no actionable request.
 
-At resolution the broker allocates `msg_` plus the request's 32 hex characters and persists the exact
-prompt text: a plain-language outcome heading plus a JSON data record holding the request identity,
-action, context, resolution, response text and resolution time. Every retry and every restart reuses
-that ID and text, and delivery reconciles against the session's projected history and inbox first, so
-a lost admission response cannot create a second decision-driven turn.
+A normal agent flow is:
 
-Delivery states are distinct from the resolution: `not_applicable`, `pending` (decision recorded,
-admission unconfirmed), `admitted`, `delivered` (present in the session's projected input history) and
-`blocked` (non-retryable prerequisite or exhausted retry period, with `proceed-mcp retry` as the
-repair path). `delivered` means the input reached the exact session; it does not mean the requested
-action ran.
+1. Call `prepare_approval` and keep the returned `request_handle`, `request_id`, and
+   `request_capability` together.
+2. Call `request_approval` with that handle and capability, a unique `client_request_id`, the exact
+   action, and enough context for the human to distinguish the request.
+3. Use the returned `resolution` and `delivery_state`. The call returns the human outcome itself.
+4. If the result contains a `decision_id`, acknowledge that exact decision with
+   `acknowledge_approval`.
+5. Act only when the outcome is `approved`, and only within your own permission rules.
 
-Reject and Respond never grant approval. Respond text is stored and delivered exactly, including
-whitespace and approval-like words; it is instructions only.
+The request capability, together with its owner principal, authorizes later `get_approval`,
+`cancel_approval`, and `acknowledge_approval` calls. Never put it in Telegram, assistant messages,
+logs, `session_label`, `action`, or `context`. Those text fields are displayed in the Telegram
+question. A label is caller-supplied display context, not authenticated identity.
 
-## Journal format
+Sharing the capability with another context under the same owner grants that context access to that
+one request. It does not redirect the original waiting call and does not authorize a different
+owner.
 
-```text
-header   8 bytes "PROCEEDJ" + uint32be format version (1)
-record   uint32be frame length | uint32be payload length | uint64be sequence | payload | SHA-256
-```
+## Decisions and delivery
 
-The digest covers the record bytes before it, so an edited, reordered or truncated record cannot pass
-validation. A transaction commits with one record whose payload lists its mutations; its file flush
-completes before the broker acknowledges the operation or performs any Telegram or OpenCode effect.
-Recovery discards only an incomplete final record, and stops with exit code 4 on a checksum failure,
-sequence gap, unsupported version or corruption before the tail. There is no test-only storage API:
-the journal is the only durable state, and its records are readable by an independent decoder.
+| Outcome     | Meaning                                                                   |
+| ----------- | ------------------------------------------------------------------------- |
+| `approved`  | The paired human explicitly approved this request.                        |
+| `rejected`  | The paired human rejected it. This does not authorize the action.         |
+| `responded` | The paired human supplied instructions. This is not approval.             |
+| `expired`   | The deadline passed without a decision. This is not approval.             |
+| `cancelled` | An authorized caller cancelled the pending request. This is not approval. |
 
-## Exit codes
+Only an explicit Approve grants approval. Reject records rejection. Respond records
+request-specific instructions only after valid correlated text. To send instructions, press Respond
+and reply to its prompt, or send exactly `/respond <request_id> <text>`. Approval-like words in
+Respond text never grant approval. Respond text is stored and returned exactly, including
+whitespace.
 
-| Code | Meaning                                                                       |
-| ---- | ----------------------------------------------------------------------------- |
-| `0`  | Command completed.                                                            |
-| `2`  | Invalid arguments or configuration.                                           |
-| `3`  | Unavailable prerequisite, such as missing state, token or a reachable broker. |
-| `4`  | Storage or integrity failure, including unverifiable file protection.         |
+Each request has at most one resolution. Duplicate updates and competing choices do not replace it.
+Before acting, deduplicate on `(request_id, decision_id)`.
 
-Diagnostics go to stderr; command results go to stdout. The MCP adapter writes only protocol frames
-to stdout.
+A client or transport timeout does not cancel or expire the request. A lost waiting call does not
+cancel it either. Keep the retained request identity and capability, then use `get_approval` in a
+later turn to read the unchanged outcome. Retrieval does not wake an agent or start a new assistant
+turn.
+
+MCP Events are unsupported in this preview. There is no automatic resumption after a timeout and no
+automatic session reattachment. An approval records an outcome. It does not execute the action.
+
+`delivery_state` describes reporting, not the decision:
+
+- `not_applicable`: no terminal decision yet.
+- `pending`: a decision is recorded but delivery is not confirmed.
+- `returned`: the adapter reported writing the result to the original call. Receipt is not confirmed.
+- `confirmed`: a request-capability holder acknowledged that decision.
+- `unavailable`: automatic delivery is unavailable. Retrieve with the retained capability.
+- `blocked`: delivery is blocked. Check `proceed-mcp status`.
+
+## First manual test
+
+Use a harmless action. The product never executes it.
+
+The user-supplied setup transcript reports this flow working for Approve, Reject, and exact
+Respond, plus two concurrent requests returning to the correct waiting calls, with all five
+decisions acknowledged and no proposed action executed. Treat that as supplied manual evidence. It
+does not replace your own run.
+
+1. Keep `serve` running and the MCP client connected.
+2. In a new agent session, ask for `prepare_approval`, then `request_approval` with
+   `client_request_id` `manual-approve-1`, action `Report the text PROCEED TEST`, context
+   `Harmless first-use check. Do not modify files.`, and `expires_in_seconds` 300.
+3. While the second call is still waiting, press Approve in Telegram.
+4. Expect that waiting call to return `resolution: approved` with the same `request_id`. Acknowledge
+   the returned `decision_id` with `acknowledge_approval`. No file or command action needs to run.
+5. In the next assistant turn, check the follow-up acknowledgement. It must name the same
+   `request_id` and the recorded outcome `approved`. It must not repeat the `request_capability` and
+   must not perform the action. The supplied transcript reports this acknowledgement step working,
+   but check it in your own run.
+6. Repeat with a fresh prepared handle and `client_request_id` `manual-reject-1`, then press Reject.
+   The call should return `rejected`, not authorization to perform the action. Check the next
+   assistant turn the same way: matching `request_id` and outcome `rejected`, no capability echo, no
+   action.
+7. Repeat with `manual-respond-1`. Press Respond, reply to the prompt with the exact text
+   `Read only. Do not modify files.`, and confirm the call returns `responded` with that text
+   unchanged. Approval-like words in that text remain instructions. Check the next assistant turn
+   for the matching `request_id` and outcome `responded`, which records instructions rather than
+   approval, with no capability echo and no action.
+
+If a waiting call times out before you choose, the request stays pending until its deadline. Use
+`get_approval` with the retained `request_id` and `request_capability` in a later turn. Retrieval
+will not wake the agent.
+
+Finish by pressing Ctrl+C once in the broker terminal and waiting for `proceed-mcp: broker stopped`.
+
+## Commands
+
+| Command                                              | Purpose                                                                          |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `init --state-dir <dir>`                             | Create protected empty state. Refuses to overwrite existing state.               |
+| `owner add <id> --label <label> --state-dir <dir>`   | Add an immutable owner and its credential. Requires a stopped broker.            |
+| `serve --state-dir <dir>`                            | Run the foreground broker. Reads the Telegram token from the broker environment. |
+| `pair --state-dir <dir>`                             | Ask the running broker for a one-use five-minute pairing code.                   |
+| `mcp --owner <id> --state-dir <dir>`                 | Run the stdio MCP adapter for one owner.                                         |
+| `status --state-dir <dir> [--request <id>] [--json]` | Show requests, resolution, Telegram and delivery state, and the next action.     |
+| `retry <request_id> --state-dir <dir>`               | Report that request retry is unavailable in this preview.                        |
+
+`doctor` is not implemented and fails as an unknown command. The older `origin add` command in the
+help output belongs to the retired origin-based configuration and refuses this state. Use owner
+mode.
+
+Exit codes are `0` for completion, `2` for invalid arguments or configuration, `3` for an unavailable
+prerequisite, and `4` for a storage or integrity failure. Diagnostics go to stderr. MCP stdout
+carries protocol frames only.
+
+## State, privacy, and shutdown
+
+| Path                                 | Contents                                                                    |
+| ------------------------------------ | --------------------------------------------------------------------------- |
+| `config.json`                        | Schema version 2: Telegram token variable name, broker port, owner records. |
+| `credentials/control.token`          | Local control credential for pairing, status, and other control operations. |
+| `credentials/owner.<owner-id>.token` | Per-owner credential for MCP request routes.                                |
+| `journal.log`                        | Append-only transaction journal. The only mutable product state.            |
+| `broker.lock`                        | Ownership record written by a running broker and removed on a clean stop.   |
+
+The state directory and its files are restricted to the current OS account. `init`, `owner add`, and
+`serve` verify that protection and fail rather than continue if it cannot be established. The
+Windows check uses an owner-restricted ACL through PowerShell and `icacls`. POSIX uses owner-only
+mode bits.
+
+The journal stores request text, response text, pairing identifiers, decisions, timestamps, and
+delivery state. Treat the state directory as sensitive local data. Back up a stopped broker's entire
+state directory. This preview has no history deletion or compaction.
+
+Request capabilities are stored only as SHA-256 verifiers. The plaintext capability exists in the
+tool result and in your retention. Credential and token values are never printed by a command.
+
+The broker binds only `127.0.0.1`, requires a credential on every route, and rejects browser origins.
+There is no public broker listener and no remote broker hosting.
+
+Stop the broker with Ctrl+C and wait for `proceed-mcp: broker stopped`. A clean stop releases the
+ownership record. If shutdown fails or the process is killed, `broker.lock` may remain and the next
+`serve` refuses to start. Preserve the protected state directory and do not delete the lock or the
+journal. There is no automatic stale-lock recovery in this preview.
+
+## Common failures
+
+- `BROKER_UNAVAILABLE`: start `serve`, or check that the adapter and the broker use the same
+  `--state-dir`.
+- `NOT_PAIRED`: complete `/pair` before creating a request.
+- `NOT_FOUND`: wrong owner or state directory, an unused handle, or a request capability that does
+  not match.
+- `DECISION_MISMATCH`: the request is not terminal, or the `decision_id` does not match.
+- Telegram processing stopped: check the bot token and confirm no webhook or second poller owns the
+  bot. Restart `serve` after repair.
 
 ## Limits
 
-- One paired human, one bot token, one broker per state directory. Re-pairing needs a separately
-  authorized local procedure; there is no in-chat identity change.
-- The product supplies cooperative decisions. It does not enforce execution permissions and does not
-  modify OpenCode's permission rules; that policy remains the operator's responsibility.
-- No recovery of an exited OpenCode process, no automatic host discovery or replacement, no remote
-  broker hosting, and no delivered state across two origins in this build.
-- OpenCode's HTTP surface is experimental. Only a running version verified by a boundary spike may be
-  admitted by a release allowlist; until then version compatibility is unproven and unsupported host
-  shapes fail closed.
-- Package identity, license and the supported Node.js floor remain undecided: `package.json` carries
-  the placeholder `private: true` and `UNLICENSED` so this build cannot be published by accident.
+- One paired human and one bot token per broker. Only the first pairing succeeds. There is no
+  in-chat identity change or re-pair.
+- One broker per state directory. A separate owner is a separate transport principal, not another
+  human or bot.
+- No hosted service and no remote broker. The broker is loopback-only.
+- MCP Events are unsupported. There is no automatic continuation after a tool timeout, and a timeout
+  does not cancel the request.
+- Retrieval does not wake an agent and does not create a new decision.
+- The product does not execute actions and does not enforce OpenCode's permission rules. Approval is
+  cooperative.
+- No recovery of an exited MCP client or harness process, and no automatic session reattachment.
+- OpenCode V2 is the first validation harness. Other harnesses are not tested. The generic stdio
+  command is available, but no multi-harness compatibility is claimed.
+- Node.js 24 or newer is the manifest floor. Only Windows with Node 24.22.2 has offline test
+  evidence. Do not assume other operating systems or Node versions are supported.
+- `doctor` is not implemented. `retry` reports unavailable.
+- The npm preview is published, and the public bytes are independently matched to the retained
+  artifact. A user-supplied transcript reports a successful pinned public install and live
+  Telegram/OpenCode approvals, but that is not independent full-release acceptance. Broker
+  shutdown, broader failure paths, and the MCP Registry listing remain unverified or pending.
 
-## Development
+## License
 
-```console
-npm install
-npm run build         # validates that shipped modules parse and the bin entry is usable
-npm run format:check  # formatting gate for production sources
-```
+MIT, copyright 2026 Ng Cheng Leong. The release package must include the standard MIT `LICENSE`
+file at its root.
