@@ -38,11 +38,20 @@ export const packCommand = [
   '$env:PROCEED_TEST_NPM_CLI = $npmCli',
   'node tests/release-pack.mjs',
 ].join('\n');
+// setup-node adds <prefix>/bin on Linux. Resolve npm's real CLI and reject
+// an ambient npm from another toolchain. Node v24.22.2 tools/install.py defines
+// bin/npm -> ../lib/node_modules/npm/bin/npm-cli.js.
+const linuxPackCommand = [
+  'npmCli="$(readlink -f "$(command -v npm)")"',
+  'test "$npmCli" = "$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")/lib/node_modules/npm/bin/npm-cli.js"',
+  'test -f "$npmCli"',
+  'PROCEED_TEST_NPM_CLI="$npmCli" node tests/release-pack.mjs',
+].join('\n');
 const commands = [
   'node --version', 'npm ci --ignore-scripts',
   'node --test tests/release-metadata.test.mjs tests/release-preview-ci.test.mjs tests/release-artifact.test.mjs',
   'node node_modules/prettier/bin/prettier.cjs --check .github/workflows/ci.yml',
-  'node scripts/build.mjs', packCommand,
+  'node scripts/build.mjs', linuxPackCommand,
 ];
 function validate(text) {
   unprivileged(text);
@@ -51,7 +60,7 @@ function validate(text) {
   assert.deepEqual({ ...model.topPermissions }, { contents: 'read' });
   assert.equal(model.jobs.length, 1);
   const [job] = model.jobs;
-  assert.deepEqual(job.runsOn, ['windows-2025']);
+  assert.deepEqual(job.runsOn, ['ubuntu-24.04']);
   assert.equal(job.environment, null);
   assert.equal(job.if, null);
   assert.deepEqual({ ...job.permissions }, {});
@@ -66,25 +75,31 @@ function validate(text) {
   assert.ok(job.steps.every((step) => !Object.keys(step.env).length));
   // The existing release-mode projection exposes shell/deadline without helper changes.
   const [detailed] = parseWorkflow(text, { release: true }).jobs;
-  assert.equal(detailed.steps.at(-1).shell, 'pwsh');
+  assert.equal(detailed.timeout, '15');
+  assert.ok(detailed.steps.filter(step => step.run).every(step => step.shell === 'bash'));
   assert.equal(detailed.steps.at(-1).timeout, '5');
 }
-const specimen = `on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  validate:\n    runs-on: windows-2025\n    timeout-minutes: 15\n    steps:\n      - uses: actions/checkout@${'a'.repeat(40)}\n        with:\n          persist-credentials: false\n      - uses: actions/setup-node@${'b'.repeat(40)}\n        with:\n          node-version: 24.22.2\n${commands.map((run, index) => `      - ${index === commands.length - 1 ? 'shell: pwsh\n        timeout-minutes: 5\n        ' : ''}run: |\n${run.split('\n').map((line) => `          ${line}`).join('\n')}\n`).join('')}`;
+const specimen = `on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  validate:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    steps:\n      - uses: actions/checkout@${'a'.repeat(40)}\n        with:\n          persist-credentials: false\n      - uses: actions/setup-node@${'b'.repeat(40)}\n        with:\n          node-version: 24.22.2\n${commands.map((run, index) => `      - shell: bash\n${index === commands.length - 1 ? '        timeout-minutes: 5\n' : ''}        run: |\n${run.split('\n').map((line) => `          ${line}`).join('\n')}\n`).join('')}`;
 
 test('parsed PR policy calibration rejects alternate execution and privileges', () => {
   assert.doesNotThrow(() => validate(specimen));
   for (const [before, after] of [
     ['contents: read', 'contents: read\n  packages: read'],
-    ['pull_request:', 'push:'], ['windows-2025', 'ubuntu-latest'],
+    ['pull_request:', 'push:'], ['ubuntu-24.04', 'ubuntu-latest'],
+    ['ubuntu-24.04', 'windows-2025'],
     [`checkout@${'a'.repeat(40)}`, 'checkout@v4'],
     ['persist-credentials: false', 'persist-credentials: true'],
+    ['node-version: 24.22.2', 'node-version: 24'],
     ['npm ci --ignore-scripts', 'npm ci'],
     ['tests/release-preview-ci.test.mjs', 'tests/release-ci.test.mjs'],
     ['node scripts/build.mjs', 'node scripts/build.mjs\n          node arbitrary.mjs'],
     ['steps:', 'if: false\n    steps:'], ['timeout-minutes: 15', 'timeout-minutes: 90'],
     ['steps:', 'defaults:\n      run:\n        shell: bash\n    steps:'],
     ['node --version', 'node --version\n        env:\n          AUTH: value'],
-    ['      - shell: pwsh\n        timeout-minutes: 5\n        run:', '      - timeout-minutes: 5\n        run:'],
+    ['      - shell: bash\n', '      - shell: pwsh\n'],
+    ['      - shell: bash\n', '      - '],
+    [linuxPackCommand.split('\n')[1], 'true'],
+    [linuxPackCommand.split('\n')[0], packCommand.split('\n')[0]],
     ['        timeout-minutes: 5\n', ''],
   ]) {
     const changed = specimen.replace(before, after);
@@ -102,17 +117,21 @@ test('parser calibration fails closed on unsupported YAML and structure', () => 
     specimen.replace('contents: read', 'contents: read\n  contents: read'),
     specimen.replace('contents: read', 'contents: "read"'),
     specimen.replace('pull_request:', 'pull_request: {}'),
+    specimen.replace('shell: bash', 'shell: zsh'),
   ]) assert.throws(() => parseWorkflow(text));
   assert.throws(() => parseWorkflow('on:\n  pull_request:\n'), WorkflowModelError);
 });
 test('PR workflow exists and passes parsed and lexical policy', async () => {
   validate(await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
 });
-test('preview command selection calibration reaches actual-file policy after exact replacement', async () => {
+test('Linux policy calibration reaches actual-file policy after bounded workflow correction', async () => {
   const actual = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
-  const corrected = actual.replace('tests/release-ci.test.mjs', 'tests/release-preview-ci.test.mjs');
+  const corrected = actual.replace('windows-2025', 'ubuntu-24.04')
+    .replace(packCommand.split('\n').join('\n          '), linuxPackCommand.split('\n').join('\n          '))
+    .replaceAll('      - run: |', '      - shell: bash\n        run: |')
+    .replace('        shell: pwsh\n', '');
   // Works both before and after correction, never substitutes for the real-file test.
-  assert.ok(actual.includes('tests/release-ci.test.mjs') || actual.includes('tests/release-preview-ci.test.mjs'));
+  assert.ok(actual.includes('tests/release-preview-ci.test.mjs'));
   validate(corrected);
 });
 

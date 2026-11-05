@@ -1,5 +1,10 @@
 # Preview CI checkout determinism
 
+Current direction: [Linux primary CI preparation](preview-ci-linux.md). The user
+approved replacing the primary Windows CI platform, not a Windows cleanup-risk
+exception. Windows failures and the blocked diagnostic below remain historical
+and separately pending. Linux success would not prove Windows compatibility.
+
 ## Goal and authority
 
 The preview PR must pass formatting, build, exact installed-byte comparison and

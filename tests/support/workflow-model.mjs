@@ -55,7 +55,7 @@ export function parseWorkflow(text, { release = false } = {}) {
         steps: job.steps.map((step) => {
           keys(step, ['name', 'run', 'uses', 'with', 'shell', 'timeout-minutes']);
           if ((typeof step.run === 'string') === (typeof step.uses === 'string')) fail();
-          if (step.shell != null && step.shell !== 'pwsh') fail();
+          if (step.shell != null && !['pwsh', 'bash'].includes(step.shell)) fail();
           if (step['timeout-minutes'] != null && !/^[1-5]$/.test(step['timeout-minutes'])) fail();
           return { run: step.run ?? null, uses: step.uses ?? null,
             with: strings(step.with ?? {}), env: {},

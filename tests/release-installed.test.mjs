@@ -1,7 +1,7 @@
 // TEST ONLY. Installed public CLI, no real Telegram or live first-use proof.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFile, mkdir, mkdtemp, rm, access } from 'node:fs/promises';
+import { readFile, mkdir, mkdtemp, rm, access, readdir, stat, realpath } from 'node:fs/promises';
 import { resolve, join, dirname, isAbsolute, sep, delimiter } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -96,6 +96,10 @@ test('PREVIEW-INSTALLED: fresh protected setup and installed unpaired tool behav
     env.PATH = dirname(process.execPath) + delimiter + (env.PATH ?? '');
     const command = join(prefix, 'node_modules', '.bin',
       process.platform === 'win32' ? 'proceed-mcp.cmd' : 'proceed-mcp');
+    if (process.platform !== 'win32') {
+      assert.equal(await realpath(command), await realpath(executable), 'POSIX installed shim targets this package');
+      assert.ok((await stat(command)).mode & 0o111, 'POSIX installed command is executable');
+    }
     // cmd.exe owns quoting here. Reject expansion/quote characters, not spaces.
     assert.doesNotMatch(command, /["%!\r\n]/, 'shim path must not contain cmd expansion or quotes');
     mark('shim-help');
@@ -124,6 +128,23 @@ test('PREVIEW-INSTALLED: fresh protected setup and installed unpaired tool behav
     assert.notEqual(cli('init').status, 0, 'existing state cannot be overwritten');
     mark('owner-add');
     assert.equal(cli('owner', 'add', 'preview_owner', '--label', 'Preview test').status, 0);
+    // Real POSIX filesystem proof only. Windows DACLs are not mode-bit proof.
+    const protectedState = async (directory) => {
+      const info = await stat(directory);
+      assert.equal(info.mode & 0o777, 0o700, 'POSIX state directory is owner-only');
+      assert.equal(info.uid, process.getuid(), 'fixture state belongs to the running account');
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) await protectedState(path);
+        else {
+          assert.ok(entry.isFile(), 'protected state has no unexpected link or special entry');
+          const file = await stat(path);
+          assert.equal(file.mode & 0o777, 0o600, 'POSIX state file is owner-only');
+          assert.equal(file.uid, process.getuid(), 'fixture file belongs to the running account');
+        }
+      }
+    };
+    if (process.platform !== 'win32') await protectedState(state);
     mark('broker-start', { exit: null, error: null });
     const broker = await context.start([process.execPath, '--import', preload, executable, 'serve', '--state-dir', state]);
     const diagnostics = [];
@@ -195,6 +216,7 @@ test('PREVIEW-INSTALLED: fresh protected setup and installed unpaired tool behav
       peer.assertComplete();
     mark('broker-stop');
     await stopped(broker);
+    if (process.platform !== 'win32') await protectedState(state);
     mark('privacy');
     assert.ok(!Buffer.concat(diagnostics).includes(Buffer.from(authority.request_capability)),
       'broker and adapter diagnostics exclude private capability');
