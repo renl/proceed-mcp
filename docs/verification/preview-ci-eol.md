@@ -197,3 +197,76 @@ Before final evidence additions, the amendment measured 191 gross lines
 was 307 gross, counting reused controls once, including the existing source rule.
 Conservative sequential history was 176 + 191 = 367. Reserve the remaining budget
 for this evidence, at most 20 source lines and independent verification evidence.
+
+## Installed-smoke diagnostic follow-up
+
+Candidate `fbbc1ffb529959bc07438d372df4002dc0bc26d3` reaches a new failure in
+[run 42053517930](https://github.com/renl/proceed-mcp/actions/runs/42053517930).
+Checkout, setup, preview tests, formatter, build and installed-byte equality PASS.
+The installed public smoke exits 1 at the pack runner's line 94. Its failing
+assertion is unknown. Neither a runtime regression nor nonregression is proven.
+The previous two failures remain historical failures. The earlier EOL packet's
+reported 382 gross history is retained, not reset or enlarged by this diagnostic
+unit. This is the third CI hotfix unit after two config corrections, not a third
+configuration fix or a claimed resolution of the smoke failure.
+
+Actual CI logs qualify Windows Server 2025, build 10.0.26100, runner image
+`windows-2025-vs2026` version `20261103.298.1`, Node 24.22.2 and npm 11.19.1.
+They show about eight seconds for the whole pack/install/smoke step, not eight
+seconds for a known smoke phase. The shim uses cmd.exe. Protected CLI operations
+use powershell.exe and icacls through production code. The smoke's synchronous
+CLI limit is five seconds while the production ACL helper limit is twenty.
+This is an unconfirmed timing lead, not grounds to change either deadline.
+The actual ACL, shim, broker and MCP outcomes cannot be recovered from these logs.
+No deleted or private log reconstruction is authorized or attempted.
+
+Source inventory still contains 43 JavaScript paths across bin/src plus
+package.json, README.md and LICENSE, totaling 46 staged inputs. Git shows no
+change to these paths between `a63052fe` and this candidate. A reported fresh
+45-file count versus an old 46-file count does not identify a changed path.
+No runtime-file change is inferred without an actual manifest path diff.
+Published tarball `43866cb0` and candidate tarball `e8f754...` remain distinct
+identities. Neither is overwritten or republished.
+
+The diagnostic-only change covers the two release runners and their existing
+release-artifact test support. A fixed phase vocabulary, bounded elapsed time,
+allowlisted error code, numeric exit and separate assertion/cleanup outcomes
+are written to a run-local JSON report. The parent sanitizes again before
+printing or retaining it. Missing reports yield an unknown/OTHER result, not
+a pass. No message, stack, path, child TAP/stdout/stderr, authority, action or
+state payload is included. Raw child TAP is no longer persisted. The existing
+run directory is removed in the original bounded finally path. Package cleanup
+has its own explicit pass/fail result. No assertion, deadline or expected result
+is weakened. No application, workflow, dependency or configuration edit is made.
+
+Local Windows Node 24.22.2 checks PASS: runner syntax, two diagnostic calibration
+tests, complete preview selection 19/19, brief Prettier and whitespace. The
+artifact-retention test also passed separately before the combined selection.
+Calibration covers normal
+and failure summaries, synthetic private markers in all candidate fields, and a
+deliberately failing child whose report remains safe. Its disposable directory
+absence is asserted separately. This does not count as installed-smoke success.
+The earlier attempted worktree-relative runtime path did not exist. Qualification
+then used the retained runtime in the primary checkout, as documented by the
+existing readiness note. No global runtime/config/state discovery was used.
+
+No additional pack was run locally. No npm CLI was found in the inspected
+project-owned tooling, preview-preparation or dependency directories. Do not
+install tooling or probe global stores just to replay the prior local pack pass.
+The unchanged workflow supplies its explicit setup-node npm CLI and isolated
+pack runner config/cache on the next authorized push. Before that push, run
+`node --test --test-name-pattern="PREVIEW diagnostic" tests/release-installed.test.mjs`
+using qualified Node 24.22.2, then the existing artifact test and syntax checks.
+After the push, observe the new PR run using
+`gh run list --repo renl/proceed-mcp --workflow ci --branch add-telegram-approval-opencode-v2 --limit 1`.
+Use `gh run view <new-run-id> --repo renl/proceed-mcp --log-failed` for the
+allowlisted phase report. Do not rerun the old opaque CI job.
+
+Merge remains blocked pending actual required smoke PASS. If the new evidence
+shows a design/environment gap, coordination must route the exact phase/code,
+candidate and environment to architecture review before a fourth correction.
+Production fixes belong to implementation, environment/workflow fixes to their
+owner, and test semantics to the canonical contract owner. No blind retries,
+host-specific assertion patches, Telegram, archive edits or publication follow.
+All 104 immutable archive hashes are reused unchanged. Concurrent status edits,
+six excluded originals, three recovery notes and retained artifacts stay untouched.

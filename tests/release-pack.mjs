@@ -5,9 +5,9 @@ import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, cp, writeFile, readFile, rm, access } from 'node:fs/promises';
 import { resolve, join, isAbsolute, basename } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { retainVerifiedArtifact } from './support/release-artifact.mjs';
+import { retainVerifiedArtifact, safeSmokeDiagnostic } from './support/release-artifact.mjs';
 
 assert.equal(Number(process.versions.node.split('.')[0]), 24, 'qualified Node 24 required');
 const npm = process.env.PROCEED_TEST_NPM_CLI;
@@ -41,7 +41,13 @@ const execute = (file, args, cwd, timeout = 30000, childEnv = env) => {
   writeFileSync(`${record}-${phase}-exit.json`, JSON.stringify({ status: child.status,
     signal: child.signal, error: child.error?.code ?? null }));
   if (phase === 'installed-public-smoke') {
-    writeFileSync(`${record}-installed.tap`, child.stdout);
+    // Raw TAP can contain assertion operands. Do not persist or publish it.
+    let diagnostic;
+    try { diagnostic = JSON.parse(readFileSync(join(run, 'smoke-diagnostic.json'), 'utf8')); }
+    catch { diagnostic = { error: 'OTHER' }; }
+    const safe = safeSmokeDiagnostic(diagnostic);
+    writeFileSync(`${record}-smoke.json`, JSON.stringify(safe));
+    console.log('installed-smoke', JSON.stringify(safe));
   }
   assert.ifError(child.error);
   assert.equal(child.status, 0, `package check failed in ${phase}, no private output emitted`);
@@ -93,6 +99,7 @@ try {
   phase = 'installed-public-smoke'; await progress();
   execute(process.execPath, ['--test', 'tests/release-installed.test.mjs'], resolve('.'), 50000,
     { ...env, PROCEED_TEST_INSTALL_PREFIX: install,
+      PROCEED_TEST_SMOKE_REPORT: join(run, 'smoke-diagnostic.json'),
       PROCEED_TEST_INSTALLED_BIN: join(installed, 'bin', 'proceed-mcp.js') });
   phase = 'assertions-pass'; await progress();
   if (process.env.PROCEED_TEST_ARTIFACT_DIR) {
@@ -106,8 +113,15 @@ try {
         node: process.versions.node, platform: process.platform } });
   }
 } finally {
+  try {
   await rm(run, { recursive: true, maxRetries: 3, retryDelay: 100 });
   await assert.rejects(access(run), { code: 'ENOENT' });
   if (retained) await retained(run);
   await writeFile(`${record}-cleanup.json`, '{"cleanup":"pass"}');
+  console.log('package-cleanup', '{"cleanup":"pass"}');
+  } catch {
+    await writeFile(`${record}-cleanup.json`, '{"cleanup":"fail"}');
+    console.log('package-cleanup', '{"cleanup":"fail"}');
+    throw new Error('package cleanup failed, private details withheld');
+  }
 }

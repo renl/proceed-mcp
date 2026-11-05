@@ -6,6 +6,25 @@ import { resolve, relative, isAbsolute, dirname, join, basename } from 'node:pat
 import { createHash } from 'node:crypto';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+// Fixed vocabulary only. Never forward exception messages, paths or child output.
+export function safeSmokeDiagnostic(value = {}) {
+  if (value === null || typeof value !== 'object') value = {};
+  const phases = ['entry', 'manifest', 'shim-help', 'invalid-command', 'init',
+    'repeat-init', 'owner-add', 'broker-start', 'broker-ready', 'status',
+    'adapter-start', 'initialize', 'catalog', 'prepare', 'unpaired-refusal',
+    'status-after', 'adapter-eof', 'broker-stop', 'privacy', 'complete'];
+  const outcome = (item) => ['pending', 'pass', 'fail'].includes(item) ? item : 'pending';
+  return {
+    phase: phases.includes(value.phase) ? value.phase : 'entry',
+    elapsedMs: Number.isSafeInteger(value.elapsedMs) && value.elapsedMs >= 0 &&
+      value.elapsedMs <= 150000 ? value.elapsedMs : null,
+    exit: Number.isInteger(value.exit) && value.exit >= -255 && value.exit <= 255 ? value.exit : null,
+    error: value.error == null ? null :
+      ['ERR_ASSERTION', 'ETIMEDOUT', 'ENOENT', 'EACCES', 'EPERM', 'ENOBUFS',
+        'ERR_TEST_FAILURE'].includes(value.error) ? value.error : 'OTHER',
+    assertion: outcome(value.assertion), cleanup: outcome(value.cleanup),
+  };
+}
 const inside = (parent, child) => {
   const part = relative(parent, child);
   return part !== '' && !isAbsolute(part) && part !== '..' && !part.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`);
