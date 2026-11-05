@@ -21,6 +21,7 @@ OpenSpec change or archive operation. [Earlier evidence](preview-ci-eol.md) stay
 - Lifecycle: retained, active, test-engineering ownership. Next: workflow-only
   implementation, actual Ubuntu CI, independent affected-risk verification.
   Cleanup remains blocked by the open PR and retained user material.
+  The final verification below supersedes this preparation-stage next action.
 
 [Current requirement](../../openspec/specs/npm-distribution/spec.md#requirement-non-publishing-pull-request-validation)
 requires non-publishing PR build/test, not a Windows-only gate. Historical design
@@ -144,3 +145,94 @@ The retained artifact manifest remains unchanged. No source, workflow, baseline
 spec, archive, publication or credential-state operation occurred. No push or CI
 execution occurred. Disposable fixture cleanup assertions PASS separately from
 the expected policy failure. Whole-worktree cleanup is still blocked, not passed.
+
+## Final independent affected-candidate verification
+
+Verdict: PASS for Linux-primary preview merge readiness, with no hotfix needed.
+This completes the assigned verification package, not merge or whole-worktree
+cleanup. Slice-ready and feature-verified apply within the approved preview
+boundary. Full all-platform release readiness and independent live first-use
+qualification are NOT claimed. Deployed artifact: not applicable, no deployment.
+
+### Pinned candidate and actual execution
+
+- Verified code and local/remote/PR head:
+  `7c38071a14eca17237facf99d3c331c56f6f57c4`.
+- Parent: `8e489cd8b2a4398ef7f3280287db9b020ebc398d`.
+- Local main, origin/main, live remote main and PR base:
+  `de1c58021f4df25b03551faeb1b26958852275a7`.
+- Live PR 2: OPEN, MERGEABLE, CLEAN. Its reported `ci / validate` check is
+  SUCCESS, completed `2026-11-05T16:16:17Z`. No review decision was reported.
+- [Actual run 42062573579](https://github.com/renl/proceed-mcp/actions/runs/42062573579),
+  job `127367993946`, reports that head. Checkout actually tested synthetic merge
+  `1dea29be0d98397239ace9390fffb9d13ac68655`, merging the exact head into the
+  exact target above. This is integrated-candidate proof, not only head metadata.
+- Ubuntu 24.04 image `20261101.360.1`, Node `24.22.2`, npm `11.19.1`, Bash.
+  The OS label is fixed but the image rolls. The two action references resolved
+  to the committed checkout `de0fac2e4500dabe0009e67214ff5f5447ce83dd` and
+  setup-node `48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e` in this actual run.
+  This establishes executed reference resolution, not an independent supply-chain
+  audit or qualification of later images/toolchains. The pack step's successful
+  realpath equality and file checks bind npm's CLI to the selected Node prefix.
+
+Independent review inspected workflow, policy controls, installed assertions,
+pack runner and managed cleanup, then accepted current CI execution by revision
+and assertion scope instead of replaying runtime, install or live operations.
+
+| Check | Executed evidence accepted and assertion scope |
+|---|---|
+| Bootstrap and policy | Actual checkout/setup and `npm ci --ignore-scripts` PASS. All 19 selected tests PASS, including real autocrlf checkout/byte controls, privilege/event/shell/toolchain negatives and actual workflow policy, not only a specimen. |
+| Format and build | Actual workflow Prettier PASS. Build PASS checks all 43 bin/src JavaScript inputs. |
+| Pack and installed bytes | Existing offline runner PASS requires scoped identity/version, shipped-path/credential guards, exact staged-to-installed bytes for every packed input and scoped installed README examples before smoke. |
+| Public installed behavior | Actual named POSIX executable targets this package and runs help. Supported init, repeat-init refusal, owner creation, broker/status, MCP stdio initialize/five-tool discovery, private preparation, NOT_PAIRED refusal, empty actionable state, capability redaction, EOF and shutdown assertions all execute before complete. |
+| POSIX protection | Actual POSIX branches check running-account ownership and 0700 directories/0600 files recursively after setup and after public smoke. These assertions are not Windows ACL proof. |
+| Owned cleanup | Safe report is `phase: complete`, `elapsedMs: 926`, `assertion: pass`, `cleanup: pass`. Separate package cleanup PASS. Managed helper terminates POSIX process groups, verifies tracked process absence and fixture removal. No universal timeout-path or Windows descendant-containment claim follows. |
+
+### Reuse, preservation and remaining gates
+
+Source diff confirms this platform correction changes no production, dependency,
+package/Registry metadata, public wire contract or deadlines. Workflow source is
+29 gross lines, within 40. Preparation is 214 gross lines. Earlier 76-line timing
+audit remains separate historical evidence. No unrelated correction is hidden.
+All 104 archive files match unfiltered HEAD blob hashes, and archive/current specs
+have no changes since archive commit `a63052fe`. No archive edit was made.
+
+Combined evidence `7581e1845360a09f713c7e14e02d7151a76cb9b9` and runtime
+`91c79d277c2f1c477707b9bd787bebfbae0cfec8` remain usable only for their accepted
+unchanged assertions. No bin/src, package/lock or build-script drift invalidates
+runtime reuse. Previously accepted Registry metadata reconciliation remains
+separate from runtime. Public tarball SHA-256
+`43866cb0c8eaa3feb3d90c598d6ecbfdea8b7886f3af7e584a4e6b32b4fb9adc`, manifest
+`748f70ab342993117c0b994d83c36a71697295ce6da462f1acf3b859f3cd696b` and accepted
+public readback retain their original scope. Current README/package smoke is
+separate from immutable published bytes. The CI tarball was disposable, its hash
+is not exposed by the safe log and is not claimed equal to that public artifact.
+
+No required affected executable gate remains failed or unexecuted for the approved
+Linux-primary landing. Windows failures remain unresolved, not passed or waived.
+The npm-distribution PR-validation requirement and archived design lines 884/894
+do not require Windows CI. The explicit primary-CI decision replaces that gate
+selection, not Windows security obligations or evidence. No new Windows diagnostic,
+containment work, Telegram access, publication or all-platform claim is authorized.
+
+Before authorized merge, preserve or commit coordination's status dirt as
+appropriate and deliver the owned evidence. Recheck live head/base and applicable
+required checks/protection/reviews at landing. Do not infer merge authority or a
+target-race exception from this verdict. Docs-only evidence/status finalization
+does not change code/check inputs, but it is not actual CI on the later head.
+Any code/test/dependency/configuration/target drift requires affected revalidation.
+
+At intake the index was empty. Coordination status dirt, all six excluded originals,
+three recovery notes and retained artifacts were left untouched. Prior custody
+hash evidence is reused, not newly asserted as rehashed. No resource-owning local
+run occurred. Worktree remains active awaiting merge. Whole cleanup is BLOCKED by
+open PR and retained user material, independently of passing CI-owned cleanup and
+source/Registry evidence. Retention is not a new merge waiver or product failure.
+
+Final local documentation checks PASS using retained project Node 24.22.2:
+Prettier for both live evidence files and `git diff --check`. Owned evidence adds
+109 gross lines, making this Linux unit 352 gross including preparation and
+workflow source, within the 400-line forecast. A concurrent project-index edit
+appeared during verification and is preserved unselected with coordination dirt.
+Only these two live evidence files belong to the evidence commit. Its delta is
+docs-only and does not change the verified implementation or CI inputs.

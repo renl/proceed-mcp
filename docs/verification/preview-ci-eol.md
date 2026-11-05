@@ -351,3 +351,20 @@ note hashes, custody manifest and retained published tarball match their recorde
 hashes. The index was empty at intake. Coordination status dirt and six excluded
 originals remain unselected. No resource-owning validation was started, so there
 is no new process-cleanup result. Actual Windows CI remains required and blocked.
+
+## Current gate disposition after Linux-primary verification
+
+The Windows requirement above describes the historical gate, now superseded by
+the user's explicit Linux-primary selection. All four Windows CI failures and
+the unapproved timing/descendant diagnostic remain unresolved, not passes or
+waivers. No Windows-only acceptance clause requires restoring that primary gate.
+
+[Independent Linux evidence](preview-ci-linux.md#final-independent-affected-candidate-verification)
+accepts actual run `42062573579` on head `7c38071a14eca17237facf99d3c331c56f6f57c4`
+and target `de1c58021f4df25b03551faeb1b26958852275a7`. Checkout, formatter, build,
+installed byte equality, public smoke and owned cleanup PASS. This closes the
+verification and actual-CI conditions for `PREVIEW-CI-EOL-001` within the approved
+Linux-primary preview scope, without rewriting historical failures. No hotfix is
+needed. Final evidence delivery, preservation of coordination dirt and normal
+authorized landing freshness/protection checks remain. Retained worktree cleanup
+is separately blocked. No full all-platform release or Windows runtime pass follows.
