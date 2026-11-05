@@ -1,6 +1,6 @@
 # Proposal
 
-Status: Active change with user-approved preview scope. First npm preview manually published before implementation merge. Integrated landing and distinct Registry delivery remain unresolved. Parent: [project direction](../../../../AGENTS.md). Read next: capability specs below.
+Status: Active change with user-approved preview scope. First npm preview manually published before implementation merge. Integrated landing and distinct Registry delivery remain unresolved. Parent: [project direction](../../../AGENTS.md). Read next: capability specs below.
 
 ## Why
 
@@ -85,7 +85,7 @@ Selected activation wording and its selection rules are retained in the [C3 prod
 
 ### Shared-connection security decision - approved request-key ownership
 
-The user explicitly approved request-specific bearer authority after disclosure of same-principal key transfer, as recorded in the [project direction](../../../../AGENTS.md#approved-direction-and-scope) and [latest milestone](../../../../docs/status_log.md#2026-10-31--portable-waiting-call-direction-and-request-key-approval). A request key (called a request capability in the [design, decisions 2–3](design.md)) plus its protected transport principal authorizes that request. The trusted harness routes each original result to its invoking context and keeps capabilities private. Labels and request IDs grant no authority. Capabilities must not appear in Telegram, logs, assistant acknowledgements, or published evidence. Preparation before waiting lets a caller retain authority for cancellation or retrieval if the waiting result is lost; it is not a replacement for the actual human outcome.
+The user explicitly approved request-specific bearer authority after disclosure of same-principal key transfer, as linked from the [project index](../../../AGENTS.md) and recorded in the [latest milestone](../../../docs/status_log.md#2026-10-31--portable-waiting-call-direction-and-request-key-approval). A request key (called a request capability in the [design, decisions 2–3](design.md)) plus its protected transport principal authorizes that request. The trusted harness routes each original result to its invoking context and keeps capabilities private. Labels and request IDs grant no authority. Capabilities must not appear in Telegram, logs, assistant acknowledgements, or published evidence. Preparation before waiting lets a caller retain authority for cancellation or retrieval if the waiting result is lost; it is not a replacement for the actual human outcome.
 
 A valid capability shared with another context on the same principal grants that context request access, including retrieval or cancellation. This is approved behavior, not an isolation defect. The capability does not authorize a different transport principal. Ordinary shared-principal MCP does not authenticate a nontransferable agent-session identity. Original-call correlation, including reverse-order results, is a separate routing obligation, not proof of that stronger identity. `Exact originating-session delivery` retains its name for traceability and states this approved boundary. The ownership-approval blocker is resolved. Verification must retain its recorded scope and limits. Neither possession of a key nor retrieval wakes an agent. Enhanced exact-session event routing is deferred outside this preview and is not established by a request capability.
 
@@ -149,7 +149,7 @@ After durable commit/install and matching-wait wake, compose exactly `prefix + "
 
 Foreign callbacks never disclose a private outcome. Admission, cursor durability and no-effect/refusal selection follow the cited C3 clauses. Neutral spinner dismissal may precede processing. No recorded-choice message precedes durable installation/wake, and failed UI acknowledgement never reverses the outcome.
 
-Preserve `renderPortableReplyPrompt` in [portable-render.js](../../../../src/telegram/portable-render.js) exactly, including its full request ID and line breaks. Preserve the accepted question layout, identity fields and 4096-character bound. This annex changes neither rendering nor length rules.
+Preserve `renderPortableReplyPrompt` in [portable-render.js](../../../src/telegram/portable-render.js) exactly, including its full request ID and line breaks. Preserve the accepted question layout, identity fields and 4096-character bound. This annex changes neither rendering nor length rules.
 
 ### Onboarding, CLI and MCP activation copy
 
@@ -181,5 +181,5 @@ For terminal human outcomes, use the recorded-outcome prefixes above with actual
 
 ## Related Artifacts
 
-- [Project status](../../../../docs/status_log.md)
+- [Project status](../../../docs/status_log.md)
 - Product acceptance: the three capability deltas linked above.
