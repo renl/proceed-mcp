@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { parseWorkflow, WorkflowModelError } from './support/workflow-model.mjs';
-import { mkdir, mkdtemp, writeFile, rm, access } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { mkdir, mkdtemp, writeFile, rm, access, readdir } from 'node:fs/promises';
+import { resolve, join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as prettier from 'prettier';
 
@@ -118,7 +118,22 @@ test('preview command selection calibration reaches actual-file policy after exa
 
 // PREVIEW-CI-EOL-001: real Git checkout, not a textual rule-presence proxy.
 // Git semantics: https://git-scm.com/docs/gitattributes (text and eol).
-async function checkoutWorkflow(attributes) {
+const lfPolicy = '.github/workflows/*.yml text eol=lf\nbin/**/*.js text eol=lf\nsrc/**/*.js text eol=lf\n/README.md text eol=lf\n/LICENSE text eol=lf\n/package.json text eol=lf\n';
+async function packageInputs() {
+  const metadata = JSON.parse(await readFile('package.json', 'utf8'));
+  assert.deepEqual(metadata.files, ['bin', 'src', 'README.md']);
+  const paths = ['package.json', 'README.md', 'LICENSE'];
+  for (const dir of ['bin', 'src']) {
+    for (const entry of await readdir(dir, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const path = join(entry.parentPath, entry.name);
+      assert.match(path, /\.js$/, 'reclassify any new shipped non-JavaScript input');
+      paths.push(path.replaceAll('\\', '/'));
+    }
+  }
+  return paths.sort();
+}
+async function checkoutWorkflow(attributes, packaged = false) {
   const root = resolve('.');
   const parent = resolve('.scratch/preview-ci-eol');
   await mkdir(parent, { recursive: true });
@@ -135,20 +150,50 @@ async function checkoutWorkflow(attributes) {
           GIT_CONFIG_GLOBAL: join(fixture, 'empty-config') },
       });
       assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+      return result.stdout;
     };
     git('init', '--quiet', '--template=empty-template');
-    // Model the LF blob, regardless of the caller's current checkout convention.
-    const source = (await readFile(join(root, '.github/workflows/ci.yml'), 'utf8')).replace(/\r\n/g, '\n');
+    // Model canonical LF blobs, never alter the caller's real checkout.
+    const paths = ['.github/workflows/ci.yml', ...(packaged ? await packageInputs() : [])];
+    const sources = new Map();
+    for (const path of paths) {
+      const bytes = await readFile(join(root, path));
+      assert.ok(!bytes.includes(0), `${path}: expected text, not binary`);
+      assert.deepEqual(Buffer.from(bytes.toString('utf8')), bytes, `${path}: valid UTF-8`);
+      const source = Buffer.from(bytes.toString('utf8').replace(/\r\n/g, '\n'));
+      sources.set(path, source);
+      await mkdir(dirname(join(fixture, path)), { recursive: true });
+      await writeFile(join(fixture, path), source);
+    }
     const workflow = join(fixture, '.github/workflows/ci.yml');
-    await writeFile(workflow, source);
+    const binary = Buffer.from([0, 13, 10, 255, 10]);
+    if (packaged) await writeFile(join(fixture, 'bin/control.bin'), binary);
     if (attributes) await writeFile(join(fixture, '.gitattributes'), attributes);
-    git('add', '--', '.github/workflows/ci.yml', ...(attributes ? ['.gitattributes'] : []));
-    await rm(workflow);
-    git('checkout-index', '--', '.github/workflows/ci.yml');
+    const tracked = [...paths, ...(packaged ? ['bin/control.bin'] : [])];
+    git('add', '--', ...tracked, ...(attributes ? ['.gitattributes'] : []));
+    for (const path of tracked) await rm(join(fixture, path));
+    git('checkout-index', '--', ...tracked);
     const checkedOut = await readFile(workflow, 'utf8');
     const options = JSON.parse(await readFile(join(root, '.prettierrc.json'), 'utf8'));
-    return { crlf: checkedOut.includes('\r\n'),
+    const result = { crlf: checkedOut.includes('\r\n'),
       formatted: await prettier.check(checkedOut, { ...options, filepath: workflow }) };
+    if (packaged) {
+      const nonLf = [];
+      const uncovered = [];
+      for (const path of paths.slice(1)) {
+        if (!(await readFile(join(fixture, path))).equals(sources.get(path))) nonLf.push(path);
+        const attrs = git('check-attr', '-z', 'text', 'eol', '--', path).split('\0');
+        if (attrs[2] !== 'set' || attrs[5] !== 'lf') uncovered.push(path);
+      }
+      assert.deepEqual(await readFile(join(fixture, 'bin/control.bin')), binary);
+      for (const path of ['bin/control.bin', 'tests/control.js', 'openspec/changes/archive/control.md']) {
+        const attrs = git('check-attr', '-z', 'text', 'eol', '--', path).split('\0');
+        assert.equal(attrs[2], 'unspecified', path);
+        assert.equal(attrs[5], 'unspecified', path);
+      }
+      return { ...result, nonLf, uncovered };
+    }
+    return result;
   } finally {
     await rm(fixture, { recursive: true, force: true });
     await assert.rejects(access(fixture), { code: 'ENOENT' });
@@ -168,4 +213,18 @@ test('repository attributes keep CI checkout LF and formatted with autocrlf=true
   const attributes = await readFile(new URL('../.gitattributes', import.meta.url), 'utf8')
     .catch((error) => { if (error.code === 'ENOENT') return ''; throw error; });
   assert.deepEqual(await checkoutWorkflow(attributes), { crlf: false, formatted: true });
+});
+
+test('shipped text checkout calibration covers every input without converting binaries', { timeout: 60_000 }, async () => {
+  const workflowOnly = await checkoutWorkflow('.github/workflows/*.yml text eol=lf\n', true);
+  assert.deepEqual(workflowOnly.nonLf, await packageInputs());
+  assert.deepEqual(workflowOnly.uncovered, await packageInputs());
+  assert.deepEqual(await checkoutWorkflow(lfPolicy, true),
+    { crlf: false, formatted: true, nonLf: [], uncovered: [] });
+});
+
+test('repository attributes preserve canonical shipped text on autocrlf checkout', { timeout: 30_000 }, async () => {
+  const attributes = await readFile('.gitattributes', 'utf8');
+  assert.deepEqual(await checkoutWorkflow(attributes, true),
+    { crlf: false, formatted: true, nonLf: [], uncovered: [] });
 });
