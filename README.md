@@ -201,6 +201,106 @@ It connects only to the local broker. Keep `serve` running.
 The server advertises MCP protocol `2025-11-25` and exposes five tools: `prepare_approval`,
 `request_approval`, `get_approval`, `cancel_approval`, and `acknowledge_approval`.
 
+## Give your agent the Proceed skill
+
+Install the [Proceed skill](skills/proceed/SKILL.md) so your agent can load the Telegram approval
+workflow without you repeating its steps. It covers asking for approval or request-specific
+instructions, acknowledging decisions, and retrieving a request after a lost wait.
+
+The skill is reusable instructions, not a new approval mechanism. It does not start the broker,
+execute actions, answer native permission prompts, or widen your agent's permissions. Loading it
+does not guarantee that every model will follow it correctly.
+
+### Obtain and install the file
+
+The skill comes from the [public repository](https://github.com/renl/proceed-mcp), separately from
+the npm runtime. The published `0.1.0-preview.1` package does not contain or install the skill.
+Repository README changes do not update that already-published package.
+
+1. In the repository, select a release or commit that contains `skills/proceed/SKILL.md`. Confirm
+   the file exists at that revision, open it, and record the full source commit hash. A planning
+   commit without the file is not an installation source.
+2. Obtain the complete file from that revision, including its YAML frontmatter. Use GitHub's raw
+   file view to download it, or copy the file from a checkout of that same revision. Do not save
+   the GitHub HTML page as the skill.
+3. In the project where you want to use Proceed, inspect any existing destination before replacing
+   it. Preserve local changes and resolve any duplicate `proceed` definition intentionally.
+4. Create `.opencode/skills/proceed/` in that consuming project and copy the complete file to
+   `.opencode/skills/proceed/SKILL.md`. Keep the installed contents identical to your chosen source.
+
+This is a project-local copy, not a global installation. No installer command or companion files
+are needed. Keep the directory name `proceed` and the filename `SKILL.md` exactly as shown.
+
+### Discover and explicitly load
+
+OpenCode V2 uses the skill's description to advertise its Telegram approval and instruction use
+cases to a permitted agent. Advertising shows the ID and description, not the full instructions.
+It does not mean the agent has loaded the skill or will invoke it automatically.
+
+In that consuming project, explicitly load it by including `@proceed` in your prompt:
+
+```text
+@proceed Load the Proceed workflow before we use Telegram approval.
+```
+
+Where tool-based loading is needed, the agent calls the `skill` tool with the exact, case-sensitive
+ID (`id: proceed`):
+
+```json
+{ "id": "proceed" }
+```
+
+Loading requires the selected agent's permission. Confirm that the returned instructions are the
+installed Proceed workflow before continuing. See the [OpenCode V2 skills guide](https://opencode.ai/v2/docs/skills/)
+for the discovery and loading contract.
+
+### Try one harmless approval
+
+Starting from empty state? First [install the runtime](#install), then follow
+[Set up the broker and Telegram](#set-up-the-broker-and-telegram), including
+[adding an owner](#2-add-one-owner), [pairing the private chat](#5-pair-the-private-chat), and
+[connecting your MCP client](#6-connect-an-mcp-client). Keep the foreground broker running.
+Installing the skill alone does not configure or connect the MCP server.
+
+Once setup is complete, use the installed skill in a new agent session:
+
+```text
+@proceed Run a harmless Proceed first-use check. Prepare one request, retain its private authority,
+then request approval with a fresh client_request_id, action "Proceed skill first-use check",
+context "Test only. No consequential action, shell command, or file modification is authorized.",
+and expires_in_seconds 300. Wait for my Telegram decision. Do not perform the proposed action.
+If approved, check the matching request_id, acknowledge the returned decision_id, and report a
+receipt naming the request_id and outcome without the request_capability.
+```
+
+1. Wait for the Telegram question. Preparation alone sends no question.
+2. While `request_approval` is still waiting, select **Approve** in the paired private chat.
+3. Check that the waiting call returns the prepared `request_id` and `resolution: approved`.
+   The agent should acknowledge that same request's returned `decision_id` using
+   `acknowledge_approval`, then give a capability-free receipt identifying the request and outcome.
+4. Confirm the acknowledgement succeeded. A failed acknowledgement is not confirmed receipt.
+   No proposed action, command, or file change should run during this check.
+
+These are expected results to check, not a claim that your installation has been verified.
+Rejection, Respond instructions, pending status, expiry, cancellation, and errors are not approval.
+For additional manual outcome checks, see [First manual test](#first-manual-test).
+
+### If something is missing
+
+- **Skill absent or wrong instructions loaded:** check the consuming project's path and exact
+  `proceed` ID, the frontmatter description, advertising flags, selected agent's skill permission,
+  and conflicting definitions. Resolve the intended definition without weakening permissions.
+- **Proceed tools absent:** check the [MCP connection](#6-connect-an-mcp-client). A loaded skill
+  supplies instructions, not tools. Complete the linked broker, owner, and pairing setup as needed.
+- **Setup or tool error:** report the safe diagnostic and use [Common failures](#common-failures).
+  Do not claim approval or delivery, or share tokens, credentials, or request capabilities.
+- **Waiting call timed out or was lost:** this is not a successful active-wait check. In a later
+  authorized turn, retrieve the same request with `get_approval` using its retained `request_id`
+  and private `request_capability` under the same transport principal. Do not send a replacement
+  question just because the wait ended. Retrieval does not wake or automatically resume the agent.
+  If the capability or matching principal is unavailable, report retrieval as blocked. Do not
+  recover through credential stores or another session. See [Decisions and delivery](#decisions-and-delivery).
+
 ## MCP tools
 
 | Tool                   | Arguments                                                                                                       | Effect                                                                                                                      |
