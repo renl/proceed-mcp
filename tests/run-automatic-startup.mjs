@@ -100,6 +100,13 @@ try {
     'tests/support/automatic-startup.mjs',
     'tests/fixtures/automatic-startup-preload.mjs',
     'tests/fixtures/automatic-startup-certificate.mjs',
+    'tests/automatic-startup-regressions.mjs',
+    'tests/portable-runtime-scheduling.test.mjs',
+    'tests/portable-activation.test.mjs',
+    'tests/fixtures/runtime-scheduling-preload.mjs',
+    'tests/fixtures/portable-telegram-preload.mjs',
+    'tests/fixtures/portable-clock-preload.mjs',
+    'tests/fixtures/portable-faults-preload.mjs',
     // Existing Telegram fixture's static dependency closure. No live suites are run.
     'tests/support/portable-waiting.mjs',
     'tests/support/managed-spike.mjs',
@@ -116,16 +123,18 @@ try {
   await writeFile(join(directory, 'input-paths.json'), JSON.stringify(files));
   const mode = process.argv[2] ?? 'checkpoint';
   assert.ok(
-    ['checkpoint', 'platform', 'dispatcher'].includes(mode),
+    ['checkpoint', 'platform', 'dispatcher', 'regressions'].includes(mode),
     'explicit bounded checkpoint selection',
   );
   const args =
-    mode === 'dispatcher'
-      ? ['--test', '--test-reporter=tap', '/workspace/tests/automatic-startup-cli.test.mjs']
-      : [
-          'tests/automatic-startup-checkpoint.mjs',
-          ...(mode === 'platform' ? ['--tls-platform-only'] : []),
-        ];
+    mode === 'regressions'
+      ? ['tests/automatic-startup-regressions.mjs']
+      : mode === 'dispatcher'
+        ? ['--test', '--test-reporter=tap', '/workspace/tests/automatic-startup-cli.test.mjs']
+        : [
+            'tests/automatic-startup-checkpoint.mjs',
+            ...(mode === 'platform' ? ['--tls-platform-only'] : []),
+          ];
   await progress(`run-${mode}`);
   const result = await docker(
     [

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:crypto';
-import { readFile, writeFile, mkdir, mkdtemp, stat, access } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, mkdtemp, stat, access, appendFile } from 'node:fs/promises';
 import { createServer, connect } from 'node:net';
 import http from 'node:http';
 import tls from 'node:tls';
@@ -115,7 +115,7 @@ export async function lockAt(state) {
 
 // Independent real TLS/HTTP proof client. Never reused by production.
 // Authority is assembled only after secureConnect, profile and stable-record checks.
-export async function exchange(lock, token, path = '/v1/ready', body, extra = {}) {
+export async function exchange(lock, token, path = '/v1/ready', body, extra = {}, options = {}) {
   let calls = 0;
   const socket = tls.connect({
     ...profile,
@@ -146,7 +146,7 @@ export async function exchange(lock, token, path = '/v1/ready', body, extra = {}
     socket.disableRenegotiation();
     if (lock.path)
       assert.ok((await readFile(lock.path)).equals(lock.bytes), 'stable record before authority');
-    const data = body === undefined ? '' : JSON.stringify(body);
+    const data = options.rawBody ?? (body === undefined ? '' : JSON.stringify(body));
     agent = new http.Agent({ keepAlive: false });
     agent.createConnection = (_options, done) => {
       done(null, socket);
@@ -157,7 +157,7 @@ export async function exchange(lock, token, path = '/v1/ready', body, extra = {}
           host: '127.0.0.1',
           port: lock.port,
           path,
-          method: body === undefined ? 'GET' : 'POST',
+          method: options.method ?? (body === undefined ? 'GET' : 'POST'),
           agent,
           headers: {
             authorization: `Bearer ${token}`,
@@ -214,6 +214,7 @@ export async function context(root) {
     const value = JSON.stringify({ phase, at: Date.now() });
     await writeFile(join(directory, 'progress.json'), value);
     await writeFile('/evidence/phase.json', value);
+    await appendFile('/evidence/phase-history.jsonl', `${value}\n`);
   };
   const env = {
     PATH: process.env.PATH,

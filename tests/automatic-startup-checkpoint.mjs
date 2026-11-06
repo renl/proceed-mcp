@@ -3,13 +3,27 @@
 // Architecture: design.md sections 1-6, especially STARTUP-BOUNDARY-001.
 // Run only through the isolated Ubuntu/Node environment documented in tasks.md.
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
-import { readFile, writeFile, mkdir, stat, chmod, rm, readdir } from 'node:fs/promises';
+import { randomBytes, createHash } from 'node:crypto';
+import {
+  readFile,
+  writeFile,
+  mkdir,
+  stat,
+  chmod,
+  rm,
+  readdir,
+  symlink,
+  link,
+  realpath,
+} from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import net from 'node:net';
 import tls from 'node:tls';
 import http from 'node:http';
+import { rpcPeer } from './support/spike-rpc.mjs';
+import { success, question, authority } from './support/portable-waiting.mjs';
+import { awaitSecureAvailability } from '../src/broker/availability.js';
 import { cert, key as certificateKey } from './fixtures/automatic-startup-certificate.mjs';
 import {
   context,
@@ -71,10 +85,16 @@ const outerTimer = setTimeout(() => {
   process.exit(1);
 }, 540000);
 
-async function check(id, work) {
+async function check(id, work, { independent = false } = {}) {
   current = id;
   await c.progress(id);
-  await work();
+  try {
+    await work();
+  } catch (error) {
+    if (!independent) throw error;
+    results.push({ id, status: 'FAIL' });
+    return;
+  }
   results.push({ id, status: 'PASS' });
 }
 
@@ -156,7 +176,7 @@ async function scan(path, forbidden) {
 
 // Test-only peer for real client capture/relay attacks. It is not an app server
 // substitute: app authorization and drain are checked separately against the CLI.
-function lifecyclePeer(lock, control, received, afterReady) {
+function lifecyclePeer(lock, control, received, afterReady, override = {}, respond) {
   const parser = http.createServer((req, res) => {
     received.push({
       path: req.url,
@@ -176,9 +196,10 @@ function lifecyclePeer(lock, control, received, afterReady) {
         local_ready: true,
         paired: false,
         telegram: { state: 'disabled', code: 'TOKEN_MISSING' },
+        ...override,
       };
       Promise.resolve(afterReady?.())
-        .then(() => res.end(JSON.stringify(body)))
+        .then(() => (respond ? respond(req, res, body) : res.end(JSON.stringify(body))))
         .catch(() => res.destroy());
     } else {
       res.writeHead(503);
@@ -355,6 +376,86 @@ try {
       await chmod(credential, 0o600);
     });
 
+    await check('AUTO-CREDENTIAL-INPUT-PATH-INVARIANTS', async () => {
+      for (const [index, input] of [
+        '',
+        ' ',
+        'a b',
+        'a\nb',
+        '\ufefftoken',
+        'a\0b',
+        'x'.repeat(4099),
+      ].entries()) {
+        const destination = join(c.directory, `invalid-${index}/telegram.token`);
+        const result = await c.cli(
+          ['telegram', 'provision', '--token-stdin', '--telegram-token-file', destination],
+          { state, input },
+        );
+        assert.equal(result.code, 2, 'invalid input is not provisioned');
+        assert.equal(await absent(destination), true);
+      }
+      for (const [index, input] of ['a', 'b\n', 'c\r\n', 'd'.repeat(4096)].entries()) {
+        const destination = join(c.directory, `valid-${index}/telegram.token`);
+        assert.equal(
+          (
+            await c.cli(
+              ['telegram', 'provision', '--token-stdin', '--telegram-token-file', destination],
+              { state, input },
+            )
+          ).code,
+          0,
+        );
+        assert.equal(await readFile(destination, 'utf8'), `${input.replace(/\r?\n$/, '')}\n`);
+      }
+      const canonical = await realpath(state);
+      const stateKey = createHash('sha256').update(canonical).digest('hex');
+      assert.equal(
+        (await c.cli(['telegram', 'provision', '--token-stdin'], { state, input: token })).code,
+        0,
+      );
+      assert.equal(
+        await readFile(
+          join(c.directory, '.proceed-mcp-credentials', stateKey, 'telegram.token'),
+          'utf8',
+        ),
+        `${token}\n`,
+      );
+      const linkedParent = join(c.directory, 'linked-parent');
+      await symlink(join(c.directory, 'dedicated-credentials'), linkedParent);
+      const hard = join(c.directory, 'dedicated-credentials/hard.token');
+      await link(credential, hard);
+      const linkedFile = join(c.directory, 'dedicated-credentials/link.token');
+      await symlink(credential, linkedFile);
+      for (const path of [
+        credential,
+        hard,
+        linkedFile,
+        join(linkedParent, 'telegram.token'),
+        join(state, 'forbidden.token'),
+      ]) {
+        const result = await c.cli(['serve', '--telegram-token-file', path], { state });
+        assert.equal(result.code, 4, 'unsafe/redirection/hard-link path fails closed');
+        assert.ok(result.output.includes('PROTECTION_UNVERIFIED'));
+        assert.equal(await absent(join(state, 'broker.lock')), true);
+      }
+      await rm(hard);
+      assert.equal(await readFile(credential, 'utf8'), `${token}\n`);
+      const unsafeParent = join(c.directory, 'unsafe-parent');
+      await mkdir(unsafeParent, { mode: 0o755 });
+      const destination = join(unsafeParent, 'telegram.token');
+      assert.equal(
+        (
+          await c.cli(
+            ['telegram', 'provision', '--token-stdin', '--telegram-token-file', destination],
+            { state, input: token },
+          )
+        ).code,
+        4,
+      );
+      assert.equal(await absent(destination), true);
+      assert.equal((await stat(unsafeParent)).mode & 0o777, 0o755, 'no implicit repair');
+    });
+
     // Existing synthetic Telegram protocol fixture is reused unchanged. Only
     // process inheritance/token handling needed a different preload.
     const { telegramFixture } = await import('./support/portable-waiting.mjs');
@@ -465,6 +566,32 @@ try {
       const wrong = await exchange(lock, 'wrong-synthetic-bearer');
       assert.equal(wrong.status, 401);
       assert.equal(wrong.body.error.code, 'AUTH_REQUIRED');
+      for (const body of [{}, { instance: lock.instance, extra: true }, { instance: 'invalid' }]) {
+        const denied = await exchange(lock, control, '/v1/shutdown', body);
+        assert.equal(denied.status, 400);
+        assert.equal(denied.body.error.code, 'INVALID_ARGUMENT');
+      }
+      assert.equal(
+        (
+          await exchange(
+            lock,
+            control,
+            '/v1/shutdown',
+            undefined,
+            {},
+            { method: 'POST', rawBody: '{' },
+          )
+        ).status,
+        400,
+      );
+      assert.equal(
+        (
+          await exchange(lock, 'wrong-synthetic-bearer', '/v1/shutdown', {
+            instance: lock.instance,
+          })
+        ).status,
+        401,
+      );
       assert.equal(
         (await exchange(lock, owner, '/v1/shutdown', { instance: lock.instance })).status,
         403,
@@ -500,6 +627,115 @@ try {
       );
       stopped = true;
     });
+
+    const publicWorkflow = async () => {
+      stopped = false;
+      const connect = async () => {
+        const resource = c.start(['mcp', '--owner', 'alice', '--telegram-token-file', credential], {
+          state,
+        });
+        const peer = rpcPeer(resource.child);
+        await peer.handshake();
+        return {
+          resource,
+          peer,
+          call: (name, args) =>
+            peer.call('tools/call', { name, arguments: args }, { ms: 15000 }).outcome,
+        };
+      };
+      const first = await connect();
+      await c.progress('AUTO-PUBLIC-MCP-COLD-START-PAIR');
+      await ready(state);
+      const paired = await c.cli(['pair', '--telegram-token-file', credential], { state });
+      assert.equal(paired.code, 0, 'pair reuses automatically started broker');
+      const code = /Pairing code: (\S+)/.exec(paired.output)?.[1];
+      assert.match(code, /^[a-f0-9]{32}$/);
+      telegram.text(`/pair ${code}`);
+      await until(
+        () => telegram.messages.some((m) => !m.reply_markup),
+        8000,
+        'paired human confirmation',
+      );
+      await c.progress('AUTO-PUBLIC-PREPARE-AND-PENDING');
+      const preparation = await first.call('prepare_approval', {
+        session_label: 'Synthetic durable session',
+      });
+      const prepared = success(preparation);
+      const waiting = first.call('request_approval', question(prepared));
+      const message = await until(
+        () =>
+          telegram.messages.find(
+            (m) => m.text.includes(prepared.request_id) && m.reply_markup?.inline_keyboard,
+          ),
+        8000,
+        'public request presentation',
+      );
+      const pending = success(await first.call('get_approval', authority(prepared)));
+      assert.equal(pending.resolution, 'pending');
+      first.resource.child.stdin.end();
+      await c.progress('AUTO-PUBLIC-LOST-CALL-EOF');
+      await c.finish(first.resource, 10000);
+      assert.equal(
+        (await waiting).kind,
+        'transport-closed',
+        'lost waiting call is not a fabricated human result',
+      );
+      first.peer.close();
+      assert.equal((await c.cli(['stop'], { state })).code, 0);
+      const second = await connect();
+      await c.progress('AUTO-PUBLIC-RESTORED-PENDING');
+      const restored = success(await second.call('get_approval', authority(prepared)));
+      assert.equal(restored.request_id, prepared.request_id);
+      assert.equal(restored.resolution, 'pending');
+      telegram.choose(message, 't');
+      await c.progress('AUTO-PUBLIC-RESPOND-PROMPT');
+      const prompt = await until(
+        () =>
+          telegram.messages.find(
+            (m) => m.text.includes(prepared.request_id) && m.reply_markup?.force_reply,
+          ),
+        8000,
+        'Respond prompt after automatic restart',
+      );
+      const text = '  inspect this exact instruction\nnot approval  ';
+      telegram.text(text, prompt);
+      const terminal = await until(
+        async () => {
+          const result = success(await second.call('get_approval', authority(prepared)));
+          return result.resolution === 'responded' && result;
+        },
+        8000,
+        'paired-human response committed',
+      );
+      assert.equal(terminal.request_id, prepared.request_id);
+      assert.equal(terminal.response_text, text);
+      assert.match(terminal.decision_id, /^dec_[a-f0-9]{32}$/);
+      second.resource.child.stdin.end();
+      await c.finish(second.resource, 10000);
+      second.peer.close();
+      assert.equal((await c.cli(['stop'], { state })).code, 0);
+      const third = await connect();
+      await c.progress('AUTO-PUBLIC-RESTORED-TERMINAL');
+      const reread = success(await third.call('get_approval', authority(prepared)));
+      assert.equal(reread.decision_id, terminal.decision_id);
+      assert.equal(reread.response_text, text);
+      third.resource.child.stdin.end();
+      await c.finish(third.resource, 10000);
+      third.peer.close();
+      assert.equal((await c.cli(['stop'], { state })).code, 0);
+      await closed(state, setup.config.broker.port);
+      stopped = true;
+      const capability = prepared.request_capability;
+      await c.progress('AUTO-PUBLIC-DISCLOSURE-SCAN');
+      assert.ok(
+        !first.resource.output.replace(JSON.stringify(preparation.frame), '').includes(capability),
+        'capability appears only in its private preparation result',
+      );
+      for (const resource of [second.resource, third.resource])
+        assert.ok(!resource.output.includes(capability));
+      assert.ok(!JSON.stringify(telegram.calls).includes(capability));
+      await scan(state, [...c.secrets, capability]);
+    };
 
     await check('AUTO-IMPOSTOR-CAPTURE-RECONNECT-REPLACEMENT', async () => {
       const synthetic = await setupState('impostor-state');
@@ -583,6 +819,36 @@ try {
         );
         assert.equal(admitted, 0, 'wrong-key endpoint cannot enter HTTP');
         if (kind === 'legacy-schema-1') {
+          for (const command of [['pair'], ['stop']]) {
+            await c.progress(`AUTO-LEGACY-${command[0].toUpperCase()}-REFUSAL`);
+            const refusal = await c.cli(command, { state: synthetic.path });
+            assert.equal(refusal.code, 3);
+            assert.ok(
+              refusal.output.includes('BROKER_INSTANCE_CONFLICT') &&
+                refusal.output.includes('--secure-local'),
+            );
+          }
+          const adapter = c.start(['mcp', '--owner', 'alice'], { state: synthetic.path });
+          await c.progress('AUTO-LEGACY-MCP-REFUSAL');
+          const peer = rpcPeer(adapter.child);
+          await peer.handshake();
+          const outcome = await peer.call(
+            'tools/call',
+            { name: 'prepare_approval', arguments: {} },
+            { ms: 10000 },
+          ).outcome;
+          assert.equal(outcome.kind, 'response');
+          assert.equal(outcome.frame.result.isError, true);
+          assert.equal(outcome.frame.result.structuredContent.error.code, 'BROKER_UNAVAILABLE');
+          await c.progress('AUTO-LEGACY-MCP-UPGRADE-GUIDANCE');
+          results.push({
+            id: 'AUTO-LEGACY-MCP-UPGRADE-GUIDANCE',
+            status: JSON.stringify(outcome).includes('--secure-local') ? 'PASS' : 'FAIL',
+          });
+          adapter.child.stdin.end();
+          await c.finish(adapter, 10000);
+          peer.close();
+          await c.progress('AUTO-LEGACY-ZERO-WIRE-BYTES');
           assert.equal(
             Buffer.concat(chunks).length,
             0,
@@ -594,6 +860,7 @@ try {
           );
         }
         for (const capture of [Buffer.concat(chunks), Buffer.concat(plaintext)]) {
+          await c.progress('AUTO-IMPOSTOR-CAPTURE-NO-AUTHORITY');
           for (const secret of [
             control,
             key.toString('hex'),
@@ -604,6 +871,7 @@ try {
           }
         }
         assert.equal(await readFile(path, 'utf8'), bytes, 'refusal preserves ownership');
+        await c.progress('AUTO-IMPOSTOR-PRESERVE-STATE');
         for (const [name, before] of stateBefore)
           assert.ok(
             (await readFile(join(synthetic.path, name))).equals(before),
@@ -734,9 +1002,128 @@ try {
         } else await removeSynthetic(lock);
       }
     });
+    await check(
+      'AUTO-LIFECYCLE-ENVELOPE-REFUSALS',
+      async () => {
+        const setup = await setupState('envelope-state');
+        const before = await readFile(join(setup.path, 'journal.log'));
+        let failures = 0;
+        for (const [id, override] of [
+          ['AUTO-ENVELOPE-PID', { pid: process.pid + 100000 }],
+          [
+            'AUTO-ENVELOPE-PORT',
+            { port: setup.config.broker.port === 65535 ? 65534 : setup.config.broker.port + 1 },
+          ],
+          ['AUTO-ENVELOPE-INSTANCE', { instance: 'f'.repeat(32) }],
+          ['AUTO-ENVELOPE-VERSION', { lifecycle_version: 2 }],
+          ['AUTO-ENVELOPE-PAIRED-TYPE', { paired: 'false' }],
+          ['AUTO-ENVELOPE-TELEGRAM-STATE', { telegram: { state: 'invented', code: null } }],
+        ]) {
+          const lock = await syntheticLock(setup);
+          try {
+            const received = [];
+            const server = lifecyclePeer(lock, 'synthetic-control', received, undefined, override);
+            await listen(server, setup.config.broker.port);
+            await assert.rejects(
+              awaitSecureAvailability({
+                lockFile: lock.path,
+                port: setup.config.broker.port,
+                token: 'synthetic-control',
+                budgetMs: 3000,
+              }),
+              (e) => e.code === 'BROKER_INSTANCE_CONFLICT',
+            );
+            assert.ok((await readFile(lock.path)).equals(lock.bytes));
+            assert.ok((await readFile(join(setup.path, 'journal.log'))).equals(before));
+            results.push({ id, status: 'PASS' });
+          } catch {
+            failures++;
+            results.push({ id, status: 'FAIL' });
+          } finally {
+            await c.closeServers();
+            await removeSynthetic(lock);
+          }
+        }
+        assert.equal(failures, 0, 'all lifecycle identity/type/state mismatches refuse adoption');
+      },
+      { independent: true },
+    );
+    await check(
+      'AUTO-READINESS-TRICKLE-BODY-LIMIT',
+      async () => {
+        const setup = await setupState('bounded-response-state');
+        for (const mode of ['trickle', 'oversize']) {
+          const lock = await syntheticLock(setup);
+          const durations = [];
+          const server = lifecyclePeer(
+            lock,
+            'synthetic-control',
+            [],
+            undefined,
+            {},
+            (req, res, body) => {
+              const start = performance.now();
+              if (mode === 'oversize') res.end(' '.repeat(16384) + JSON.stringify(body));
+              else {
+                res.writeHead(200);
+                res.write('{');
+                const interval = setInterval(() => res.write(' '), 50);
+                res.once('close', () => {
+                  clearInterval(interval);
+                  durations.push(performance.now() - start);
+                });
+              }
+            },
+          );
+          try {
+            await listen(server, setup.config.broker.port);
+            const start = performance.now();
+            await assert.rejects(
+              awaitSecureAvailability({
+                lockFile: lock.path,
+                port: setup.config.broker.port,
+                token: 'synthetic-control',
+                budgetMs: 1400,
+              }),
+            );
+            assert.ok(
+              performance.now() - start < 1700,
+              'one shortened absolute attempt, not inactivity extension',
+            );
+            await until(
+              () => mode !== 'trickle' || durations.length > 0,
+              1000,
+              'actual trickling socket aborted',
+            );
+            assert.ok(
+              durations.every((ms) => ms <= 1100),
+              '1000 ms absolute probe with bounded observation tolerance',
+            );
+            assert.ok((await readFile(lock.path)).equals(lock.bytes));
+          } finally {
+            await c.closeServers();
+            await removeSynthetic(lock);
+          }
+        }
+      },
+      { independent: true },
+    );
+    await check(
+      'AUTO-PAIR-COLD-START',
+      async () => {
+        const result = await c.cli(['pair', '--telegram-token-file', credential], { state });
+        if (!(await absent(join(state, 'broker.lock')))) {
+          assert.equal((await c.cli(['stop'], { state })).code, 0);
+          await closed(state, setup.config.broker.port);
+        }
+        assert.equal(result.code, 0, 'pair must ensure automatic availability from stopped state');
+      },
+      { independent: true },
+    );
+    await check('AUTO-PUBLIC-MCP-RESPOND-DURABLE-RESTART', publicWorkflow, { independent: true });
     await scan(state, c.secrets);
     c.cleanOutput();
-    assertions = true;
+    assertions = results.every((result) => result.status === 'PASS');
   }
 } catch {
   // Never publish assertion actual/expected values, TLS errors, output or keys.
