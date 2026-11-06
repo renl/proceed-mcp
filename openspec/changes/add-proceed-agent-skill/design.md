@@ -32,13 +32,13 @@ The `package.json` files allowlist currently includes `bin`, `src`, and `README.
 
 The installed skill shall instruct the agent to inspect its actual exposed tools, including their namespace or access mode. Use the logical names below without assuming one host prefix. Exposed definitions govern argument constraints and returned structures.
 
-| Tool | Guidance responsibility |
-| --- | --- |
-| `prepare_approval` | Obtain and privately retain `request_handle`, `request_id`, and `request_capability`. Preparation sends no actionable Telegram question. |
-| `request_approval` | Use the prepared handle and capability with `client_request_id`, exact `action`, distinguishing `context`, and optional `expires_in_seconds`. This creates or replays one request and waits for the actual outcome. |
-| `get_approval` | Retrieve the same request using retained `request_id` and `request_capability` under the same transport principal. Retrieval is observation, not agent resumption. |
-| `cancel_approval` | Use only for authorized explicit closure of that request. Do not cancel merely because a wait was lost. A terminal outcome remains unchanged. |
-| `acknowledge_approval` | Acknowledge the returned matching `decision_id` with the retained request identity and capability. Do not claim confirmation if this call fails. |
+| Tool                   | Guidance responsibility                                                                                                                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prepare_approval`     | Obtain and privately retain `request_handle`, `request_id`, and `request_capability`. Preparation sends no actionable Telegram question.                                                                            |
+| `request_approval`     | Use the prepared handle and capability with `client_request_id`, exact `action`, distinguishing `context`, and optional `expires_in_seconds`. This creates or replays one request and waits for the actual outcome. |
+| `get_approval`         | Retrieve the same request using retained `request_id` and `request_capability` under the same transport principal. Retrieval is observation, not agent resumption.                                                  |
+| `cancel_approval`      | Use only for authorized explicit closure of that request. Do not cancel merely because a wait was lost. A terminal outcome remains unchanged.                                                                       |
+| `acknowledge_approval` | Acknowledge the returned matching `decision_id` with the retained request identity and capability. Do not claim confirmation if this call fails.                                                                    |
 
 The skill shall explain outcome handling by reference to the existing approval and delivery contracts. Read `resolution` separately from `delivery_state`. Only `approved` permits the identified action within existing permissions. `responded` preserves the exact instructions and never supplies approval. Rejection, expiry, cancellation, pending status, silence, and errors authorize nothing. Deduplicate by `(request_id, decision_id)` before any action. Receipt or replay never authorizes a second effect.
 
