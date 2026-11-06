@@ -12,35 +12,29 @@ const readSkill = () => readFile(skillPath, 'utf8');
 const readReadme = () => readFile(resolve(root, 'README.md'), 'utf8');
 
 // Lexical coverage only. The scenario review in tasks.md establishes meaning.
+const tools = 'prepare_approval request_approval get_approval cancel_approval acknowledge_approval';
+const literalCoverage = {
+  'five tools': tools,
+  'request authority': 'request_handle request_id request_capability client_request_id',
+  'outcome and receipt': 'delivery_state decision_id',
+  'retained recovery': 'NOT_FOUND',
+  'truthful limitations': 'Events doctor retry',
+};
 const coverage = [
-  [
-    'five tools',
-    /prepare_approval/,
-    /request_approval/,
-    /get_approval/,
-    /cancel_approval/,
-    /acknowledge_approval/,
-  ],
+  ...Object.entries(literalCoverage).map(([group, terms]) => [
+    group,
+    ...terms.split(' ').map((term) => new RegExp(term)),
+  ]),
   [
     'exposed contract',
     /exposed|available tool/i,
     /definition|schema/i,
     /namespace|prefix|access mode/i,
   ],
-  [
-    'request authority',
-    /request_handle/,
-    /request_id/,
-    /request_capability/,
-    /client_request_id/,
-    /\baction\b/,
-    /\bcontext\b/,
-  ],
+  ['request authority', /\baction\b/, /\bcontext\b/],
   [
     'outcome and receipt',
     /\bresolution\b/,
-    /delivery_state/,
-    /decision_id/,
     /acknowledg/i,
     /receipt/i,
     /deduplic|at.most.once|repeated action/i,
@@ -62,7 +56,6 @@ const coverage = [
     'retained recovery',
     /timeout|lost wait/i,
     /same.{0,40}principal/is,
-    /NOT_FOUND/,
     /duplicate|replacement/i,
     /block/i,
     /resum|continuation/i,
@@ -78,16 +71,7 @@ const coverage = [
     /label/i,
     /authenticat/i,
   ],
-  [
-    'truthful limitations',
-    /broker/i,
-    /pair/i,
-    /native/i,
-    /Events/,
-    /doctor/,
-    /retry/,
-    /automatic/i,
-  ],
+  ['truthful limitations', /broker/i, /pair/i, /native/i, /automatic/i],
 ];
 function missingCoverage(text) {
   return coverage.flatMap(([group, ...patterns]) =>
@@ -95,17 +79,52 @@ function missingCoverage(text) {
   );
 }
 
-test('installable guidance: exact artifact ID, description and advertising', async () => {
-  const text = await readSkill();
+// Supported frontmatter: scalar name/flags, literal or folded description,
+// and an indented metadata mapping. This is not a general YAML/host parser.
+function guidanceMetadata(text) {
   const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
   assert.ok(frontmatter, 'SKILL.md needs YAML frontmatter');
   assert.match(frontmatter, /^name:\s*['"]?proceed['"]?\s*$/m);
-  const description = frontmatter.match(/^description:\s*(.+)$/m)?.[1];
+  const descriptionValue = frontmatter.match(/^description:[ \t]*([^\r\n]*)/m)?.[1];
+  const description = /^[|>][+-]?(?:\s+#.*)?$/.test(descriptionValue ?? '')
+    ? frontmatter.match(/^description:[^\r\n]*\r?\n((?:(?:[ \t]+[^\r\n]*|)\r?\n?)*)/m)?.[1]
+    : descriptionValue;
   assert.ok(description, 'description must advertise the use case');
-  assert.match(description, /Telegram/i);
-  assert.match(description, /approval/i);
-  assert.match(description, /instruction/i);
-  assert.doesNotMatch(frontmatter, /^disable-model-invocation:\s*true\s*$/im);
+  for (const term of [/Telegram/i, /approval/i, /instruction/i]) assert.match(description, term);
+  const metadata = frontmatter.match(/^metadata:[ \t]*\r?\n((?:[ \t]+[^\r\n]*(?:\r?\n|$))*)/m)?.[1];
+  const autoinvoke = metadata?.match(
+    /^[ \t]+['"]?opencode\/autoinvoke['"]?:[ \t]*(true|false)[ \t]*(?:#.*)?$/m,
+  )?.[1];
+  const disabled = /^disable-model-invocation:[ \t]*true[ \t]*(?:#.*)?$/m.test(frontmatter);
+  // Official V2 skills guide: metadata.opencode/autoinvoke wins when both are set.
+  return autoinvoke === undefined ? !disabled : autoinvoke === 'true';
+}
+const explicitlyLoads = /(?:explicit\w*\b.{0,40}\bload\w*|\bload\w*\b.{0,40}\bexplicit\w*)/is;
+
+test('installable guidance: exact artifact ID, description and effective advertising', async () => {
+  assert.equal(guidanceMetadata(await readSkill()), true, 'skill must be advertised');
+});
+
+test('metadata controls: multiline descriptions and documented advertising precedence', () => {
+  for (const description of [
+    'Telegram approval and instructions',
+    '>\n  Telegram approval\n  and instructions',
+    '|-\n  Telegram approval\n  and instructions',
+  ]) {
+    for (const [flags, advertised] of [
+      ['', true],
+      ['disable-model-invocation: true', false],
+      ['metadata:\n  opencode/autoinvoke: false', false],
+      ['disable-model-invocation: false\nmetadata:\n  opencode/autoinvoke: false', false],
+      ['disable-model-invocation: true\nmetadata:\n  opencode/autoinvoke: true', true],
+    ]) {
+      const fixture = `---\nname: proceed\ndescription: ${description}\n${flags}\n---\n`;
+      assert.equal(guidanceMetadata(fixture), advertised, flags);
+    }
+  }
+  for (const wording of ['explicitly load the skill', 'load explicitly with @proceed'])
+    assert.match(wording, explicitlyLoads);
+  assert.doesNotMatch('The skill may be advertised automatically.', explicitlyLoads);
 });
 
 test('self-contained skill: no relative companion Markdown dependencies', async () => {
@@ -121,10 +140,8 @@ test('workflow coverage: public tools, outcomes, private authority and recovery'
 
 test('coverage checker negative controls reject missing contract terms', () => {
   // Test-only text, not production guidance and not a simulated approval result.
-  const inventory =
-    'prepare_approval request_approval get_approval cancel_approval acknowledge_approval';
-  for (const name of inventory.split(' ')) {
-    assert.ok(missingCoverage(inventory.replace(name, '')).some((item) => item.includes(name)));
+  for (const name of tools.split(' ')) {
+    assert.ok(missingCoverage(tools.replace(name, '')).some((item) => item.includes(name)));
   }
 });
 
@@ -156,7 +173,7 @@ test('README: source revision, project-local install, explicit load and limits',
     /@proceed/,
     /id:\s*['"]?proceed/,
     /advertis/i,
-    /explicit.{0,40}load/is,
+    explicitlyLoads,
     /existing.{0,80}(?:destination|file)|(?:inspect|check).{0,80}(?:destination|overwrite)/is,
     /conflict|duplicate/i,
     /permission/i,
