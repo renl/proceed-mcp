@@ -1,17 +1,17 @@
 # proceed-mcp
 
-Telegram approvals for MCP agents.
+Review your MCP agent's approval requests from Telegram.
 
-An MCP server that sends an approval request to a private Telegram chat and returns the paired
-human's decision through the waiting MCP call. The human can Approve, Reject, or Respond from
-Telegram. `proceed-mcp` records the outcome. It does not execute the requested action.
+`proceed-mcp` sends an agent's proposed action to your private Telegram chat. Choose Approve,
+Reject, or Respond with instructions, and the waiting MCP call receives your decision. Only an
+explicit Approve grants approval. The server records the outcome. It does not execute the action.
+
+To get started, install the package, pair your Telegram chat, and connect your MCP client using the
+steps below.
 
 > **Preview:** `@meshimize/proceed-mcp@0.1.0-preview.1` is published on npm and listed in the
 > official MCP Registry. Pin the exact version. MCP Events, automatic continuation after a timeout,
 > `doctor`, and `retry` are not implemented in this preview.
-
-The implemented scope is the loopback broker, private Telegram pairing and question display,
-Approve/Reject/Respond, expiry, cancellation, capability-authorized retrieval, and acknowledgement.
 
 ## Distribution
 
@@ -380,16 +380,8 @@ journal. There is no automatic stale-lock recovery in this preview.
 - No recovery of an exited MCP client or harness process, and no automatic session reattachment.
 - OpenCode V2 is the first validation harness. Other harnesses are not tested. The generic stdio
   command is available, but no multi-harness compatibility is claimed.
-- Node.js 24 or newer is the manifest floor. Other operating systems and Node versions have not been
-  tested.
+- Requires Node.js 24 or newer and the state-directory protections described above.
 - `doctor` is not implemented. `retry` reports unavailable.
-
-## Preview status
-
-This preview is published on npm and listed in the MCP Registry. Manual first use of the published
-package reported a working approval flow, and offline test evidence covers Windows with
-Node.js 24.22.2. Wider environments and broader failure paths have not been exercised. Publishing
-automation is not implemented.
 
 ## License
 
