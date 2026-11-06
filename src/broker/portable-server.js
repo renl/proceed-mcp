@@ -19,7 +19,8 @@
 // section 3). Adapter registration is an ephemeral reachability lease and never
 // touches approval state.
 import { createServer } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
+import { constants, timingSafeEqual } from 'node:crypto';
+import tls from 'node:tls';
 import {
   BrokerError,
   CliError,
@@ -35,6 +36,14 @@ import { DECISION_ID_PATTERN, isPlainObject } from '../util/values.js';
 import { createRegistrationRegistry } from './registration.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
+
+// The fixed public selector and the sole authorized negotiation profile of the
+// per-instance confidential local channel (design section 4).
+export const LOCAL_CHANNEL_IDENTITY = 'proceed-mcp-local-v1';
+export const LOCAL_CHANNEL_CIPHER = 'PSK-AES256-GCM-SHA384';
+const INSTANCE_PATTERN = /^[a-f0-9]{32}$/;
+const LIFECYCLE_VERSION = 1;
+const LIFECYCLE_SERVICE = 'proceed-mcp';
 
 const RETRY_UNAVAILABLE = 'request retry is not implemented in this setup checkpoint';
 const REQUEST_CAPABILITY_HEADER = 'x-proceed-request-capability';
@@ -139,10 +148,14 @@ export function createPortableServer({
   port,
   clock = () => Date.now(),
   logger = () => {},
+  secure = null,
+  lifecycle = null,
 } = {}) {
   let ready = false;
   let closing = false;
+  let stoppingInstance = null;
   let server = null;
+  let parser = null;
   // Registrations belong to this process, so the listener that admits them also
   // owns closing them.
   const registrations = createRegistrationRegistry({ clock, logger });
@@ -398,12 +411,102 @@ export function createPortableServer({
     }
   };
 
+  // Authenticated readiness (design section 4). The payload is exactly the
+  // documented lifecycle envelope and is published only after the caller proves
+  // the secure channel and a local credential; `local_ready` describes the local
+  // broker alone, never Telegram availability or human receipt.
+  const readyRoute = (response) => {
+    const health = lifecycle.health();
+    if (health !== null) {
+      send(response, 503, {
+        schema_version: 1,
+        error: {
+          code: health,
+          message: 'the broker cannot confirm local readiness',
+          retryable: false,
+        },
+      });
+      return;
+    }
+    if (!ready) {
+      send(
+        response,
+        503,
+        unavailable('the broker is still recovering state', 'BROKER_NOT_READY', {
+          retryable: true,
+        }).toEnvelope(),
+      );
+      return;
+    }
+    send(response, 200, {
+      schema_version: 1,
+      service: LIFECYCLE_SERVICE,
+      lifecycle_version: LIFECYCLE_VERSION,
+      instance: lifecycle.instance,
+      pid: process.pid,
+      port,
+      local_ready: true,
+      paired: lifecycle.paired() === true,
+      telegram: lifecycle.telegram(),
+    });
+  };
+
+  // Control-only graceful stop (design section 6). New admission is fenced before
+  // the 202 is acknowledged, the exact acquired instance must match, and the same
+  // stopping instance stays idempotent while this endpoint can still answer.
+  const shutdownRoute = async (request, response) => {
+    const body = await readJsonBody(request);
+    const keys = Object.keys(body);
+    if (
+      keys.length !== 1 ||
+      keys[0] !== 'instance' ||
+      typeof body.instance !== 'string' ||
+      !INSTANCE_PATTERN.test(body.instance)
+    ) {
+      throw invalidRequest('the shutdown body must be exactly {instance}');
+    }
+    if (body.instance !== lifecycle.instance) {
+      throw conflict('the broker instance does not match', 'BROKER_INSTANCE_CONFLICT');
+    }
+    closing = true;
+    stoppingInstance = lifecycle.instance;
+    ready = false;
+    send(response, 202, {
+      schema_version: 1,
+      instance: lifecycle.instance,
+      stopping: true,
+    });
+    // Drain starts only after the accepted response is written; the caller's 202
+    // means stop accepted, not complete.
+    setImmediate(() => {
+      try {
+        lifecycle.onShutdown();
+      } catch (error) {
+        logger(`broker stop was not requested: ${error?.code ?? 'UNEXPECTED'}`);
+      }
+    });
+  };
+
   const route = async (request, response, principal, url) => {
     const { pathname } = url;
     const segments = pathname.split('/').filter((segment) => segment !== '');
     const requestsPath = segments[0] === 'v1' && segments[1] === 'requests';
     const adapterPath = segments[0] === 'v1' && segments[1] === 'adapter';
     const requestRoute = requestsPath && segments.length === 4;
+
+    // Authenticated lifecycle routes exist only on the secure listener: legacy
+    // foreground HTTP gains no route that could invite a secure caller to
+    // downgrade. Both are admitted before the business routes.
+    if (secure !== null && pathname === '/v1/ready' && request.method === 'GET') {
+      readyRoute(response);
+      return;
+    }
+
+    if (secure !== null && pathname === '/v1/shutdown' && request.method === 'POST') {
+      if (!requireRole(response, principal, 'control')) return;
+      await shutdownRoute(request, response);
+      return;
+    }
 
     // Route shape precedes the role check, so an unknown adapter path stays 404.
     if (adapterPath && request.method === 'POST' && segments.length === 2) {
@@ -514,14 +617,24 @@ export function createPortableServer({
       if (typeof request.headers.origin === 'string') {
         throw forbidden('browser origins cannot use the local broker API');
       }
-      if (!ready) {
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      const lifecycleRoute =
+        secure !== null && (url.pathname === '/v1/ready' || url.pathname === '/v1/shutdown');
+      // The legacy listener keeps its original ordering; the secure listener
+      // authenticates before reporting either readiness outcome.
+      if (secure === null && !ready) {
         throw unavailable('the broker is still recovering state', 'BROKER_NOT_READY', {
           retryable: true,
         });
       }
       const principal = authorize(request);
       if (principal === null) throw authRequired();
-      await route(request, response, principal, new URL(request.url ?? '/', 'http://127.0.0.1'));
+      if (secure !== null && !ready && !(stoppingInstance !== null && lifecycleRoute)) {
+        throw unavailable('the broker is still recovering state', 'BROKER_NOT_READY', {
+          retryable: true,
+        });
+      }
+      await route(request, response, principal, url);
     } catch (error) {
       const { status, body } = failure(error);
       if (status >= 500) logger(`broker request failed: ${error?.code ?? 'UNEXPECTED'}`);
@@ -530,19 +643,60 @@ export function createPortableServer({
     }
   };
 
+  const onRequest = (request, response) => {
+    // A completed ordinary exchange must not keep its now-idle keep-alive
+    // socket open once the listener is closing: only idle transports are
+    // released, so an in-flight request is still drained by its own response.
+    response.on('finish', () => {
+      if (closing) setImmediate(() => parser?.closeIdleConnections?.());
+    });
+    handler(request, response);
+  };
+
+  // The secure listener serves the same HTTP application inside one TLS 1.2
+  // PSK-only channel. The server admits a connection only after the expected key
+  // callback and exact negotiated profile; a completed handshake is the
+  // admission oracle, not the client-certificate `authorized` flag.
+  const buildServer = () => {
+    if (secure === null) {
+      parser = createServer(onRequest);
+      return parser;
+    }
+    parser = createServer(onRequest);
+    const instance = tls.createServer(
+      {
+        minVersion: 'TLSv1.2',
+        maxVersion: 'TLSv1.2',
+        ciphers: LOCAL_CHANNEL_CIPHER,
+        secureOptions: constants.SSL_OP_NO_TICKET,
+        requestCert: false,
+        handshakeTimeout: 1000,
+        pskCallback: (_socket, selected) =>
+          selected === LOCAL_CHANNEL_IDENTITY ? secure.key : null,
+      },
+      (socket) => {
+        if (
+          socket.getProtocol() !== 'TLSv1.2' ||
+          socket.getCipher()?.name !== LOCAL_CHANNEL_CIPHER ||
+          socket.isSessionReused()
+        ) {
+          socket.destroy();
+          return;
+        }
+        socket.disableRenegotiation();
+        socket.on('error', () => {});
+        parser.emit('connection', socket);
+      },
+    );
+    instance.on('tlsClientError', () => {});
+    return instance;
+  };
+
   return {
     // Binds exactly the configured loopback port: the address is fixed, no
     // automatic port selection is attempted, and a busy port is a refusal.
     async listen() {
-      server = createServer((request, response) => {
-        // A completed ordinary exchange must not keep its now-idle keep-alive
-        // socket open once the listener is closing: only idle transports are
-        // released, so an in-flight request is still drained by its own response.
-        response.on('finish', () => {
-          if (closing) setImmediate(() => server?.closeIdleConnections());
-        });
-        handler(request, response);
-      });
+      server = buildServer();
       await new Promise((resolve, reject) => {
         server.once('error', reject);
         server.listen({ host: '127.0.0.1', port, exclusive: true }, resolve);
@@ -563,7 +717,7 @@ export function createPortableServer({
       // ordinary operation keeps its flush and committed-result response.
       for (const exchange of [...waitExchanges]) exchange.controller.abort();
       if (server === null) return;
-      server.closeIdleConnections();
+      parser?.closeIdleConnections?.();
       await new Promise((resolve) => server.close(() => resolve()));
       server = null;
     },
