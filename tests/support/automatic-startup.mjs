@@ -18,6 +18,20 @@ export const profile = {
   secureOptions: constants.SSL_OP_NO_TICKET,
 };
 
+export function assertJournalOwnership(events, winnerPids) {
+  assert.ok(winnerPids.length > 0, 'actual ownership winners are required');
+  const opens = events.filter((event) => event.event === 'journal-open');
+  for (const pid of winnerPids)
+    assert.ok(
+      opens.some((event) => event.pid === pid),
+      'each actual ownership winner must have a journal-open witness',
+    );
+  assert.ok(
+    opens.every((event) => winnerPids.includes(event.pid)),
+    'only ownership winners may open journal',
+  );
+}
+
 export async function listen(server, port = 0) {
   await new Promise((done, reject) => {
     server.once('error', reject);

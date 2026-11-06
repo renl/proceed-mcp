@@ -22,6 +22,7 @@ import {
   exchange,
   profile,
   identity,
+  assertJournalOwnership,
 } from './support/automatic-startup.mjs';
 
 const token = 'SYNTHETIC_CHECKPOINT_NOT_A_TELEGRAM_TOKEN';
@@ -270,6 +271,55 @@ try {
     assert.equal(admissions, 2, 'wrong key never enters application handler');
     await c.closeServers();
   });
+  await check('AUTO-JOURNAL-OBSERVER-CONTROL', async () => {
+    // Observer qualification only, using the existing legacy foreground runtime.
+    // This is not automatic-startup or production contention proof.
+    const setup = await setupState('journal-observer-control');
+    const observationStart = (await readFile(c.manifest, 'utf8')).length;
+    const foreground = c.start(['serve'], { state: setup.path, input: '' });
+    const events = await until(
+      async () => {
+        const observed = (await readFile(c.manifest, 'utf8'))
+          .slice(observationStart)
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map(JSON.parse);
+        if (!observed.some((event) => event.event === 'journal-open')) return false;
+        if (await refused(setup.config.broker.port)) return false;
+        return observed;
+      },
+      10000,
+      'existing runtime journal opening must be witnessed by the actual preload',
+    );
+    const owned = await readFile(join(setup.path, 'broker.lock'));
+    assert.equal(JSON.parse(owned).pid, foreground.child.pid, 'control owns actual runtime lock');
+    assertJournalOwnership(events, [foreground.child.pid]);
+    const witnessFailure = /each actual ownership winner must have a journal-open witness/;
+    assert.throws(() => assertJournalOwnership([], [foreground.child.pid]), witnessFailure);
+    assert.throws(
+      () => assertJournalOwnership(events, [foreground.child.pid, -1]),
+      witnessFailure,
+      'one observed winner cannot mask another missing winner',
+    );
+    assert.throws(
+      () => assertJournalOwnership(events, [-1]),
+      witnessFailure,
+      'a different process cannot supply the required witness',
+    );
+    assert.throws(
+      () =>
+        assertJournalOwnership(
+          [...events, { event: 'journal-open', pid: -1 }],
+          [foreground.child.pid],
+        ),
+      /only ownership winners may open journal/,
+    );
+    // Signal only this directly spawned foreground control, never a recorded PID.
+    foreground.child.kill('SIGTERM');
+    assert.equal((await c.finish(foreground, 30000)).code, 0);
+    await closed(setup.path, setup.config.broker.port);
+  });
   if (process.argv.includes('--tls-platform-only')) {
     assertions = true;
   } else {
@@ -391,23 +441,20 @@ try {
         observed.some((e) => e.event === 'credential-access' && e.pid === running.lock.pid),
         'detached broker actually loads file',
       );
-      if (first.pid !== manual.child.pid)
-        assert.ok(
-          !observed.some((e) => e.event === 'journal-open' && e.pid === manual.child.pid),
-          'ownership loser never opens journal',
-        );
       const contention = (await readFile(c.manifest, 'utf8'))
         .slice(observationStart)
         .trim()
         .split('\n')
         .filter(Boolean)
         .map(JSON.parse);
-      assert.ok(
-        contention
-          .filter((e) => e.event === 'journal-open')
-          .every((e) => e.pid === first.pid || e.pid === running.lock.pid),
-        'only ownership winners may open journal during actual contention/restart',
-      );
+      // Positive witnesses are mandatory before accepting any loser isolation.
+      // A missing/inactive preload cannot pass by vacuous negative assertions.
+      assertJournalOwnership(contention, [first.pid, running.lock.pid]);
+      if (first.pid !== manual.child.pid)
+        assert.ok(
+          !contention.some((e) => e.event === 'journal-open' && e.pid === manual.child.pid),
+          'ownership loser never opens journal',
+        );
     });
 
     await check('AUTO-TLS-HTTP-AUTHORIZATION-STOP', async () => {
