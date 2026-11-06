@@ -9,7 +9,7 @@ Problem: the adapter only connects to a broker. This change starts or safely reu
 
 ## What Changes
 
-- The normal MCP entry point starts the configured local broker when safely stopped, or reuses a matching healthy instance, including a manually started broker.
+- The normal MCP entry point starts the configured local broker when safely stopped, or reuses a matching healthy secure instance, including a manually started secure broker. A legacy HTTP listener is not a matching secure instance.
 - Concurrent clients share at most one broker and Telegram update poller per configured state. One client closing must not disrupt another client or a manually started broker.
 - Broker-dependent approval calls wait for readiness within a documented finite startup deadline, or return an actionable failure. A listening port alone does not prove broker identity, health, Telegram availability, pairing or human delivery.
 - Startup preserves protected state, request authority, durable pending requests and accepted decisions. Unknown ownership, uncertain locks and unrelated processes are not repaired or replaced automatically.
@@ -49,11 +49,18 @@ The MCP startup path, broker ownership/lifetime, operator setup and startup inst
 
 The user approved the security-posture change from broker-environment-only input to an explicitly provisioned owner-only token file for automatic startup. This is necessary for cold startup without a manual broker terminal. Owner-only protection does not isolate the token from other processes under the same account and does not promise encryption or an OS credential store. Existing foreground broker use with a broker-process environment token remains supported.
 
+Safe reuse requires an authenticated confidential local channel before private authority is sent, including subsequent local requests. Legacy `serve` HTTP remains available to legacy clients. Upgraded `mcp`, `pair`, `status` and `stop` refuse that legacy broker without sending private authority or falling back to plaintext. Upgrade instructions require the operator to stop it through its existing foreground interface, then restart with `serve --secure-local` using its environment token, or provision the token file and use automatic startup. Old clients cannot use the secure broker. No token persistence is required to reuse a matching secure foreground broker.
+
+This explicit stop/restart is a one-time mixed-version or legacy-mode upgrade prerequisite, not a recurring manual launch requirement after automatic-startup setup. It requires no stored-data migration and must preserve durable work. Secure admission and the bounded upgrade refusal are necessary correctness work within this outcome, not permission to remove foreground serving or change the five tools. Source-grounded channel design is not implementation or runtime proof.
+
 Automatic startup MUST retain broker-only token access, existing local authorization and owner-only state protection. Missing credentials or unsafe credential ownership, permissions or paths MUST fail closed with an actionable next step, not approval. Provisioning and startup MUST NOT echo token values or expose them in CLI arguments, MCP configuration or adapter environment, tool outputs, diagnostics, logs, published evidence, the state journal or request history. The approval does not authorize reading or saving existing live credentials now, general filesystem access, agent secret storage or publication.
 
 ## Acceptance and Delivery Boundary
 
-The [product delta](specs/opencode-session-continuation/spec.md) defines the acceptance outcomes. Startup work must preserve the existing five tools, capability-and-principal authorization, explicit human approval and truthful delivery status.
+The [product delta](specs/opencode-session-continuation/spec.md) extends the
+[current portable MCP capability](../../specs/opencode-session-continuation/spec.md) and defines the
+acceptance outcomes. Startup work must preserve the existing five tools, capability-and-principal
+authorization, explicit human approval and truthful delivery status.
 
 The user's hands-on test follows full program delivery, not an immediate pairing or click requirement during development. Independent applicable pre-merge verification remains required. Unavailable live checks remain BLOCKED until executed or covered by eligible scoped acceptance at the relevant delivery step. Historical preview exceptions do not waive this change's checks.
 
