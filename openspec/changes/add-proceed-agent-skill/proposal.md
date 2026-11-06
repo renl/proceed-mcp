@@ -49,7 +49,14 @@ Acceptance concerns the supplied instructions, documented installation path, loa
 
 ## Review
 
-Product approval is pending. Does this accurately capture your vision? Do you agree that if the linked acceptance criteria are met, the feature is complete?
+The user authorized the skill and README outcome and changed the program's delivery order: develop and deploy the complete program before requesting hands-on user acceptance. Do not require interim user testing to begin automatic startup or dual-channel development. These remain separate bounded changes, not added implementation scope here.
+
+## Delivery and Acceptance Order
+
+- Engineering owns pre-merge structural, instructional, copy-integrity and independently executable host checks. Real OpenCode installation/loading remains required boundary proof, not a static-check claim. Exercise it without user participation only in an authorized environment. Missing access remains BLOCKED and does not authorize credential inspection or configuration changes.
+- The paired human's harmless active-wait Telegram first use remains a required outcome. Schedule the operator demonstration and final hands-on acceptance after the full program preview is deployed from clean, merged `main`. Do not replace a pending human answer with an agent-authored approval or count simulations as this proof.
+- This delivery-order correction does not waive an applicable pre-merge or pre-exposure check. If required real-host or first-use proof is still unavailable at archive, merge or deployment, that specific step needs eligible, explicit scoped preview-risk acceptance. Record the exact missing assertion, current evidence, residual risk, mitigation, accountable owner, authorized step and preview scope, and expiry or review trigger. Independent review remains required. Deferred or accepted checks remain unverified, never passed.
+- The skill can land independently when its applicable gates are satisfied or explicitly covered by that scoped acceptance. Its landing does not mean the full program is deployed or user-accepted. Deployment and publishing remain separate authorized operations from clean, merged `main`, using an authorized release route.
 
 ## Related Artifacts
 

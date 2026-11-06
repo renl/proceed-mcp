@@ -8,6 +8,8 @@ The proposal and delta are feasible against the current `telegram-approval`, `op
 
 This change can land independently on `main`. It has no stacked parent or dependency on startup, native permission integration, or dual-channel answers. Existing broker setup, pairing, MCP connection, and permitted private request-authority retention remain prerequisites for use, not new implementation scope.
 
+The approved delivery order is full-program development and deployment before operator hands-on acceptance. Interim operator testing shall not block development of the separately bounded startup and dual-channel changes. This order does not establish missing boundary proof or authorize an unmet archive, merge, or deployment gate. The [proposal's delivery and acceptance order](proposal.md#delivery-and-acceptance-order) governs those steps.
+
 ## Decisions
 
 ### 1. Distribute one self-contained repository artifact
@@ -64,8 +66,19 @@ This source is a dated V2 documentation baseline, not a pinned executable releas
 
 ## Verification and handoff implications
 
-- Review the artifact and README against each guidance-delta requirement, current tool definitions, secret safety, and excluded behavior. Check frontmatter, exact path/ID, self-containment, and links with proportionate structural checks.
-- Install the exact supplied file into a clean consuming fixture project in an authorized isolated location. Use a real permitted OpenCode V2 agent to demonstrate discovery and explicit `proceed` loading. Record source revision, installed-content equality, harness version, and safe load evidence. A parser or mock skill loader alone does not prove this boundary.
-- Demonstrate the harmless prepare/wait/Approve/acknowledge/receipt interaction using the installed skill and existing runtime. Static review or simulated outcomes do not prove actual paired-human Telegram receipt. This requires separately authorized operator-controlled external prerequisites. This design grants no bot, credential, polling, or protected-state access. If unavailable, report this proof as BLOCKED, not passed. Reuse existing runtime evidence only for unchanged assertions, not as proof of the newly installed skill.
-- Review bounded examples for Respond-as-instructions, lost-wait retrieval, missing authority, and repeated decisions. No new runtime API or test-only production dependency is needed. Demonstrations establish bounded behavior, not universal model adherence or permission enforcement.
-- Test planning shall define maintained checks and safe evidence capture before implementation. Independent verification and the primary spec author's final delta review remain required before the authorized CLI archive and single change PR. No package publication or new runtime qualification is implied.
+### Agent-owned pre-merge verification
+
+- Engineering shall review the artifact and README against each guidance-delta requirement, current tool definitions, secret safety, and excluded behavior. Check frontmatter, exact path/ID, self-containment, links, installed-copy equality, and bounded instructional examples for Respond-as-instructions, lost-wait retrieval, missing authority, and repeated decisions.
+- Independently executable host checks remain engineering-owned. In an authorized isolated consuming fixture, install the exact supplied file and use a real permitted OpenCode V2 agent to demonstrate discovery and explicit `proceed` loading. Record source revision, installed-content equality, harness version, and safe load evidence. A parser, copy test, or mock loader alone does not prove this boundary. Missing executable, access, or environment leaves real-host proof BLOCKED, without requiring interim user testing or authorizing configuration changes.
+- Existing independent evidence `340d0a77` for implementation candidate `f6230cca` records 9/9 native checks, eleven instructional scenarios, and exact-byte installation-copy/cleanup passing. Real OpenCode discovery/loading and active-wait Telegram first use remain BLOCKED. This timing correction changes none of those observed results. Reuse existing runtime evidence only for unchanged assertions, not as proof of the newly installed skill.
+
+### Post-full-program operator acceptance
+
+- Schedule the paired human's harmless prepare/wait/Approve/acknowledge/receipt demonstration and final hands-on acceptance after the complete program preview is deployed from clean, merged `main`. Preserve decision 5's active-wait, matching request and decision, acknowledgement, and capability-free receipt assertions. Static review, simulated outcomes, or agent-authored approval cannot supply actual paired-human Telegram proof.
+- External prerequisites still require separately authorized operator-controlled access. This design grants no bot, credential, polling, protected-state, or global-configuration access. Unavailable proof remains BLOCKED and unverified until observed. Demonstrations establish bounded behavior, not universal model adherence or permission enforcement.
+
+### Landing and exposure gates
+
+- SDET shall reconcile task timing and evidence with this order, separating completed agent checks, unavailable required real-boundary proof, and post-deployment operator acceptance. Preserve historical verdicts and record later proof outside the change folder if it has been archived. No new prototype, harness, runtime API, or security surface is required by this correction.
+- Independent integrated-candidate review and the primary spec author's final delta review remain required before the authorized CLI archive and single change PR. At an actual archive, merge, or deployment gate, unresolved required checks need eligible, explicit scoped preview-risk acceptance for that specific step. Record the missing assertion, evidence, residual risk, mitigation, accountable owner, authorized step and preview scope, and expiry or review trigger. The approved delivery order is not that acceptance, and an accepted or deferred check is never passed.
+- Do not add another signoff on the approved product delivery order. Skill landing does not establish full-program deployment or operator acceptance. Deployment and publishing remain separate authorized operations from clean, merged `main` through an authorized release route. No package publication or new runtime qualification is implied.

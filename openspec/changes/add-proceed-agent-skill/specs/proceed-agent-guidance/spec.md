@@ -24,7 +24,7 @@ The product MUST supply a reusable Proceed skill and README instructions for pro
 
 ### Requirement: Supported first use from empty state
 
-The README MUST connect skill installation and loading to the supported empty-state Proceed setup and a harmless first-use procedure. It MUST identify required broker, owner, pairing, and MCP prerequisites without embedding secrets or requiring manual edits to stored product data. Expected results MUST remain distinct from observed proof.
+The README MUST connect skill installation and loading to the supported empty-state Proceed setup and a harmless first-use procedure. It MUST identify required broker, owner, pairing, and MCP prerequisites without embedding secrets or requiring manual edits to stored product data. Expected results MUST remain distinct from observed proof. The operator's hands-on demonstration is scheduled after deployment of the complete program preview, not as a prerequisite to developing subsequent program outcomes. This changes acceptance order, not the required first-use result or independent boundary-proof obligations. The [proposal's delivery and acceptance order](../../proposal.md#delivery-and-acceptance-order) governs any still-unmet landing or exposure check.
 
 #### Scenario: Complete the first useful interaction
 - **GIVEN** no installed skill, Proceed configuration, owner, pairing, requests, or decisions, and operator access to the external prerequisites
