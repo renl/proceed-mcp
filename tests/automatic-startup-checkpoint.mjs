@@ -268,6 +268,11 @@ async function credentialFailureCases() {
       assert.equal((await stat(ancestor)).uid, 0, 'qualified container system-owned control');
       const destination = join(parent, 'telegram.token');
       try {
+        // Make the unsafe directory genuinely reachable by other UIDs. A 0700
+        // outer fixture parent would hide the threat behind another barrier.
+        // Traversal only, not listing, is granted in this owned synthetic namespace.
+        await chmod(root, 0o711);
+        await chmod(c.directory, 0o711);
         const result = await c.cli(
           ['telegram', 'provision', '--token-stdin', '--telegram-token-file', destination],
           { state: setup.path, input: token },
@@ -277,6 +282,8 @@ async function credentialFailureCases() {
         assert.equal(await absent(destination), true, 'no secret written beneath unsafe ancestor');
       } finally {
         await chmod(ancestor, 0o700);
+        await chmod(c.directory, 0o700);
+        await chmod(root, 0o700);
       }
     },
     { independent: true },
