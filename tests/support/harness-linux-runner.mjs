@@ -30,9 +30,11 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       'transport-first-exchange',
       'helper-contract',
       'parent-process',
+      'composition',
     ].includes(mode),
   );
   const parent = mode === 'parent-process';
+  const composition = mode === 'composition';
   const helper = mode === 'helper-contract' || parent;
   if (helper && !parent) {
     assert.equal(
@@ -45,7 +47,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
   }
   const setupOnly = mode === 'broker-setup';
   const firstOnly = mode === 'transport-first-exchange';
-  const transport = mode === 'transport' || firstOnly;
+  const transport = mode === 'transport' || firstOnly || composition;
   const payload =
     setupOnly || transport || helper
       ? qualificationPayload(
@@ -151,7 +153,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           candidate,
           image: linuxImage,
           payload,
-          command: `node tests/run-harness-host.mjs ${parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
+          command: `node tests/run-harness-host.mjs ${composition ? '--composition-run' : parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
         },
         null,
         2,
@@ -179,11 +181,13 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         ? parent
           ? '/payload/tests/support/harness-parent-inner.mjs'
           : '/payload/tests/support/harness-helper-inner.mjs'
-        : transport
-          ? '/payload/tests/support/harness-transport-inner.mjs'
-          : setupOnly
-            ? '/payload/tests/support/harness-setup-inner.mjs'
-            : '/payload/tests/support/harness-linux-inner.mjs',
+        : composition
+          ? '/payload/tests/support/harness-composition-inner.mjs'
+          : transport
+            ? '/payload/tests/support/harness-transport-inner.mjs'
+            : setupOnly
+              ? '/payload/tests/support/harness-setup-inner.mjs'
+              : '/payload/tests/support/harness-linux-inner.mjs',
       ...(firstOnly ? ['--first-exchange-only'] : []),
       ...(helper && !parent ? ['/payload/' + helperEntry] : []),
     ]);
@@ -218,7 +222,31 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
     await progress('execution');
     const waited = await command(['wait', name], executionEnd - Date.now());
     await progress('evidence', { containerExit: waited.stdout.trim() });
-    if (helper) {
+    if (composition) {
+      // Fixed phase/classification is not raw capture. Detailed assertion export
+      // is forbidden until the complete in-container raw scan has passed.
+      await command([
+        'cp',
+        `${name}:/run/proceed/evidence/composition-diagnostic.json`,
+        join(run, 'composition-diagnostic.json'),
+      ]);
+      const diagnostic = JSON.parse(
+        await readFile(join(run, 'composition-diagnostic.json'), 'utf8'),
+      );
+      assert.ok(['PASS', 'FAIL'].includes(diagnostic.status));
+      assert.equal(waited.stdout.trim(), '0', 'COMPOSITION_CONTROL_FAILURE');
+      assert.equal(diagnostic.status, 'PASS');
+      await command([
+        'cp',
+        `${name}:/run/proceed/evidence/scan-pass.json`,
+        join(run, 'scan-pass.json'),
+      ]);
+      assertDetailedTransportExport(
+        JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')),
+      );
+      for (const file of ['composition-summary.json', 'progress.jsonl'])
+        await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)]);
+    } else if (helper) {
       // No raw child bytes or arbitrary exception strings cross this boundary.
       await command(['cp', `${name}:/run/proceed/evidence/result.json`, join(run, 'result.json')]);
       const result = JSON.parse(await readFile(join(run, 'result.json'), 'utf8'));
@@ -287,9 +315,11 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
   } catch (error) {
     failure = helper
       ? 'HELPER_CONTRACT_FAILURE'
-      : transport
-        ? 'W3_EXPORT_OR_CONTROL_FAILURE'
-        : error.message;
+      : composition
+        ? 'COMPOSITION_CONTROL_FAILURE'
+        : transport
+          ? 'W3_EXPORT_OR_CONTROL_FAILURE'
+          : error.message;
     // Failure evidence is copied before owned namespace destruction, never raw host logs.
     if (created && !transport && !helper)
       for (const file of [
@@ -313,7 +343,21 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           /* absent means UNRUN */
         }
       }
-    if (created && transport) {
+    if (created && composition) {
+      try {
+        await command(
+          [
+            'cp',
+            `${name}:/run/proceed/evidence/composition-diagnostic.json`,
+            join(run, 'composition-diagnostic.json'),
+          ],
+          3000,
+          true,
+        );
+      } catch {
+        /* no raw capture fallback */
+      }
+    } else if (created && transport) {
       // No result/error strings or detailed capture may bypass the full scan.
       // Only the separately scanned allowlisted diagnostic can leave on failure.
       for (const file of ['diagnostic-export.json']) {

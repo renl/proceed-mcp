@@ -180,6 +180,7 @@ export async function portable(
     controlledClock = false,
     journalFaults = false,
     connectAdapter = true,
+    brokerObserver = false,
   } = {},
 ) {
   await mkdir(resolve('.scratch/c3-activation'), { recursive: true });
@@ -287,6 +288,14 @@ export async function portable(
                 process.execPath,
                 '--import',
                 preload.href,
+                ...(brokerObserver && args[0] === 'serve'
+                  ? [
+                      '--import',
+                      pathToFileURL(
+                        resolve('tests/fixtures/harness-composition/broker-observer.mjs'),
+                      ).href,
+                    ]
+                  : []),
                 ...(controlledClock && args[0] === 'serve' ? ['--import', clockPreload.href] : []),
                 ...(journalFaults && args[0] === 'serve' ? ['--import', faultPreload.href] : []),
                 executable,
@@ -479,9 +488,9 @@ export async function portable(
               await scan();
             }
           },
-          { totalMs: 55000, readyMs: 8000 },
+          { totalMs: brokerObserver ? 180000 : 55000, readyMs: 8000 },
         ),
-      63000,
+      brokerObserver ? 188000 : 63000,
       'aggregate public setup/assertions/cleanup deadline',
     );
   } finally {

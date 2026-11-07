@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import { mkdir, readdir, copyFile, writeFile, readFile, lstat } from 'node:fs/promises';
 
 export const qualificationSupport = Object.freeze([
+  'tests/support/harness-composition-inner.mjs',
+  'tests/fixtures/harness-composition/tui.ts',
+  'tests/fixtures/harness-composition/broker-observer.mjs',
   'tests/support/harness-parent-inner.mjs',
   'tests/support/harness-parent-observations.mjs',
   'tests/fixtures/harness-parent/child.mjs',

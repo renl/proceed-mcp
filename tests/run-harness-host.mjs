@@ -4,7 +4,11 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { pins, hostBudgets, launchBlockers } from './support/harness-host-plan.mjs';
 
-if (['--parent-process-preflight', '--parent-process-run'].includes(process.argv[2])) {
+if (['--composition-preflight', '--composition-run'].includes(process.argv[2])) {
+  assert.equal(process.argv.length, 3);
+  const { runLinuxHost } = await import('./support/harness-linux-runner.mjs');
+  await runLinuxHost(process.argv[2] === '--composition-preflight', 'composition');
+} else if (['--parent-process-preflight', '--parent-process-run'].includes(process.argv[2])) {
   assert.equal(process.argv.length, 3);
   const { runLinuxHost } = await import('./support/harness-linux-runner.mjs');
   await runLinuxHost(process.argv[2] === '--parent-process-preflight', 'parent-process');

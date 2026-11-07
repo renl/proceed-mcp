@@ -56,7 +56,7 @@ export async function confirmQualificationEnrollment(h, operator, proposal, disp
   return { callbackFingerprint: fingerprint(callback.callback_data), keyId: operator.keyId };
 }
 
-export async function withQualificationBroker(work) {
+export async function withQualificationBroker(work, { brokerObserver = false } = {}) {
   assert.equal(process.platform, 'linux', 'contained Linux setup required');
   assert.equal(process.env.PROCEED_TEST_ISOLATED_PID_NAMESPACE, '1');
   const root = '/run/proceed/qualification-private';
@@ -121,7 +121,7 @@ export async function withQualificationBroker(work) {
             'operator secret absent from chat/journal',
           );
       },
-      { connectAdapter: false },
+      { connectAdapter: false, brokerObserver },
     );
   } finally {
     await rm(directory, { recursive: true });
