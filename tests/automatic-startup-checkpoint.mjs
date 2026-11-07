@@ -522,16 +522,7 @@ try {
         'real child reaches delayed credential open',
       );
       const outcome = await operation.outcome;
-      assert.equal(outcome.kind, 'response', 'startup-dependent call has a bounded public result');
-      assert.equal(outcome.frame.result.isError, true);
-      const failure = outcome.frame.result.structuredContent;
-      assert.equal(failure.error.code, 'BROKER_UNAVAILABLE');
-      assert.equal(failure.error.retryable, true);
-      assert.match(failure.error.message, /BROKER_STARTUP_TIMEOUT/);
-      assert.ok(
-        performance.now() - start <= 151500,
-        'public result uses the real 150000 ms budget',
-      );
+      const returnedAfter = performance.now() - start;
       adapter.child.stdin.end();
       assert.equal((await c.finish(adapter, 10000)).code, 0);
       peer.close();
@@ -559,6 +550,14 @@ try {
         await closed(state, setup.config.broker.port);
         stopped = true;
       }
+      assert.equal(outcome.kind, 'response', 'startup-dependent call has a bounded public result');
+      assert.equal(outcome.frame.result.isError, true);
+      const failure = outcome.frame.result.structuredContent;
+      assert.equal(failure.error.code, 'BROKER_UNAVAILABLE');
+      assert.equal(failure.error.retryable, true);
+      assert.match(failure.error.message, /startup deadline/);
+      assert.match(failure.error.message, /proceed-mcp status/);
+      assert.ok(returnedAfter <= 151500, 'public result uses the real 150000 ms budget');
       assert.equal(
         lateReady,
         false,
