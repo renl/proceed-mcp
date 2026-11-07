@@ -7,6 +7,7 @@ Stable project instructions and navigation. Current work and history live in the
 - Mode: CLI-managed OpenSpec v1.15.0 (`core`, `spec-driven`). Target branch: `main`.
 - Portable Telegram approval MCP. OpenCode V2 is the first validation harness, not a core dependency. Current capability contracts and historical proposal are linked below.
 - Canonical workflows: `workflow-routing`, `openspec-workflow`, `git-workflow`, `worktree-slicing`, `command-hygiene`. No approved local workflow deviations.
+- Use temporary worktrees for feature development. Deliver verified features promptly through PRs into `main`, then return to the root checkout and complete safe worktree cleanup. Deployment and publishing use clean, merged `main`, never an unfinished feature worktree.
 - Application sources, tests and OpenSpec use repository-relative paths. Consult the status log for live branch, revision and lifecycle state before operating.
 - Primary CI uses Ubuntu 24.04 with Node 24.22.2. Verification records distinguish CI coverage, Windows evidence and package admission requirements without implying all-platform compatibility.
 

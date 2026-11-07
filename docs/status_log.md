@@ -4,6 +4,24 @@ Milestones, evidence, decisions, blockers, and next steps for Proceed MCP.
 
 ## Current Summary
 
+Active program: installable usage skill and README instructions, automatic broker startup, and dual-channel human answers for Proceed and supported native permission requests. One pending request per session, different sessions concurrent. Estimated progress is about 40%. The user wants team-owned development/verification, clean-main delivery, then hands-on acceptance. No new feature is delivered or release-ready yet.
+
+The user explicitly approves the trusted harness operator as an additional decision-maker without proving identity with the paired Telegram human. Agent text, tool arguments, API records and supplied human flags do not count. Root planning branch `add-harness-approval-channel` is based on main `f3d60184`, with [proposal](../openspec/changes/add-harness-approval-channel/proposal.md) and product deltas authored. Architecture is designing the trusted operator path. Startup is an explicit provisional dependency, not current merged authority. Native permission bridging remains a separate follow-up, not removed from the program.
+
+Startup is retained in `.worktree/add-automatic-broker-startup`, branch `add-automatic-broker-startup`. Independent final evidence `25f7ae17` against candidate `8a2d6254` is RED on a shared TLS/HTTP readiness deadline. The required focused audit confirms a bounded two-module source correction under the existing contract, now active. Packed artifact binding and cheap CI/build/strict checks pass in their recorded scope, not a final verdict. Preview.2 remains an unpublished local candidate. Windows/live Telegram remain unproven, with no actual user credential access.
+
+Skill is retained in `.worktree/add-proceed-agent-skill`, latest evidence consolidation `8f556cd9`. Native OpenCode v2.2.5 installation/discovery/exact-ID load and static/copy proof pass. Fixture cleanup passes. Post-program human Telegram acceptance remains unproven. Scoped archive/merge acceptance is recorded but unapproved. New feature archive, PR, merge and publication remain pending. Existing public preview.1 and prior implementation/README deliveries are recorded on [PR #2](https://github.com/renl/proceed-mcp/pull/2#issuecomment-6673229266) and [PR #3](https://github.com/renl/proceed-mcp/pull/3#issuecomment-6684016333). Private recovery is retained. Publishing uses clean merged main only, and no new manual-publishing exception has been granted.
+
+## Outcome History
+
+### 2026-11-07 - Harness operator approved, dual-channel proposal starts
+
+The user selects Trust the harness operator, explicitly adding local trusted operators without requiring proof of the paired Telegram identity. Product proposal and deltas are authored for `add-harness-approval-channel`, covering Proceed requests first with native permission bridging as a separate program outcome. The dependency on startup is provisional until that parent lands. Architecture must establish genuine trusted interaction rather than ordinary agent/API text, correct concurrent-session routing and single resolution. No runtime, implementation or credential operation has occurred for this change.
+
+### Superseded implementation planning snapshot
+
+The following snapshot is retained for history. Its pending merge, checkout and cleanup claims are superseded by the terminal PR records and current summaries above.
+
 Preview delivery estimate: about 95% of packaging, public delivery and repository finalization, not a time estimate. npm/Registry delivery and independent Linux-primary feature verification pass, with supplied manual first use recorded. Final evidence delivery, current-head checks, authorized main merge and safe custody/cleanup remain incomplete. MIT copyright Ng Cheng Leong. Registry identity `io.github.renl/proceed-mcp`, npm publisher `davemeshimize`.
 
 [Implementation PR #2](https://github.com/renl/proceed-mcp/pull/2) is independently feature-verified for the user-approved Linux-primary scope. Code `7c38071a`, target `de1c5802`, [CI run 42062573579](https://github.com/renl/proceed-mcp/actions/runs/42062573579) and evidence `d864e35f` are the verification anchors. Current PR head/checks and merge outcome are recorded on the PR. Final documentation delivery and authorized merge remain pending. Windows failures remain separately unresolved, not passed or hidden, and no all-platform release-readiness claim is made. Whole-worktree cleanup is blocked on retained user content, not CI-owned cleanup, which passes.
@@ -17,8 +35,6 @@ Native P3 remains complete within its exact offline map (`fdd8ee95` against appl
 Implementation checkout: `.worktree/add-telegram-approval-opencode-v2`, active and retained under test/worktree lifecycle ownership. Target `main`, original baseline `f385409792aff3d46d96b5c4f03358f10c8dc5ba`. Root checkout is `chore/project-workflow` with older application/artifact copies. Preserve secrets, runtime state, pending owner work and unknown artifacts.
 
 Links: [historical tasks](../openspec/changes/archive/2026-11-05-add-telegram-approval-opencode-v2/tasks.md), [final native remainder](../openspec/changes/archive/2026-11-05-add-telegram-approval-opencode-v2/slices/03c3q-p3-remaining.md). Final copy/privacy8/8 and affected consumers67/67 TAP points overlap earlier proof and are not additional workflows.
-
-## Outcome History
 
 ### 2026-11-06 - Independent Linux-primary candidate accepted for merge readiness
 Independent evidence `d864e35f` accepts code `7c38071a` against main `de1c5802` in the user-approved Linux-primary scope. ActualCI tested integrated merge `1dea29be`, with checkout/policy/build/installed equality/publicCLI/MCP/POSIXprotection/ownedcleanup passing. Assertions and unchanged runtime/npm/Registry evidence are independently reviewed, all104archivehashes match. Evidence commits only two live verificationdocuments. No hotfix needed. Windows remains unresolved and outside selectedprimarymergegate, no all-platformreleaseclaim. FinalCoScoordination/evidence delivery, freshcurrentheadchecks and authorizedmerge remain, while wholeworktreecleanup stays blocked by userretainedcontent. CI-ownedcleanupPASS is distinct from finalrepositorycleanup.
