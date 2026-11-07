@@ -10,9 +10,9 @@ This guide is for operators connecting a local MCP client to Telegram approval.
 
 > **Release status:** `@meshimize/proceed-mcp@0.1.0-preview.1` is published on npm and listed in the
 > official MCP Registry. It requires a manual foreground broker and does **not** include automatic
-> startup. The automatic-startup setup below describes this unreleased candidate, not that npm
-> version. MCP Events, automatic continuation after a timeout, `doctor`, and delivery retry remain
-> unavailable.
+> startup. The automatic-startup setup below describes the unpublished `0.1.0-preview.2` candidate,
+> not that npm version. MCP Events, automatic continuation after a timeout, `doctor`, and delivery
+> retry remain unavailable.
 
 ## Distribution
 
@@ -78,8 +78,8 @@ Keep both broker and adapter on preview.1 for this legacy HTTP mode. The new pro
 
 Use the candidate's CLI for every step, not the published preview command. From the candidate
 checkout, replace `proceed-mcp` in the commands below with `node bin/proceed-mcp.js`. An installed
-candidate package can use its own `proceed-mcp` command. No public release pin for this behavior has
-been assigned yet. The package metadata still says preview.1, which does not identify the candidate.
+candidate package can use its own `proceed-mcp` command. The package metadata identifies this
+candidate as `0.1.0-preview.2`. It is not published on npm or listed in the MCP Registry.
 
 ### Existing setup: stop the old broker once
 
