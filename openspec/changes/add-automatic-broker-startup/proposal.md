@@ -34,7 +34,7 @@ None. Automatic startup extends the existing portable MCP interaction, not a new
 
 This change delivers the complete automatic-startup outcome, not an unexposed foundation. It can land independently on `main` and has no dependency on the separate agent-skill change or its unmerged delta.
 
-It relies on the current [portable MCP contract](../../specs/opencode-session-continuation/spec.md), [Telegram pairing and durable-decision contract](../../specs/telegram-approval/spec.md), and [supported first-use path](../../specs/npm-distribution/spec.md#requirement-complete-first-useful-action-from-empty-state). It follows the [historical implementation](../archive/2026-11-05-add-telegram-approval-opencode-v2/proposal.md) without editing that record.
+It relies on the current portable MCP contract at `openspec/specs/opencode-session-continuation/spec.md`, Telegram pairing and durable-decision contract at `openspec/specs/telegram-approval/spec.md`, and supported first-use requirement `Complete first useful action from empty state` at `openspec/specs/npm-distribution/spec.md`. It follows the historical implementation at `openspec/changes/archive/2026-11-05-add-telegram-approval-opencode-v2/proposal.md` without editing that record. These paths are repository-relative and remain stable after archive.
 
 The same PR may prepare the coupled package candidate version `0.1.0-preview.2` for the changed runtime and CLI, with consistent metadata, tests and README candidate/released-version mapping. This is necessary release correctness within the startup outcome: changed runtime and CLI contents must not retain the already published artifact's version identity. Read-only public npm discovery found this candidate version unused, not reserved. Preparation does not change historical bootstrap-version requirements, add capability requirements or authorize a release.
 
@@ -60,11 +60,13 @@ Automatic startup MUST retain broker-only token access, existing local authoriza
 ## Acceptance and Delivery Boundary
 
 The [product delta](specs/opencode-session-continuation/spec.md) extends the
-[current portable MCP capability](../../specs/opencode-session-continuation/spec.md) and defines the
+current portable MCP capability at `openspec/specs/opencode-session-continuation/spec.md` and defines the
 acceptance outcomes. Startup work must preserve the existing five tools, capability-and-principal
 authorization, explicit human approval and truthful delivery status.
 
 The user's hands-on test follows full program delivery, not an immediate pairing or click requirement during development. Independent applicable pre-merge verification remains required. Unavailable live checks remain BLOCKED until executed or covered by eligible scoped acceptance at the relevant delivery step. Historical preview exceptions do not waive this change's checks.
+
+The user has accepted startup specification finalization, archive and PR merge with Windows qualification and live Telegram first use deferred until final program testing. Both checks remain unpassed release blockers owned by the project maintainer. The scoped acceptance, evidence, residual risks and expiry are recorded in `docs/status_log.md`. Required CI must pass on the exact PR head. Immediate head/target refresh and stopping on detected drift remain mandatory. The disclosed target-change race without a merge queue is accepted. This acceptance does not establish feature verification or release readiness and grants no deployment, publication or security relaxation. Later deferred proof belongs on the PR or live status log, never backfilled into the archive.
 
 Implementation uses temporary development worktrees followed by prompt PR landing on `main`. Any later separately authorized publication must use clean merged `main`. This proposal neither authorizes testing against real credentials or Telegram nor authorizes publication. Landing this change alone is not a claim of full program deployment.
 

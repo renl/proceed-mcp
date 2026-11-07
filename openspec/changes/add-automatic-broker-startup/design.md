@@ -4,7 +4,7 @@ Make normal MCP startup start or safely reuse one shared broker after explicit o
 
 ## Context and boundary
 
-Parent: [proposal](proposal.md). Product outcomes: [startup delta](specs/opencode-session-continuation/spec.md). Baselines: [portable MCP](../../specs/opencode-session-continuation/spec.md), [Telegram approval](../../specs/telegram-approval/spec.md), and [first use](../../specs/npm-distribution/spec.md#requirement-complete-first-useful-action-from-empty-state).
+Parent: [proposal](proposal.md). Product outcomes: [startup delta](specs/opencode-session-continuation/spec.md). Baselines: [portable MCP](https://github.com/renl/proceed-mcp/blob/main/openspec/specs/opencode-session-continuation/spec.md), [Telegram approval](https://github.com/renl/proceed-mcp/blob/main/openspec/specs/telegram-approval/spec.md), and [first use](https://github.com/renl/proceed-mcp/blob/main/openspec/specs/npm-distribution/spec.md#requirement-complete-first-useful-action-from-empty-state).
 
 This change lands independently on `main`, against `f3d60184f03963774ed6a5954bb75331d54918d4`. It has no stacked parent or dependency on the separate agent-skill change. The delivered outcome includes provisioning, cold startup, shared lifetime, readiness, clean stop and instructions. It does not include native approval, another human channel, services/login startup, lock recovery, automatic respawn, credential-store integration, publishing or a new dependency/framework.
 
