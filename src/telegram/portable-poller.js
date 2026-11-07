@@ -6,8 +6,13 @@
 // below is selected from the committed result.
 import { admitCallbackUpdate, admitTextUpdate } from './portable-admission.js';
 import { renderPortableHumanOutcome } from './portable-render.js';
+import { enrollmentNoticeKeyboard, renderEnrollmentNotice } from '../harness/render.js';
 
 const PAIR = /^\/pair ([0-9a-f]{32})$/;
+// `/harness <enrollment_id>` is the one enrollment command. It is a
+// command-position classification of the whole raw message, exactly like
+// `/pair`, so trailing data or a later line stays ordinary content.
+const HARNESS = /^\/harness (hen_[a-f0-9]{32})$/;
 // Pairing intent is a command-position classification of the whole raw message, not a
 // search for `/pair` anywhere in its content: after any initial Unicode White_Space the
 // first delimited token must be exactly `/pair` or begin `/pair@`. A doubled space,
@@ -18,6 +23,11 @@ const pairIntent = (text) => {
   if (typeof text !== 'string') return false;
   const token = FIRST_TOKEN.exec(text)[1];
   return token === '/pair' || token.startsWith('/pair@');
+};
+const harnessIntent = (text) => {
+  if (typeof text !== 'string') return false;
+  const token = FIRST_TOKEN.exec(text)[1];
+  return token === '/harness' || token.startsWith('/harness@');
 };
 const START = '/start';
 // Exact product copy (proposal C3 Product-Copy Annex) for this surface.
@@ -220,12 +230,32 @@ export function createPortableTelegramPoller({
     return result.request.resolution === 'cancelled' ? CANCELLED : RESOLVED;
   };
 
+  // One admitted enrollment control. The token is correlation only; the broker
+  // rechecks the current paired private sender, the pending proposal and its
+  // expiry in one serialized turn, so a foreign or replayed press changes
+  // nothing and still consumes only its own update.
+  const enrollmentCallback = async (admitted, id) => {
+    const result = await broker.resolveEnrollmentCallback({
+      kind: admitted.kind,
+      token: admitted.token,
+      userId: admitted.userId,
+      chatId: admitted.chatId,
+      updateId: id,
+    });
+    if (result.result === 'confirmed') {
+      return answer(admitted.callbackQueryId, 'Operator enrollment confirmed.');
+    }
+    if (result.result === 'denied') return answer(admitted.callbackQueryId, 'Enrollment denied.');
+    return answer(admitted.callbackQueryId, UNAVAILABLE);
+  };
+
   // One admitted callback. The raw token is correlation only: the core rechecks the
   // whole binding in its own serialized turn, so this consumer never derives a
   // target from text, ordering, a label or a displayed id. A refusal owns exactly
   // one cursor commit here, and every answer is one best-effort attempt.
   const callback = async (update, id) => {
     const admitted = admitCallbackUpdate(update);
+    if (admitted.status === 'enrollment') return enrollmentCallback(admitted, id);
     const target =
       admitted.status === 'callback'
         ? broker.correlateCallbackToken({ callbackToken: admitted.token })
@@ -322,6 +352,50 @@ export function createPortableTelegramPoller({
     const stored = broker.pairing();
     const own =
       stored !== null && stored.user_id === identity.userId && stored.chat_id === identity.chatId;
+
+    // `/harness <enrollment_id>` shows the proposed fingerprint and the explicit
+    // Confirm/Deny controls. The broker commits the control tokens and this
+    // update's cursor together; only the exact paired private sender reaches it.
+    const harnessCommand = typeof text === 'string' ? HARNESS.exec(text) : null;
+    if (harnessCommand !== null) {
+      if (!own) {
+        await broker.advanceCursor(id);
+        return true;
+      }
+      const notice = await broker.enrollmentNotice({
+        enrollmentId: harnessCommand[1],
+        userId: identity.userId,
+        chatId: identity.chatId,
+        updateId: id,
+      });
+      if (notice === null) return true;
+      return deliver((options) =>
+        telegram.sendMessage(
+          {
+            chat_id: notice.chat_id,
+            text: renderEnrollmentNotice({
+              enrollmentId: notice.enrollment_id,
+              harnessId: notice.harness_id,
+              ownerId: notice.owner_id,
+              keyId: notice.key_id,
+              expiresAt: notice.expires_at,
+            }),
+            reply_markup: enrollmentNoticeKeyboard({
+              confirmToken: notice.confirm_token,
+              denyToken: notice.deny_token,
+            }),
+          },
+          { signal: options },
+        ),
+      );
+    }
+    // A command-position enrollment attempt that fails the exact grammar keeps its
+    // own state undisclosed and never falls through as response text.
+    if (harnessIntent(text)) {
+      await broker.advanceCursor(id);
+      return true;
+    }
+
     if (grammar === null) {
       // Only the independently matching paired tuple may reach a text writer.
       // Unpaired and foreign text stays silent and cursor-only.

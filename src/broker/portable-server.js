@@ -32,7 +32,14 @@ import {
   notFound,
   unavailable,
 } from '../errors.js';
-import { DECISION_ID_PATTERN, isPlainObject } from '../util/values.js';
+import { DECISION_ID_PATTERN, isPlainObject, sha256Hex } from '../util/values.js';
+import {
+  OPERATOR_KEY_PATTERN,
+  PRESENTATION_ID_PATTERN,
+  harnessIdProblem,
+  ownerIdProblem,
+  sessionProblem,
+} from '../harness/identifiers.js';
 import { createRegistrationRegistry } from './registration.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -63,6 +70,24 @@ const CREATION_FIELDS = new Set([
   'action',
   'context',
   'expires_in_seconds',
+  'harness_route',
+]);
+// A reservation accepts its display label and one optional immutable harness
+// route; anything else is an argument error rather than an ignored permission.
+const HANDLE_FIELDS = new Set(['session_label', 'harness_route']);
+const HARNESS_ROUTE_FIELDS = new Set(['harness_id', 'session_id']);
+// Harness wire bodies carry exactly their documented fields.
+const ENROLLMENT_FIELDS = new Set(['harness_id', 'owner_id']);
+const PENDING_FIELDS = new Set(['harness_id', 'owner_id', 'session_id']);
+const PRESENTATION_FIELDS = new Set(['harness_id', 'owner_id', 'session_id', 'request_id']);
+const DECISION_FIELDS = new Set([
+  'harness_id',
+  'owner_id',
+  'session_id',
+  'request_id',
+  'presentation_id',
+  'choice',
+  'response_text',
 ]);
 // The two evidence routes accept exactly their reviewed caller fields. The
 // decision identity stays a raw string, so a near-miss is a caller error rather
@@ -172,6 +197,12 @@ export function createPortableServer({
     for (const [ownerId, ownerToken] of credentials.owners) {
       if (constantTimeEquals(token, ownerToken)) return { role: 'owner', ownerId };
     }
+    // An operator credential is a distinct role. Only its public SHA-256
+    // verifier leaves this function; the presented secret is discarded here and
+    // never stored, logged or forwarded.
+    if (OPERATOR_KEY_PATTERN.test(token)) {
+      return { role: 'operator', keyId: sha256Hex(token) };
+    }
     return null;
   };
 
@@ -183,16 +214,64 @@ export function createPortableServer({
     return false;
   };
 
+  // The harness routes are a separate credential role: an owner or control
+  // credential is a plain refusal, never an enrollment or decision submission.
+  const requireOperator = (response, principal) => {
+    if (principal.role === 'operator') return true;
+    send(response, 403, forbidden('this credential cannot use that route').toEnvelope());
+    return false;
+  };
+
+  // Enrolled-only harness routes authenticate the presented verifier before any
+  // body or business lookup, so an unenrolled or revoked key discloses nothing.
+  const requireEnrolledOperator = (principal) => {
+    const scope = broker.operatorScope(principal.keyId);
+    if (scope === null) throw authRequired('an enrolled operator credential is required');
+    return scope;
+  };
+
+  // An optional route is exactly the configured harness identity plus one bounded
+  // session route. `undefined` is an omitted route, never an implied default.
+  const harnessRouteFrom = (value) => {
+    if (value === undefined) return undefined;
+    if (!isPlainObject(value)) throw invalidRequest('harness_route must be an object');
+    rejectUnlistedFields(value, HARNESS_ROUTE_FIELDS);
+    const problem = harnessIdProblem(value.harness_id) ?? sessionProblem(value.session_id);
+    if (problem !== null) throw invalidRequest(problem);
+    return { harnessId: value.harness_id, sessionId: value.session_id };
+  };
+
+  const harnessScopeFrom = (body) => {
+    const problem =
+      harnessIdProblem(body.harness_id) ??
+      ownerIdProblem(body.owner_id) ??
+      sessionProblem(body.session_id);
+    if (problem !== null) throw invalidRequest(problem);
+    return {
+      harnessId: body.harness_id,
+      ownerId: body.owner_id,
+      sessionId: body.session_id,
+    };
+  };
+
+  const requireMatchingScope = (enrolled, scope) => {
+    if (enrolled.harness_id !== scope.harnessId || enrolled.owner_id !== scope.ownerId) {
+      throw forbidden('this operator key is not enrolled for that scope');
+    }
+  };
+
   const reserve = async (request, response, principal) => {
     const body = await readJsonBody(request);
     for (const key of Object.keys(body)) {
-      if (key !== 'session_label') {
-        throw invalidRequest('request body must contain only session_label');
+      if (!HANDLE_FIELDS.has(key)) {
+        throw invalidRequest(`request body must not contain ${key}`);
       }
     }
+    const harnessRoute = harnessRouteFrom(body.harness_route);
     const reservation = await broker.reserveHandle({
       ownerId: principal.ownerId,
       sessionLabel: body.session_label,
+      harnessRoute,
     });
     send(response, 201, reservation);
   };
@@ -266,11 +345,85 @@ export function createPortableServer({
       action: body.action,
       context: body.context,
       expiresInSeconds: body.expires_in_seconds,
+      harnessRoute: harnessRouteFrom(body.harness_route),
     });
     // A usable reservation without a committed creation is never a success: it
     // maps to the same denial as unknown or foreign authority.
     if (created === null) throw notFound(RESERVED_DENIAL);
     send(response, created.created === true ? 201 : 200, created.request);
+  };
+
+  // Enrollment alone lets an as-yet-unenrolled operator credential propose its
+  // own verifier. Possession of the protected channel is not enrollment
+  // approval, and the response never carries a request or a credential.
+  const enrollProposal = async (request, response, principal) => {
+    const body = await readJsonBody(request);
+    rejectUnlistedFields(body, ENROLLMENT_FIELDS);
+    const problem = harnessIdProblem(body.harness_id) ?? ownerIdProblem(body.owner_id);
+    if (problem !== null) throw invalidRequest(problem);
+    const value = await broker.proposeEnrollment({
+      keyId: principal.keyId,
+      harnessId: body.harness_id,
+      ownerId: body.owner_id,
+    });
+    send(response, value.state === 'enrolled' ? 200 : 202, value);
+  };
+
+  // Pending observation is scoped to one exact session and returns only the
+  // broker's immutable presentation or null. It never accepts a choice.
+  const pendingPresentation = async (request, response, principal) => {
+    const enrolled = requireEnrolledOperator(principal);
+    const body = await readJsonBody(request);
+    rejectUnlistedFields(body, PENDING_FIELDS);
+    const scope = harnessScopeFrom(body);
+    requireMatchingScope(enrolled, scope);
+    const presentation = await broker.pendingPresentation(scope);
+    send(response, 200, {
+      schema_version: 1,
+      presentation,
+    });
+  };
+
+  // Authoritative read of one retained presentation binding, including a pending
+  // or terminal status. A mismatched or unknown binding is non-disclosing.
+  const observePresentation = async (request, response, principal, segments) => {
+    const enrolled = requireEnrolledOperator(principal);
+    const body = await readJsonBody(request);
+    rejectUnlistedFields(body, PRESENTATION_FIELDS);
+    const scope = harnessScopeFrom(body);
+    requireMatchingScope(enrolled, scope);
+    const presentationId = segments[3];
+    if (typeof presentationId !== 'string' || !PRESENTATION_ID_PATTERN.test(presentationId)) {
+      throw notFound('no such presentation');
+    }
+    const value = await broker.observePresentation({
+      keyId: principal.keyId,
+      ...scope,
+      requestId: body.request_id,
+      presentationId,
+    });
+    if (value === null) throw notFound('no such presentation');
+    send(response, 200, value);
+  };
+
+  // The one submission route: an explicit domain choice bound to the immutable
+  // presentation. Accepted is true only for this newly committed resolution.
+  const harnessDecision = async (request, response, principal) => {
+    const enrolled = requireEnrolledOperator(principal);
+    const body = await readJsonBody(request);
+    rejectUnlistedFields(body, DECISION_FIELDS);
+    const scope = harnessScopeFrom(body);
+    requireMatchingScope(enrolled, scope);
+    const value = await broker.decideThroughHarness({
+      keyId: principal.keyId,
+      ...scope,
+      requestId: body.request_id,
+      presentationId: body.presentation_id,
+      choice: body.choice,
+      responseText: body.response_text === undefined ? null : body.response_text,
+    });
+    if (value === null) throw notFound('no such presentation');
+    send(response, 200, value);
   };
 
   // Read is the one observation this cut enables. Only an authorized actual
@@ -499,6 +652,12 @@ export function createPortableServer({
     // foreground HTTP gains no route that could invite a secure caller to
     // downgrade. Both are admitted before the business routes.
     if (secure !== null && pathname === '/v1/ready' && request.method === 'GET') {
+      // An operator key has no readiness, startup, registration or shutdown
+      // role; a valid credential used on the wrong role is a plain refusal.
+      if (principal.role === 'operator') {
+        send(response, 403, forbidden('this credential cannot use that route').toEnvelope());
+        return;
+      }
       readyRoute(response);
       return;
     }
@@ -608,6 +767,36 @@ export function createPortableServer({
       await readJsonBody(request);
       // Reported before any request lookup, so an unknown ID is not disclosed.
       throw unavailable(RETRY_UNAVAILABLE, 'ENHANCEMENT_UNAVAILABLE', { retryable: false });
+    }
+
+    // The harness routes exist only on the secure listener: legacy serving gains
+    // none of them, so no caller can be invited to downgrade the operator wire.
+    const harnessPath = secure !== null && segments[0] === 'v1' && segments[1] === 'harness';
+    if (harnessPath && request.method === 'POST') {
+      if (segments.length === 3 && segments[2] === 'enrollments') {
+        if (requireOperator(response, principal)) {
+          await enrollProposal(request, response, principal);
+        }
+        return;
+      }
+      if (segments.length === 3 && segments[2] === 'pending') {
+        if (requireOperator(response, principal)) {
+          await pendingPresentation(request, response, principal);
+        }
+        return;
+      }
+      if (segments.length === 3 && segments[2] === 'decisions') {
+        if (requireOperator(response, principal)) {
+          await harnessDecision(request, response, principal);
+        }
+        return;
+      }
+      if (segments.length === 4 && segments[2] === 'presentations') {
+        if (requireOperator(response, principal)) {
+          await observePresentation(request, response, principal, segments);
+        }
+        return;
+      }
     }
 
     throw notFound('no such broker route');

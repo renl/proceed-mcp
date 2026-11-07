@@ -111,7 +111,20 @@
 // place; recovery of the file is an ordinary close and reopen with a fresh
 // instance.
 import { timingSafeEqual } from 'node:crypto';
-import { conflict, invalidArgument, storageFailure, unavailable } from '../errors.js';
+import { authRequired, conflict, invalidArgument, storageFailure, unavailable } from '../errors.js';
+import {
+  ENROLLMENT_ID_PATTERN,
+  ENROLLMENT_TOKEN_PATTERN,
+  ENROLLMENT_TTL_SECONDS,
+  OPERATOR_KEY_ID_PATTERN,
+  PRESENTATION_ID_PATTERN,
+  harnessIdProblem,
+  ownerIdProblem,
+  randomEnrollmentId,
+  randomEnrollmentToken,
+  randomPresentationId,
+  sessionProblem,
+} from '../harness/identifiers.js';
 import { MAX_TELEGRAM_TEXT, measurePortablePresentation } from '../telegram/portable-render.js';
 import {
   CALLBACK_TOKEN_PATTERN,
@@ -148,6 +161,33 @@ const ACKNOWLEDGE_OP = 'request.acknowledge';
 const RETURNED_OP = 'request.returned';
 const RESOLVE_OP = 'request.resolve.telegram';
 const PREPARE_OP = 'telegram.presentation.prepare';
+// Harness-capable history operations (design sections 1-3). They are only
+// committed once the journal declares its harness format.
+const ENROLL_PROPOSE_OP = 'harness.enrollment.propose';
+const ENROLL_NOTICE_OP = 'harness.enrollment.notice';
+const ENROLL_CONFIRM_OP = 'harness.enrollment.confirm';
+const ENROLL_DENY_OP = 'harness.enrollment.deny';
+const HARNESS_ROUTE_OP = 'harness.route';
+const HARNESS_PRESENT_OP = 'harness.presentation';
+const HARNESS_RESOLVE_OP = 'request.resolve.harness';
+// One enrollment proposal lives at most 300 seconds, and an identical replay
+// never extends that window.
+const HARNESS_OPS = new Set([
+  ENROLL_PROPOSE_OP,
+  ENROLL_NOTICE_OP,
+  ENROLL_CONFIRM_OP,
+  ENROLL_DENY_OP,
+  HARNESS_ROUTE_OP,
+  HARNESS_PRESENT_OP,
+  HARNESS_RESOLVE_OP,
+]);
+// The three domain choices and the only resolutions they may commit.
+const HARNESS_CHOICES = Object.freeze({
+  approve: 'approved',
+  reject: 'rejected',
+  respond: 'responded',
+});
+const HARNESS_SESSION_BUSY = 'Session already has an unresolved Proceed request';
 const PAIRING_TTL_SECONDS = 300n;
 // At most five verification attempts per sender in any rolling 60-second
 // interval. The limiter is process-local, so a restart resets it and no failure
@@ -312,6 +352,67 @@ const SOURCE_FIELDS = [
   'message_id',
   'reply_prompt_id',
 ];
+// Harness enrollment facts. A proposal carries its public fingerprint and its
+// exact 300-second window; a notice carries the two private control tokens and
+// the chat they were issued for; a confirmation carries the paired actor and the
+// processed update, while a denial carries only its own instant and update.
+const PROPOSE_FIELDS = [
+  'created_at',
+  'enrollment_id',
+  'expires_at',
+  'harness_id',
+  'key_id',
+  'op',
+  'owner_id',
+];
+const NOTICE_FIELDS = [
+  'chat_id',
+  'confirm_token',
+  'deny_token',
+  'enrollment_id',
+  'op',
+  'prepared_at',
+  'update_id',
+];
+const CONFIRM_FIELDS = [
+  'chat_id',
+  'confirmed_at',
+  'enrollment_id',
+  'harness_id',
+  'key_id',
+  'op',
+  'owner_id',
+  'update_id',
+  'user_id',
+];
+const DENY_FIELDS = ['denied_at', 'enrollment_id', 'op', 'update_id'];
+// A preparation route is bound to its reserved handle and request; a presentation
+// binding is the durable correlation id that survives lost responses and restart.
+const ROUTE_FIELDS = ['harness_id', 'op', 'owner_id', 'request_handle', 'request_id', 'session_id'];
+const HARNESS_PRESENT_FIELDS = [
+  'harness_id',
+  'op',
+  'owner_id',
+  'presentation_id',
+  'request_id',
+  'session_id',
+];
+// One harness decision persists its target, decision, resolution, exact text,
+// instant, initial ledger and the complete accepted provenance.
+const HARNESS_RESOLVE_FIELDS = [
+  'decision_id',
+  'delivery_state',
+  'harness_id',
+  'key_id',
+  'op',
+  'owner_id',
+  'presentation_id',
+  'request_id',
+  'resolution',
+  'resolved_at',
+  'response_text',
+  'session_id',
+];
 const EVENT_CAPABILITY = Object.freeze({
   status: 'unverified',
   revision: null,
@@ -338,6 +439,105 @@ function labelProblem(value) {
     return 'session_label must be 1-128 Unicode scalar values';
   }
   return null;
+}
+
+// A harness scope is the configured local installation plus the existing
+// transport principal. Both are validated before any lookup.
+function scopeProblem(harnessId, ownerId) {
+  return harnessIdProblem(harnessId) ?? ownerIdProblem(ownerId);
+}
+
+function requireScope(harnessId, ownerId) {
+  const problem = scopeProblem(harnessId, ownerId);
+  if (problem !== null) throw invalidArgument(problem);
+}
+
+function requireSessionId(value) {
+  const problem = sessionProblem(value);
+  if (problem !== null) throw invalidArgument(problem);
+  return value;
+}
+
+function sameRoute(left, right) {
+  return (
+    left !== null &&
+    right !== null &&
+    left.harness_id === right.harness_id &&
+    left.owner_id === right.owner_id &&
+    left.session_id === right.session_id
+  );
+}
+
+function routeOf(request) {
+  return request.harness_route ?? null;
+}
+
+// An enrollment proposal is exactly the public record the operator can compare;
+// an already enrolled scope reports no pending identifiers.
+function enrollmentView(record) {
+  const enrolled = record.state === 'enrolled';
+  return {
+    schema_version: PORTABLE_REPRESENTATION_SCHEMA_VERSION,
+    enrollment_id: enrolled ? null : record.enrollment_id,
+    harness_id: record.harness_id,
+    owner_id: record.owner_id,
+    key_id: record.key_id,
+    expires_at: enrolled ? null : record.expires_at,
+    state: record.state,
+  };
+}
+
+// The immutable presentation is the request's own committed values, never a
+// UI-supplied question. It carries no credential, fingerprint or capability.
+function harnessPresentationView(request) {
+  const route = routeOf(request);
+  return {
+    presentation_id: request.presentation_id,
+    request_id: request.request_id,
+    harness_id: route.harness_id,
+    owner_id: route.owner_id,
+    session_id: route.session_id,
+    session_label: request.session_label,
+    action: request.action,
+    context: request.context,
+    expires_at: request.expires_at,
+  };
+}
+
+function harnessDecisionView(request, accepted) {
+  return {
+    schema_version: PORTABLE_REPRESENTATION_SCHEMA_VERSION,
+    accepted,
+    request_id: request.request_id,
+    decision_id: request.decision_id,
+    resolution: request.resolution,
+    response_text: request.response_text,
+  };
+}
+
+// A harness decision is validated without coercion before any authentication or
+// lookup: exactly one of the three domain choices, with text only for Respond.
+function harnessChoiceFields(input) {
+  if (!isPlainObject(input)) throw invalidArgument('a harness decision needs an object');
+  const { requestId, presentationId, choice, responseText } = input;
+  if (typeof requestId !== 'string' || !REQUEST_ID_PATTERN.test(requestId)) {
+    throw invalidArgument('request_id must be a well-formed request identifier');
+  }
+  if (typeof presentationId !== 'string' || !PRESENTATION_ID_PATTERN.test(presentationId)) {
+    throw invalidArgument('presentation_id must be hpr_ plus 32 lowercase hexadecimal characters');
+  }
+  if (typeof choice !== 'string' || !Object.hasOwn(HARNESS_CHOICES, choice)) {
+    throw invalidArgument('choice must be approve, reject or respond');
+  }
+  if (choice !== 'respond') {
+    if (responseText !== null) {
+      throw invalidArgument('response_text must be null for approve or reject');
+    }
+    return { requestId, presentationId, choice, responseText: null };
+  }
+  const problem = textProblem(responseText, 'response_text', 1, MAX_TELEGRAM_TEXT);
+  if (problem !== null) throw invalidArgument(problem);
+  return { requestId, presentationId, choice, responseText };
 }
 
 function reservationView(record) {
@@ -388,6 +588,17 @@ function creationFields(input) {
     );
   }
   return { clientRequestId, action, context, duration: expiresInSeconds };
+}
+
+// An optional harness route is validated before authority: `undefined` means the
+// caller supplied none, and a present value must be exactly the configured
+// harness identity plus one bounded session route.
+function harnessRouteInput(value) {
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) throw invalidArgument('harness_route must be an object');
+  const problem = harnessIdProblem(value.harnessId);
+  if (problem !== null) throw invalidArgument(problem);
+  return { harnessId: value.harnessId, sessionId: requireSessionId(value.sessionId) };
 }
 
 // An existing creation is compared exactly: the committed instants supply the
@@ -1457,6 +1668,260 @@ function readCursor(mutation) {
   return { kind: 'cursor', last_update_id: mutation.last_update_id };
 }
 
+function readEnrollmentProposal(mutation) {
+  exactFields(mutation, PROPOSE_FIELDS);
+  if (
+    typeof mutation.enrollment_id !== 'string' ||
+    !ENROLLMENT_ID_PATTERN.test(mutation.enrollment_id)
+  ) {
+    throw integrity(`${ENROLL_PROPOSE_OP} has a malformed enrollment id`);
+  }
+  const problem = scopeProblem(mutation.harness_id, mutation.owner_id);
+  if (problem !== null) throw integrity(`${ENROLL_PROPOSE_OP}: ${problem}`);
+  if (typeof mutation.key_id !== 'string' || !OPERATOR_KEY_ID_PATTERN.test(mutation.key_id)) {
+    throw integrity(`${ENROLL_PROPOSE_OP} has a malformed operator fingerprint`);
+  }
+  const createdAt = readInstant(mutation.created_at);
+  if (createdAt === null) throw integrity(`${ENROLL_PROPOSE_OP} has a malformed creation time`);
+  const expiresAt = readInstant(mutation.expires_at);
+  if (expiresAt === null) throw integrity(`${ENROLL_PROPOSE_OP} has a malformed expiry`);
+  if (
+    expiresAt.seconds - createdAt.seconds !== ENROLLMENT_TTL_SECONDS ||
+    expiresAt.fraction !== createdAt.fraction
+  ) {
+    throw integrity(`${ENROLL_PROPOSE_OP} must expire exactly five minutes after creation`);
+  }
+  return {
+    kind: 'enrollProposal',
+    record: {
+      enrollment_id: mutation.enrollment_id,
+      harness_id: mutation.harness_id,
+      owner_id: mutation.owner_id,
+      key_id: mutation.key_id,
+      created_at: mutation.created_at,
+      expires_at: mutation.expires_at,
+      createdAt,
+      expiresAt,
+    },
+  };
+}
+
+function readEnrollmentNotice(mutation) {
+  exactFields(mutation, NOTICE_FIELDS);
+  if (
+    typeof mutation.enrollment_id !== 'string' ||
+    !ENROLLMENT_ID_PATTERN.test(mutation.enrollment_id)
+  ) {
+    throw integrity(`${ENROLL_NOTICE_OP} has a malformed enrollment id`);
+  }
+  for (const field of ['confirm_token', 'deny_token']) {
+    if (typeof mutation[field] !== 'string' || !ENROLLMENT_TOKEN_PATTERN.test(mutation[field])) {
+      throw integrity(`${ENROLL_NOTICE_OP} has a malformed ${field}`);
+    }
+  }
+  if (mutation.confirm_token === mutation.deny_token) {
+    throw integrity(`${ENROLL_NOTICE_OP} must issue two distinct control tokens`);
+  }
+  if (identityProblem(mutation.chat_id) !== null) {
+    throw integrity(`${ENROLL_NOTICE_OP} has a malformed chat id`);
+  }
+  const preparedAt = readInstant(mutation.prepared_at);
+  if (preparedAt === null) throw integrity(`${ENROLL_NOTICE_OP} has a malformed preparation time`);
+  if (!usableUpdateId(mutation.update_id)) {
+    throw integrity(
+      `${ENROLL_NOTICE_OP} needs a raw nonnegative update id with a safe next offset`,
+    );
+  }
+  return {
+    kind: 'enrollNotice',
+    record: {
+      enrollment_id: mutation.enrollment_id,
+      confirm_token: mutation.confirm_token,
+      deny_token: mutation.deny_token,
+      chat_id: mutation.chat_id,
+      prepared_at: mutation.prepared_at,
+      preparedAt,
+      update_id: mutation.update_id,
+    },
+  };
+}
+
+function readEnrollmentConfirm(mutation) {
+  exactFields(mutation, CONFIRM_FIELDS);
+  if (
+    typeof mutation.enrollment_id !== 'string' ||
+    !ENROLLMENT_ID_PATTERN.test(mutation.enrollment_id)
+  ) {
+    throw integrity(`${ENROLL_CONFIRM_OP} has a malformed enrollment id`);
+  }
+  if (typeof mutation.key_id !== 'string' || !OPERATOR_KEY_ID_PATTERN.test(mutation.key_id)) {
+    throw integrity(`${ENROLL_CONFIRM_OP} has a malformed operator fingerprint`);
+  }
+  const problem = scopeProblem(mutation.harness_id, mutation.owner_id);
+  if (problem !== null) throw integrity(`${ENROLL_CONFIRM_OP}: ${problem}`);
+  if (identityProblem(mutation.user_id) !== null) {
+    throw integrity(`${ENROLL_CONFIRM_OP} has a malformed actor`);
+  }
+  if (identityProblem(mutation.chat_id) !== null) {
+    throw integrity(`${ENROLL_CONFIRM_OP} has a malformed chat id`);
+  }
+  if (!usableUpdateId(mutation.update_id)) {
+    throw integrity(
+      `${ENROLL_CONFIRM_OP} needs a raw nonnegative update id with a safe next offset`,
+    );
+  }
+  const confirmedAt = readInstant(mutation.confirmed_at);
+  if (confirmedAt === null)
+    throw integrity(`${ENROLL_CONFIRM_OP} has a malformed confirmation time`);
+  return {
+    kind: 'enrollConfirm',
+    record: {
+      enrollment_id: mutation.enrollment_id,
+      key_id: mutation.key_id,
+      harness_id: mutation.harness_id,
+      owner_id: mutation.owner_id,
+      user_id: mutation.user_id,
+      chat_id: mutation.chat_id,
+      update_id: mutation.update_id,
+      confirmed_at: mutation.confirmed_at,
+      confirmedAt,
+    },
+  };
+}
+
+function readEnrollmentDeny(mutation) {
+  exactFields(mutation, DENY_FIELDS);
+  if (
+    typeof mutation.enrollment_id !== 'string' ||
+    !ENROLLMENT_ID_PATTERN.test(mutation.enrollment_id)
+  ) {
+    throw integrity(`${ENROLL_DENY_OP} has a malformed enrollment id`);
+  }
+  if (!usableUpdateId(mutation.update_id)) {
+    throw integrity(`${ENROLL_DENY_OP} needs a raw nonnegative update id with a safe next offset`);
+  }
+  const deniedAt = readInstant(mutation.denied_at);
+  if (deniedAt === null) throw integrity(`${ENROLL_DENY_OP} has a malformed denial time`);
+  return {
+    kind: 'enrollDeny',
+    record: {
+      enrollment_id: mutation.enrollment_id,
+      update_id: mutation.update_id,
+      denied_at: mutation.denied_at,
+      deniedAt,
+    },
+  };
+}
+
+function readHarnessRoute(mutation) {
+  exactFields(mutation, ROUTE_FIELDS);
+  if (typeof mutation.request_id !== 'string' || !REQUEST_ID_PATTERN.test(mutation.request_id)) {
+    throw integrity(`${HARNESS_ROUTE_OP} has a malformed request id`);
+  }
+  if (
+    typeof mutation.request_handle !== 'string' ||
+    !REQUEST_HANDLE_PATTERN.test(mutation.request_handle)
+  ) {
+    throw integrity(`${HARNESS_ROUTE_OP} has a malformed handle`);
+  }
+  const problem = scopeProblem(mutation.harness_id, mutation.owner_id);
+  if (problem !== null) throw integrity(`${HARNESS_ROUTE_OP}: ${problem}`);
+  const session = sessionProblem(mutation.session_id);
+  if (session !== null) throw integrity(`${HARNESS_ROUTE_OP}: ${session}`);
+  return {
+    kind: 'harnessRoute',
+    record: {
+      request_id: mutation.request_id,
+      request_handle: mutation.request_handle,
+      harness_id: mutation.harness_id,
+      owner_id: mutation.owner_id,
+      session_id: mutation.session_id,
+    },
+  };
+}
+
+function readHarnessPresentation(mutation) {
+  exactFields(mutation, HARNESS_PRESENT_FIELDS);
+  if (typeof mutation.request_id !== 'string' || !REQUEST_ID_PATTERN.test(mutation.request_id)) {
+    throw integrity(`${HARNESS_PRESENT_OP} has a malformed request id`);
+  }
+  if (
+    typeof mutation.presentation_id !== 'string' ||
+    !PRESENTATION_ID_PATTERN.test(mutation.presentation_id)
+  ) {
+    throw integrity(`${HARNESS_PRESENT_OP} has a malformed presentation id`);
+  }
+  const problem = scopeProblem(mutation.harness_id, mutation.owner_id);
+  if (problem !== null) throw integrity(`${HARNESS_PRESENT_OP}: ${problem}`);
+  const session = sessionProblem(mutation.session_id);
+  if (session !== null) throw integrity(`${HARNESS_PRESENT_OP}: ${session}`);
+  return {
+    kind: 'harnessPresentation',
+    record: {
+      request_id: mutation.request_id,
+      presentation_id: mutation.presentation_id,
+      harness_id: mutation.harness_id,
+      owner_id: mutation.owner_id,
+      session_id: mutation.session_id,
+    },
+  };
+}
+
+function readHarnessResolve(mutation) {
+  exactFields(mutation, HARNESS_RESOLVE_FIELDS);
+  if (typeof mutation.request_id !== 'string' || !REQUEST_ID_PATTERN.test(mutation.request_id)) {
+    throw integrity(`${HARNESS_RESOLVE_OP} has a malformed request id`);
+  }
+  if (typeof mutation.decision_id !== 'string' || !DECISION_ID_PATTERN.test(mutation.decision_id)) {
+    throw integrity(`${HARNESS_RESOLVE_OP} has a malformed decision id`);
+  }
+  if (typeof mutation.resolution !== 'string' || !HUMAN_RESOLUTIONS.has(mutation.resolution)) {
+    throw integrity(`${HARNESS_RESOLVE_OP} has an unsupported resolution`);
+  }
+  if (mutation.resolution === 'responded') {
+    const problem = textProblem(mutation.response_text, 'response_text', 1, MAX_TELEGRAM_TEXT);
+    if (problem !== null) throw integrity(`${HARNESS_RESOLVE_OP} ${problem}`);
+  } else if (mutation.response_text !== null) {
+    throw integrity(`${HARNESS_RESOLVE_OP} needs null response text for approve or reject`);
+  }
+  const resolvedAt = readInstant(mutation.resolved_at);
+  if (resolvedAt === null) throw integrity(`${HARNESS_RESOLVE_OP} has a malformed resolution time`);
+  const delivery = mutation.delivery_state;
+  if (typeof delivery !== 'string' || !DELIVERY_STATES.has(delivery)) {
+    throw integrity(`${HARNESS_RESOLVE_OP} has an unsupported initial delivery state`);
+  }
+  if (typeof mutation.key_id !== 'string' || !OPERATOR_KEY_ID_PATTERN.test(mutation.key_id)) {
+    throw integrity(`${HARNESS_RESOLVE_OP} has a malformed operator fingerprint`);
+  }
+  const problem = scopeProblem(mutation.harness_id, mutation.owner_id);
+  if (problem !== null) throw integrity(`${HARNESS_RESOLVE_OP}: ${problem}`);
+  const session = sessionProblem(mutation.session_id);
+  if (session !== null) throw integrity(`${HARNESS_RESOLVE_OP}: ${session}`);
+  if (
+    typeof mutation.presentation_id !== 'string' ||
+    !PRESENTATION_ID_PATTERN.test(mutation.presentation_id)
+  ) {
+    throw integrity(`${HARNESS_RESOLVE_OP} has a malformed presentation id`);
+  }
+  return {
+    kind: 'harnessResolve',
+    record: {
+      request_id: mutation.request_id,
+      decision_id: mutation.decision_id,
+      resolution: mutation.resolution,
+      response_text: mutation.response_text,
+      resolved_at: mutation.resolved_at,
+      resolvedAt,
+      delivery_state: delivery,
+      key_id: mutation.key_id,
+      harness_id: mutation.harness_id,
+      owner_id: mutation.owner_id,
+      session_id: mutation.session_id,
+      presentation_id: mutation.presentation_id,
+    },
+  };
+}
+
 // Pairing joins the reservation vocabulary of committed history. An unfamiliar
 // operation stays fatal rather than skipped.
 function readMutation(mutation) {
@@ -1502,6 +1967,20 @@ function readMutation(mutation) {
       return readStatusShown(mutation);
     case RESOLVE_OP:
       return readResolve(mutation);
+    case ENROLL_PROPOSE_OP:
+      return readEnrollmentProposal(mutation);
+    case ENROLL_NOTICE_OP:
+      return readEnrollmentNotice(mutation);
+    case ENROLL_CONFIRM_OP:
+      return readEnrollmentConfirm(mutation);
+    case ENROLL_DENY_OP:
+      return readEnrollmentDeny(mutation);
+    case HARNESS_ROUTE_OP:
+      return readHarnessRoute(mutation);
+    case HARNESS_PRESENT_OP:
+      return readHarnessPresentation(mutation);
+    case HARNESS_RESOLVE_OP:
+      return readHarnessResolve(mutation);
     default:
       throw integrity(`unknown mutation op ${JSON.stringify(mutation.op)}`);
   }
@@ -1692,7 +2171,21 @@ function stageCreate(record, staged, pairing, reservedNow) {
     // response opening instead of an allocation.
     promptFailureAt: null,
     promptFailureCode: null,
+    // A routed request is bound to its immutable preparation route. The
+    // presentation binding is a later committed fact; occupancy starts with this
+    // creation, so a second unresolved request in one session is invalid history.
+    harness_route: null,
+    presentation_id: null,
   };
+  const route = staged.routes.get(request.request_id) ?? null;
+  request.harness_route = route;
+  if (route !== null) {
+    for (const existing of staged.requests.values()) {
+      if (existing.resolution === 'pending' && sameRoute(routeOf(existing), route)) {
+        throw integrity(`${CREATE_OP} creates a second unresolved request in one harness session`);
+      }
+    }
+  }
   if (measurePortablePresentation(requestView(request)).worst.length > MAX_TELEGRAM_TEXT) {
     throw integrity(`${CREATE_OP} cannot be presented within ${MAX_TELEGRAM_TEXT} characters`);
   }
@@ -2072,6 +2565,271 @@ function stageEvidence(record, staged) {
   request.delivery_error = null;
 }
 
+// One enrollment proposal is pending per owner at a time, and at most one key is
+// active per scope. A newer proposal at the same owner supersedes an older
+// pending one; the superseded proposal can then no longer be confirmed.
+function stageEnrollmentProposal(record, staged) {
+  if (staged.enrollments.has(record.enrollment_id)) {
+    throw integrity(`enrollment id ${record.enrollment_id} is proposed twice`);
+  }
+  if (staged.activeOperators.has(record.key_id)) {
+    throw integrity(`${ENROLL_PROPOSE_OP} proposes an already active operator key`);
+  }
+  for (const existing of staged.enrollments.values()) {
+    if (
+      existing.state === 'enrolled' &&
+      existing.harness_id === record.harness_id &&
+      existing.owner_id === record.owner_id
+    ) {
+      throw integrity(`${ENROLL_PROPOSE_OP} proposes a key for an already enrolled scope`);
+    }
+  }
+  staged.enrollments.set(record.enrollment_id, {
+    enrollment_id: record.enrollment_id,
+    harness_id: record.harness_id,
+    owner_id: record.owner_id,
+    key_id: record.key_id,
+    created_at: record.created_at,
+    expires_at: record.expires_at,
+    createdAt: record.createdAt,
+    expiresAt: record.expiresAt,
+    state: 'pending',
+    notice: null,
+    confirmedAt: null,
+    user_id: null,
+    chat_id: null,
+  });
+  staged.pendingByOwner.set(record.owner_id, record.enrollment_id);
+}
+
+function stageEnrollmentNotice(record, staged) {
+  const enrollment = staged.enrollments.get(record.enrollment_id);
+  if (enrollment === undefined) throw integrity(`${ENROLL_NOTICE_OP} names no proposed enrollment`);
+  if (enrollment.state !== 'pending') {
+    throw integrity(`${ENROLL_NOTICE_OP} targets a closed enrollment`);
+  }
+  if (enrollment.notice !== null) throw integrity(`${ENROLL_NOTICE_OP} is recorded twice`);
+  for (const token of [record.confirm_token, record.deny_token]) {
+    if (staged.enrollmentTokens.has(token)) {
+      throw integrity(`enrollment control token for ${record.enrollment_id} is reused`);
+    }
+  }
+  if (
+    compareInstants(record.preparedAt, enrollment.createdAt) < 0 ||
+    compareInstants(record.preparedAt, enrollment.expiresAt) >= 0
+  ) {
+    throw integrity(`${ENROLL_NOTICE_OP} lies outside the enrollment lifetime`);
+  }
+  staged.enrollmentTokens.set(record.confirm_token, {
+    enrollment_id: record.enrollment_id,
+    kind: 'confirm',
+  });
+  staged.enrollmentTokens.set(record.deny_token, {
+    enrollment_id: record.enrollment_id,
+    kind: 'deny',
+  });
+  enrollment.notice = {
+    chat_id: record.chat_id,
+    prepared_at: record.prepared_at,
+    preparedAt: record.preparedAt,
+    confirm_token: record.confirm_token,
+    deny_token: record.deny_token,
+  };
+}
+
+function stageEnrollmentConfirm(record, staged, pairing) {
+  const enrollment = staged.enrollments.get(record.enrollment_id);
+  if (enrollment === undefined) {
+    throw integrity(`${ENROLL_CONFIRM_OP} names no proposed enrollment`);
+  }
+  if (enrollment.state !== 'pending') {
+    throw integrity(`${ENROLL_CONFIRM_OP} targets a closed enrollment`);
+  }
+  if (staged.pendingByOwner.get(enrollment.owner_id) !== record.enrollment_id) {
+    throw integrity(`${ENROLL_CONFIRM_OP} confirms a superseded proposal`);
+  }
+  if (
+    enrollment.key_id !== record.key_id ||
+    enrollment.harness_id !== record.harness_id ||
+    enrollment.owner_id !== record.owner_id
+  ) {
+    throw integrity(`${ENROLL_CONFIRM_OP} does not match the proposed scope`);
+  }
+  if (
+    pairing === null ||
+    pairing.user_id !== record.user_id ||
+    pairing.chat_id !== record.chat_id
+  ) {
+    throw integrity(`${ENROLL_CONFIRM_OP} does not match the committed pairing`);
+  }
+  if (enrollment.notice === null || enrollment.notice.chat_id !== record.chat_id) {
+    throw integrity(`${ENROLL_CONFIRM_OP} has no matching enrollment notice`);
+  }
+  if (
+    compareInstants(record.confirmedAt, enrollment.createdAt) < 0 ||
+    compareInstants(record.confirmedAt, enrollment.expiresAt) >= 0
+  ) {
+    throw integrity(`${ENROLL_CONFIRM_OP} lies outside the enrollment lifetime`);
+  }
+  enrollment.state = 'enrolled';
+  enrollment.confirmedAt = record.confirmedAt;
+  enrollment.user_id = record.user_id;
+  enrollment.chat_id = record.chat_id;
+  staged.pendingByOwner.delete(enrollment.owner_id);
+  staged.activeOperators.set(record.key_id, {
+    key_id: record.key_id,
+    harness_id: record.harness_id,
+    owner_id: record.owner_id,
+    enrollment_id: record.enrollment_id,
+  });
+}
+
+function stageEnrollmentDeny(record, staged) {
+  const enrollment = staged.enrollments.get(record.enrollment_id);
+  if (enrollment === undefined) throw integrity(`${ENROLL_DENY_OP} names no proposed enrollment`);
+  if (enrollment.state !== 'pending')
+    throw integrity(`${ENROLL_DENY_OP} targets a closed enrollment`);
+  if (enrollment.notice === null) {
+    throw integrity(`${ENROLL_DENY_OP} has no matching enrollment notice`);
+  }
+  if (
+    compareInstants(record.deniedAt, enrollment.createdAt) < 0 ||
+    compareInstants(record.deniedAt, enrollment.expiresAt) >= 0
+  ) {
+    throw integrity(`${ENROLL_DENY_OP} lies outside the enrollment lifetime`);
+  }
+  enrollment.state = 'denied';
+  if (staged.pendingByOwner.get(enrollment.owner_id) === record.enrollment_id) {
+    staged.pendingByOwner.delete(enrollment.owner_id);
+  }
+}
+
+// A preparation route is bound to its committed reservation and can only ever
+// name that reservation's own request and principal.
+function stageHarnessRoute(record, staged) {
+  const reservation = staged.byHandle.get(record.request_handle);
+  if (reservation === undefined)
+    throw integrity(`${HARNESS_ROUTE_OP} names no committed reservation`);
+  if (reservation.request_id !== record.request_id) {
+    throw integrity(`${HARNESS_ROUTE_OP} does not match the reserved request id`);
+  }
+  if (reservation.owner_id !== record.owner_id) {
+    throw integrity(`${HARNESS_ROUTE_OP} does not match the reserved principal`);
+  }
+  if (staged.routes.has(record.request_id)) {
+    throw integrity(`${HARNESS_ROUTE_OP} binds the request twice`);
+  }
+  staged.routes.set(record.request_id, {
+    harness_id: record.harness_id,
+    owner_id: record.owner_id,
+    session_id: record.session_id,
+    request_handle: record.request_handle,
+  });
+}
+
+// A presentation binding names one committed routed request in its own scope and
+// session, and is never reassigned.
+function stageHarnessPresentation(record, staged) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) {
+    throw integrity(`${HARNESS_PRESENT_OP} names no committed request`);
+  }
+  const route = staged.routes.get(record.request_id);
+  if (route === undefined) throw integrity(`${HARNESS_PRESENT_OP} names no committed route`);
+  if (
+    route.harness_id !== record.harness_id ||
+    route.owner_id !== record.owner_id ||
+    route.session_id !== record.session_id
+  ) {
+    throw integrity(`${HARNESS_PRESENT_OP} does not match the committed route`);
+  }
+  if (request.presentation_id !== null) {
+    throw integrity(`${HARNESS_PRESENT_OP} binds a presentation twice`);
+  }
+  if (staged.presentations.has(record.presentation_id)) {
+    throw integrity(`presentation id ${record.presentation_id} is used twice`);
+  }
+  request.presentation_id = record.presentation_id;
+  staged.presentations.set(record.presentation_id, record.request_id);
+}
+
+// A harness resolution competes for the same single durable outcome as Telegram:
+// it names the request, its immutable presentation binding and an active
+// enrolled key for that exact scope, and lies inside the request lifetime. The
+// persisted provenance is the accepted decision's own channel record.
+function stageHarnessResolve(record, staged) {
+  const request = staged.requests.get(record.request_id);
+  if (request === undefined) throw integrity(`${HARNESS_RESOLVE_OP} names no committed request`);
+  if (request.resolution !== 'pending') {
+    throw integrity(`${HARNESS_RESOLVE_OP} targets an already resolved request`);
+  }
+  const route = staged.routes.get(record.request_id);
+  if (route === undefined) throw integrity(`${HARNESS_RESOLVE_OP} names no committed route`);
+  if (
+    route.harness_id !== record.harness_id ||
+    route.owner_id !== record.owner_id ||
+    route.session_id !== record.session_id
+  ) {
+    throw integrity(`${HARNESS_RESOLVE_OP} does not match the committed route`);
+  }
+  if (request.presentation_id !== record.presentation_id) {
+    throw integrity(`${HARNESS_RESOLVE_OP} does not match the presentation binding`);
+  }
+  const active = staged.activeOperators.get(record.key_id);
+  if (
+    active === undefined ||
+    active.harness_id !== record.harness_id ||
+    active.owner_id !== record.owner_id
+  ) {
+    throw integrity(`${HARNESS_RESOLVE_OP} names no active enrolled operator`);
+  }
+  if (
+    compareInstants(record.resolvedAt, request.createdAt) < 0 ||
+    compareInstants(record.resolvedAt, request.expiresAt) >= 0
+  ) {
+    throw integrity(`${HARNESS_RESOLVE_OP} lies outside the request lifetime`);
+  }
+  if (staged.decisions.has(record.decision_id)) {
+    throw integrity(`decision id ${record.decision_id} is used twice`);
+  }
+  staged.decisions.add(record.decision_id);
+  request.resolution = record.resolution;
+  request.resolved_at = record.resolved_at;
+  request.resolvedAt = record.resolvedAt;
+  request.response_text = record.resolution === 'responded' ? record.response_text : null;
+  request.decision_id = record.decision_id;
+  request.delivery_state = record.delivery_state;
+  request.delivery_error = null;
+  request.resolution_source = {
+    channel: 'harness',
+    key_id: record.key_id,
+    harness_id: record.harness_id,
+    owner_id: record.owner_id,
+    session_id: record.session_id,
+    presentation_id: record.presentation_id,
+  };
+}
+
+// An enrollment notice, confirmation or denial consumes exactly its own update,
+// and only while that update is newer than the cursor committed before the
+// transaction. One update never authorizes two of these effects.
+function applyEnrollmentCursor(records, cursorRecords, entryCursor) {
+  if (records.length === 0) return;
+  if (records.length > 1) {
+    throw integrity('a transaction records more than one enrollment effect');
+  }
+  if (cursorRecords.length !== 1) {
+    throw integrity('an enrollment effect needs exactly one cursor in its transaction');
+  }
+  const updateId = records[0].update_id;
+  if (cursorRecords[0].last_update_id !== updateId) {
+    throw integrity('an enrollment effect does not match its transaction cursor');
+  }
+  if (entryCursor !== null && updateId <= entryCursor) {
+    throw integrity('an enrollment effect is not newer than the committed cursor');
+  }
+}
+
 class PortableBroker {
   #journal;
 
@@ -2115,6 +2873,21 @@ class PortableBroker {
   #tokens = new Map();
 
   #mappings = new Map();
+
+  // Harness state rebuilt from committed history: enrollment proposals with
+  // their lifecycle, the one active key per scope, the durable control tokens,
+  // immutable preparation routes and presentation bindings.
+  #enrollments = new Map();
+
+  #pendingByOwner = new Map();
+
+  #activeOperators = new Map();
+
+  #enrollmentTokens = new Map();
+
+  #routes = new Map();
+
+  #presentations = new Map();
 
   #queue = Promise.resolve();
 
@@ -2211,6 +2984,12 @@ class PortableBroker {
       decisions: new Set(),
       tokens: new Map(),
       mappings: new Map(),
+      enrollments: new Map(),
+      pendingByOwner: new Map(),
+      activeOperators: new Map(),
+      enrollmentTokens: new Map(),
+      routes: new Map(),
+      presentations: new Map(),
     };
     const challenges = new Map();
     let pairing = null;
@@ -2224,6 +3003,7 @@ class PortableBroker {
       const cursorRecords = [];
       const resolveRecords = [];
       const openRecords = [];
+      const enrollmentRecords = [];
       for (const record of records) {
         if (record.kind === 'reservation') stageReservation(record.record, staged, reservedNow);
         else if (record.kind === 'create') stageCreate(record.record, staged, pairing, reservedNow);
@@ -2244,11 +3024,26 @@ class PortableBroker {
         else if (record.kind === 'failed') stageFailed(record.record, staged);
         else if (record.kind === 'retired') stageRetired(record.record, staged);
         else if (record.kind === 'status') stageStatusShown(record.record, staged);
+        else if (record.kind === 'enrollProposal') stageEnrollmentProposal(record.record, staged);
+        else if (record.kind === 'enrollNotice') {
+          stageEnrollmentNotice(record.record, staged);
+          enrollmentRecords.push(record.record);
+        } else if (record.kind === 'enrollConfirm') {
+          stageEnrollmentConfirm(record.record, staged, pairing);
+          enrollmentRecords.push(record.record);
+        } else if (record.kind === 'enrollDeny') {
+          stageEnrollmentDeny(record.record, staged);
+          enrollmentRecords.push(record.record);
+        } else if (record.kind === 'harnessRoute') stageHarnessRoute(record.record, staged);
+        else if (record.kind === 'harnessPresentation')
+          stageHarnessPresentation(record.record, staged);
+        else if (record.kind === 'harnessResolve') stageHarnessResolve(record.record, staged);
         else if (record.kind === 'cursor') cursorRecords.push(record);
         else pairingRecords.push(record);
       }
       applyOpenCursor(openRecords, resolveRecords, cursorRecords, cursor);
       applyResolveCursor(resolveRecords, cursorRecords, cursor);
+      applyEnrollmentCursor(enrollmentRecords, cursorRecords, cursor);
       pairing = applyPairing(pairingRecords, challenges, pairing);
       cursor = applyCursor(cursorRecords, cursor);
     }
@@ -2259,6 +3054,12 @@ class PortableBroker {
     this.#decisions = staged.decisions;
     this.#tokens = staged.tokens;
     this.#mappings = staged.mappings;
+    this.#enrollments = staged.enrollments;
+    this.#pendingByOwner = staged.pendingByOwner;
+    this.#activeOperators = staged.activeOperators;
+    this.#enrollmentTokens = staged.enrollmentTokens;
+    this.#routes = staged.routes;
+    this.#presentations = staged.presentations;
     this.#pairing = pairing;
     // Challenge state stays retained after the staging maps are installed: a
     // later issuance cannot reuse a hash that history already committed, and a
@@ -2335,8 +3136,9 @@ class PortableBroker {
 
   // Reserves fresh authority for one preparation call. Validated up front, then
   // serialized so one journal append per call is ordered with every other
-  // mutation this broker performs.
-  reserveHandle({ ownerId, sessionLabel } = {}) {
+  // mutation this broker performs. An optional harness route is persisted with
+  // the reservation; it is routing context, never request or decision authority.
+  reserveHandle({ ownerId, sessionLabel, harnessRoute } = {}) {
     const refusal = this.#admissionRefusal();
     if (refusal !== null) return Promise.reject(refusal);
     if (!this.#recovered) {
@@ -2349,7 +3151,17 @@ class PortableBroker {
     const label = sessionLabel === undefined ? owner.label : sessionLabel;
     const problem = labelProblem(label);
     if (problem !== null) return Promise.reject(invalidArgument(problem));
-    return this.#enqueue(() => this.#reserve(ownerId, label));
+    let route = null;
+    if (harnessRoute !== undefined) {
+      if (!isPlainObject(harnessRoute)) {
+        return Promise.reject(invalidArgument('harness_route must be an object'));
+      }
+      const routeProblem = harnessIdProblem(harnessRoute.harnessId);
+      if (routeProblem !== null) return Promise.reject(invalidArgument(routeProblem));
+      const sessionId = requireSessionId(harnessRoute.sessionId);
+      route = { harnessId: harnessRoute.harnessId, sessionId };
+    }
+    return this.#enqueue(() => this.#reserve(ownerId, label, route));
   }
 
   // Authenticates a reservation with its capability. Missing, malformed,
@@ -2376,6 +3188,7 @@ class PortableBroker {
   createRequest(input = {}) {
     return Promise.resolve().then(() => {
       const fields = creationFields(input);
+      const harnessRoute = harnessRouteInput(input.harnessRoute);
       const reservation = this.#creationBinding(input);
       if (reservation === null) return null;
       const refusal = this.#admissionRefusal();
@@ -2386,7 +3199,7 @@ class PortableBroker {
           'STORAGE_FAILURE',
         );
       }
-      return this.#enqueue(() => this.#create(reservation, fields));
+      return this.#enqueue(() => this.#create(reservation, fields, harnessRoute));
     });
   }
 
@@ -2401,6 +3214,167 @@ class PortableBroker {
       const fields = sentFields(input);
       this.#receiptAdmission();
       return this.#enqueue(() => this.#recordSent(fields));
+    });
+  }
+
+  // One enrollment proposal, authenticated by the presented credential's own
+  // verifier. An active key for the scope is returned as already enrolled; a
+  // different active key is refused rather than replaced; a live pending proposal
+  // for the owner is either returned unchanged (identical replay) or reported
+  // busy. Every condition naming stored state is decided inside the turn.
+  proposeEnrollment(input = {}) {
+    return Promise.resolve().then(() => {
+      const keyId = isPlainObject(input) ? input.keyId : undefined;
+      if (typeof keyId !== 'string' || !OPERATOR_KEY_ID_PATTERN.test(keyId)) {
+        throw invalidArgument('an operator key fingerprint is required');
+      }
+      requireScope(input.harnessId, input.ownerId);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#propose(keyId, input.harnessId, input.ownerId));
+    });
+  }
+
+  // The active enrollment for one presented verifier, if any. Authentication and
+  // scope checks call this before any body or request lookup, so an unenrolled
+  // key is refused without disclosing whether a request exists.
+  operatorScope(keyId) {
+    if (typeof keyId !== 'string') return null;
+    const active = this.#activeOperators.get(keyId);
+    return active === undefined
+      ? null
+      : { harness_id: active.harness_id, owner_id: active.owner_id };
+  }
+
+  // The one pending presentation for this exact scope and session, or null. The
+  // observation applies the request's own deadline first, so a due request closes
+  // instead of being offered and its session slot is released.
+  pendingPresentation(input = {}) {
+    return Promise.resolve().then(() => {
+      requireScope(input.harnessId, input.ownerId);
+      requireSessionId(input.sessionId);
+      this.#receiptAdmission();
+      return this.#enqueue(() => this.#pendingFor(input.harnessId, input.ownerId, input.sessionId));
+    });
+  }
+
+  // Read-only authoritative observation of one retained presentation binding,
+  // including a pending or terminal status. It never accepts a choice.
+  observePresentation(input = {}) {
+    return Promise.resolve().then(() => {
+      requireScope(input.harnessId, input.ownerId);
+      requireSessionId(input.sessionId);
+      if (typeof input.requestId !== 'string' || !REQUEST_ID_PATTERN.test(input.requestId)) {
+        throw invalidArgument('request_id must be a well-formed request identifier');
+      }
+      if (
+        typeof input.presentationId !== 'string' ||
+        !PRESENTATION_ID_PATTERN.test(input.presentationId)
+      ) {
+        throw invalidArgument(
+          'presentation_id must be hpr_ plus 32 lowercase hexadecimal characters',
+        );
+      }
+      this.#receiptAdmission();
+      return this.#enqueue(() =>
+        this.#observeBinding({
+          harnessId: input.harnessId,
+          ownerId: input.ownerId,
+          sessionId: input.sessionId,
+          requestId: input.requestId,
+          presentationId: input.presentationId,
+        }),
+      );
+    });
+  }
+
+  // One serialized harness decision. The enrolled key is rechecked inside the
+  // same turn as the immutable presentation binding and the durable resolution,
+  // so a revocation racing a submission either wins before admission or loses to
+  // an already accepted decision.
+  decideThroughHarness(input = {}) {
+    return Promise.resolve().then(() => {
+      const fields = harnessChoiceFields(input);
+      requireScope(input.harnessId, input.ownerId);
+      requireSessionId(input.sessionId);
+      if (typeof input.keyId !== 'string' || !OPERATOR_KEY_ID_PATTERN.test(input.keyId)) {
+        throw invalidArgument('an operator key fingerprint is required');
+      }
+      this.#receiptAdmission();
+      return this.#enqueue(() =>
+        this.#decideHarness({
+          keyId: input.keyId,
+          harnessId: input.harnessId,
+          ownerId: input.ownerId,
+          sessionId: input.sessionId,
+          ...fields,
+        }),
+      );
+    });
+  }
+
+  // One `/harness <enrollment_id>` command from the current paired private sender.
+  // The broker allocates or reuses the durable Confirm/Deny control tokens, and
+  // consumes the command's own update in the same transaction. A refusal records
+  // only that cursor and returns null, so no pairing, scope or enrollment detail
+  // is disclosed.
+  enrollmentNotice(input = {}) {
+    return Promise.resolve().then(() => {
+      if (!isPlainObject(input)) throw invalidArgument('an enrollment notice needs an object');
+      if (
+        typeof input.enrollmentId !== 'string' ||
+        !ENROLLMENT_ID_PATTERN.test(input.enrollmentId)
+      ) {
+        throw invalidArgument(
+          'enrollment_id must be hen_ plus 32 lowercase hexadecimal characters',
+        );
+      }
+      if (identityProblem(input.userId) !== null || identityProblem(input.chatId) !== null) {
+        throw invalidArgument('an enrollment notice needs a decimal actor and chat');
+      }
+      if (!usableUpdateId(input.updateId)) {
+        throw invalidArgument('an enrollment notice needs a raw nonnegative update id');
+      }
+      this.#receiptAdmission();
+      return this.#enqueue(() =>
+        this.#noticeEnrollment({
+          enrollmentId: input.enrollmentId,
+          userId: input.userId,
+          chatId: input.chatId,
+          updateId: input.updateId,
+        }),
+      );
+    });
+  }
+
+  // One already correlated enrollment Confirm/Deny callback. The token is
+  // correlation only; the current paired sender, private chat, pending state and
+  // expiry are rechecked atomically before any durable effect. An unknown,
+  // foreign or wrong-pairing callback records only its own cursor.
+  resolveEnrollmentCallback(input = {}) {
+    return Promise.resolve().then(() => {
+      if (!isPlainObject(input)) throw invalidArgument('an enrollment callback needs an object');
+      if (input.kind !== 'confirm' && input.kind !== 'deny') {
+        throw invalidArgument('an enrollment callback is confirm or deny');
+      }
+      if (typeof input.token !== 'string' || !ENROLLMENT_TOKEN_PATTERN.test(input.token)) {
+        throw invalidArgument('an enrollment callback needs a well-formed control token');
+      }
+      if (identityProblem(input.userId) !== null || identityProblem(input.chatId) !== null) {
+        throw invalidArgument('an enrollment callback needs a decimal actor and chat');
+      }
+      if (!usableUpdateId(input.updateId)) {
+        throw invalidArgument('an enrollment callback needs a raw nonnegative update id');
+      }
+      this.#receiptAdmission();
+      return this.#enqueue(() =>
+        this.#enrollCallback({
+          kind: input.kind,
+          token: input.token,
+          userId: input.userId,
+          chatId: input.chatId,
+          updateId: input.updateId,
+        }),
+      );
     });
   }
 
@@ -2999,7 +3973,7 @@ class PortableBroker {
     }
   }
 
-  async #reserve(ownerId, sessionLabel) {
+  async #reserve(ownerId, sessionLabel, route = null) {
     const requestHandle = randomRequestHandle();
     const requestId = randomRequestId();
     const requestCapability = randomRequestCapability();
@@ -3025,10 +3999,33 @@ class PortableBroker {
       session_label: sessionLabel,
       prepared_at: utcTimestamp(this.#clock()),
     };
+    // The route is committed with its reservation, so no usable handle exists
+    // without the immutable binding it was prepared for.
+    const mutations = [record];
+    let routeRecord = null;
+    if (route !== null) {
+      routeRecord = {
+        op: HARNESS_ROUTE_OP,
+        request_id: requestId,
+        request_handle: requestHandle,
+        harness_id: route.harnessId,
+        owner_id: ownerId,
+        session_id: route.sessionId,
+      };
+      mutations.push(routeRecord);
+    }
     // The result exists only after the append has completed its file flush, so
     // a lost result cannot leave a key that was issued but never committed.
-    await this.#append([record]);
+    await this.#append(mutations);
     this.#remember(record);
+    if (routeRecord !== null) {
+      this.#routes.set(requestId, {
+        harness_id: routeRecord.harness_id,
+        owner_id: routeRecord.owner_id,
+        session_id: routeRecord.session_id,
+        request_handle: requestHandle,
+      });
+    }
     this.#logger('portable.handle.reserved', { owner_id: ownerId, request_id: requestId });
     return {
       schema_version: PORTABLE_REPRESENTATION_SCHEMA_VERSION,
@@ -3107,17 +4104,68 @@ class PortableBroker {
   // requested fields before any time is sampled or a deadline is derived, an
   // identical retry returns it through the accepted target-only expiry path,
   // and a new creation samples once, measures the complete presentation,
-  // appends and only then installs the pending state it reports.
-  async #create(reservation, fields) {
+  // appends and only then installs the pending state it reports. A routed
+  // preparation binds one immutable session route, and a second unresolved
+  // request in that session is refused before either actionable surface exists.
+  async #create(reservation, fields, requestedRoute) {
+    const storedRoute = this.#routes.get(reservation.request_id) ?? null;
     const existing = this.#requests.get(reservation.request_id);
     if (existing !== undefined) {
       if (!sameCreation(existing, fields)) {
         throw conflict('this handle already has a request with different creation fields');
       }
+      if (requestedRoute !== undefined) {
+        if (storedRoute === null) {
+          throw conflict('this handle has no prepared harness route to match');
+        }
+        const matches =
+          storedRoute.harness_id === requestedRoute.harnessId &&
+          storedRoute.owner_id === reservation.owner_id &&
+          storedRoute.session_id === requestedRoute.sessionId;
+        if (!matches) {
+          throw conflict('the supplied harness route does not match the prepared route');
+        }
+      }
+      // An authorized matching replay enables the presentation only after the
+      // request itself is already durable; it never retargets the stored route.
+      if (storedRoute !== null && existing.presentation_id === null) {
+        const presentationId = this.#allocatePresentationId();
+        await this.#append([
+          {
+            op: HARNESS_PRESENT_OP,
+            request_id: existing.request_id,
+            presentation_id: presentationId,
+            harness_id: storedRoute.harness_id,
+            owner_id: storedRoute.owner_id,
+            session_id: storedRoute.session_id,
+          },
+        ]);
+        existing.presentation_id = presentationId;
+        this.#presentations.set(presentationId, existing.request_id);
+      }
       return { created: false, request: await this.#expireTarget(reservation.request_id) };
     }
     if (this.#pairing === null) {
       throw unavailable(PAIRING_REQUIRED_MESSAGE, 'NOT_PAIRED', { retryable: false });
+    }
+    if (storedRoute === null && requestedRoute !== undefined) {
+      // A route cannot be added to a handle that was not prepared for it.
+      throw conflict('this handle has no prepared harness route to match');
+    }
+    if (storedRoute !== null && requestedRoute !== undefined) {
+      const matches =
+        storedRoute.harness_id === requestedRoute.harnessId &&
+        storedRoute.owner_id === reservation.owner_id &&
+        storedRoute.session_id === requestedRoute.sessionId;
+      if (!matches) {
+        throw conflict('the supplied harness route does not match the prepared route');
+      }
+    }
+    // Reservation alone is not occupancy: only an unresolved routed request in
+    // this exact scope and session occupies it.
+    if (storedRoute !== null) {
+      const occupant = this.#occupant(storedRoute);
+      if (occupant !== null) throw conflict(HARNESS_SESSION_BUSY, 'SESSION_BUSY');
     }
     const times = creationTimes(this.#clock, fields.duration);
     const preparedAt = readInstant(reservation.prepared_at);
@@ -3179,6 +4227,8 @@ class PortableBroker {
       // bounded by this request's response opening rather than an allocation.
       promptFailureAt: null,
       promptFailureCode: null,
+      harness_route: storedRoute,
+      presentation_id: null,
     };
     // The complete plain-text presentation is measured before the append, so a
     // request that could not be shown within the platform limit is refused while
@@ -3188,7 +4238,7 @@ class PortableBroker {
         `the complete request presentation must fit within ${MAX_TELEGRAM_TEXT} characters`,
       );
     }
-    await this.#append([
+    const mutations = [
       {
         op: CREATE_OP,
         request_handle: request.request_handle,
@@ -3200,10 +4250,487 @@ class PortableBroker {
         expires_at: request.expires_at,
         pairing_snapshot: { ...this.#pairing },
       },
-    ]);
+    ];
+    // A presentation is exposed only when the creating call still supplied the
+    // matching route. Without it the stored route still occupies the session, and
+    // an authorized matching replay enables the presentation later.
+    let presentationId = null;
+    if (storedRoute !== null && requestedRoute !== undefined) {
+      presentationId = this.#allocatePresentationId();
+      mutations.push({
+        op: HARNESS_PRESENT_OP,
+        request_id: request.request_id,
+        presentation_id: presentationId,
+        harness_id: storedRoute.harness_id,
+        owner_id: storedRoute.owner_id,
+        session_id: storedRoute.session_id,
+      });
+    }
+    await this.#append(mutations);
+    request.presentation_id = presentationId;
     this.#requests.set(request.request_id, request);
+    if (presentationId !== null) {
+      this.#presentations.set(presentationId, request.request_id);
+    }
     this.#logger('portable.request.created', { request_id: request.request_id });
     return { created: true, request: requestView(request) };
+  }
+
+  // The one unresolved routed request occupying this scope and session, if any.
+  #occupant(route) {
+    for (const request of this.#requests.values()) {
+      if (request.resolution !== 'pending') continue;
+      if (request.harness_route === null) continue;
+      if (sameRoute(request.harness_route, route)) return request;
+    }
+    return null;
+  }
+
+  // A fresh presentation binding, unique across committed history.
+  #allocatePresentationId() {
+    let value;
+    try {
+      value = randomPresentationId();
+    } catch (cause) {
+      throw storageFailure('the presentation identity generator failed', 'STORAGE_FAILURE', cause);
+    }
+    if (typeof value !== 'string' || !PRESENTATION_ID_PATTERN.test(value)) {
+      throw storageFailure('the presentation identity generator produced an invalid identifier');
+    }
+    if (this.#presentations.has(value)) {
+      throw storageFailure(
+        'a presentation identity is already bound',
+        'JOURNAL_IDENTIFIER_COLLISION',
+      );
+    }
+    return value;
+  }
+
+  // The live pending proposal for one owner, if its 300-second window has not
+  // ended. An expired proposal is closed for every purpose, including an
+  // identical replay, so a replay never extends authority.
+  #livePending(ownerId, instant) {
+    const enrollmentId = this.#pendingByOwner.get(ownerId);
+    if (enrollmentId === undefined) return null;
+    const enrollment = this.#enrollments.get(enrollmentId);
+    if (enrollment === undefined || enrollment.state !== 'pending') return null;
+    if (compareInstants(instant, enrollment.expiresAt) >= 0) return null;
+    return enrollment;
+  }
+
+  // One serialized proposal turn. An active key for the scope is never replaced,
+  // and a live pending proposal is returned only to its identical replay.
+  async #propose(keyId, harnessId, ownerId) {
+    const sampled = turnTime(this.#clock, 'proposing a harness enrollment', 'enrollment proposal');
+    for (const active of this.#activeOperators.values()) {
+      if (active.harness_id !== harnessId || active.owner_id !== ownerId) continue;
+      if (active.key_id !== keyId) {
+        throw conflict(
+          'an operator key is already enrolled for this scope; the paired human must revoke it first',
+          'OPERATOR_ALREADY_ENROLLED',
+        );
+      }
+      return enrollmentView(this.#enrollments.get(active.enrollment_id));
+    }
+    const pending = this.#livePending(ownerId, sampled.instant);
+    if (pending !== null) {
+      if (pending.key_id === keyId && pending.harness_id === harnessId) {
+        return enrollmentView(pending);
+      }
+      throw conflict('another enrollment proposal is pending for this owner', 'ENROLLMENT_BUSY');
+    }
+    let enrollmentId;
+    try {
+      enrollmentId = randomEnrollmentId();
+    } catch (cause) {
+      throw storageFailure('the enrollment identity generator failed', 'STORAGE_FAILURE', cause);
+    }
+    if (this.#enrollments.has(enrollmentId)) {
+      throw storageFailure(
+        'an enrollment identity is already used',
+        'JOURNAL_IDENTIFIER_COLLISION',
+      );
+    }
+    let expiresText;
+    try {
+      expiresText = utcTimestamp(sampled.milliseconds + Number(ENROLLMENT_TTL_SECONDS) * 1000);
+    } catch (cause) {
+      throw storageFailure(
+        'the enrollment expiry cannot be represented in UTC',
+        'STORAGE_FAILURE',
+        cause,
+      );
+    }
+    const expiresAt = readInstant(expiresText);
+    if (expiresAt === null) {
+      throw storageFailure('the enrollment expiry is outside the representable UTC range');
+    }
+    const record = {
+      op: ENROLL_PROPOSE_OP,
+      enrollment_id: enrollmentId,
+      harness_id: harnessId,
+      owner_id: ownerId,
+      key_id: keyId,
+      created_at: sampled.text,
+      expires_at: expiresText,
+    };
+    await this.#append([record]);
+    const enrollment = {
+      enrollment_id: enrollmentId,
+      harness_id: harnessId,
+      owner_id: ownerId,
+      key_id: keyId,
+      created_at: sampled.text,
+      expires_at: expiresText,
+      createdAt: sampled.instant,
+      expiresAt,
+      state: 'pending',
+      notice: null,
+      confirmedAt: null,
+      user_id: null,
+      chat_id: null,
+    };
+    this.#enrollments.set(enrollmentId, enrollment);
+    this.#pendingByOwner.set(ownerId, enrollmentId);
+    this.#logger('portable.harness.enrollment.proposed', {
+      enrollment_id: enrollmentId,
+      harness_id: harnessId,
+      owner_id: ownerId,
+    });
+    return enrollmentView(enrollment);
+  }
+
+  // One serialized pending-presentation observation. The target is derived from
+  // committed routing, and its own deadline is applied first, so a due request
+  // closes instead of being offered and its session slot is released.
+  async #pendingFor(harnessId, ownerId, sessionId) {
+    const request = this.#occupant({
+      harness_id: harnessId,
+      owner_id: ownerId,
+      session_id: sessionId,
+    });
+    if (request === null || request.presentation_id === null) return null;
+    const now = this.#clock();
+    if (request.resolution === 'pending' && isDue(request, now)) {
+      await this.#commitExpiry(now, [request]);
+      return null;
+    }
+    return request.resolution === 'pending' ? harnessPresentationView(request) : null;
+  }
+
+  // Read-only binding observation: an unknown, foreign or mismatched target is
+  // the same non-disclosing null. It never accepts a choice or mutates anything
+  // except an already due request's own expiry.
+  async #observeBinding({ harnessId, ownerId, sessionId, requestId, presentationId }) {
+    const request = this.#requests.get(requestId);
+    if (request === undefined) return null;
+    const route = routeOf(request);
+    if (
+      route === null ||
+      route.harness_id !== harnessId ||
+      route.owner_id !== ownerId ||
+      route.session_id !== sessionId
+    ) {
+      return null;
+    }
+    if (request.presentation_id !== presentationId) return null;
+    if (request.resolution === 'pending') {
+      const now = this.#clock();
+      if (isDue(request, now)) await this.#commitExpiry(now, [request]);
+    }
+    return {
+      schema_version: PORTABLE_REPRESENTATION_SCHEMA_VERSION,
+      request_id: request.request_id,
+      decision_id: request.decision_id,
+      resolution: request.resolution,
+      response_text: request.response_text,
+    };
+  }
+
+  // One serialized harness decision. The enrolled key is rechecked here, inside
+  // the same turn as the binding and the durable closure, so a revocation racing
+  // this submission wins before admission, and an already accepted decision
+  // retains its outcome.
+  async #decideHarness({
+    keyId,
+    harnessId,
+    ownerId,
+    sessionId,
+    requestId,
+    presentationId,
+    choice,
+    responseText,
+  }) {
+    const active = this.#activeOperators.get(keyId);
+    if (active === undefined || active.harness_id !== harnessId || active.owner_id !== ownerId) {
+      throw authRequired('an enrolled operator credential is required');
+    }
+    const request = this.#requests.get(requestId);
+    if (request === undefined) return null;
+    const route = routeOf(request);
+    if (
+      route === null ||
+      route.harness_id !== harnessId ||
+      route.owner_id !== ownerId ||
+      route.session_id !== sessionId
+    ) {
+      return null;
+    }
+    if (request.presentation_id !== presentationId) return null;
+    if (request.resolution !== 'pending') return harnessDecisionView(request, false);
+    const sampled = turnTime(this.#clock, 'recording a harness decision', 'resolution');
+    // Reachability is selected while the mutation is constructed, so a later
+    // registration loss changes no committed ledger.
+    const deliveryState = this.#waiters.live(requestId) ? 'pending' : 'unavailable';
+    if (isDue(request, sampled.milliseconds)) {
+      const mutation = {
+        op: EXPIRE_OP,
+        request_id: requestId,
+        decision_id: this.#nextDecisionId(new Set()),
+        resolved_at: sampled.text,
+        delivery_state: deliveryState,
+      };
+      await this.#commitFor([mutation], [requestId]);
+      this.#installClosure(mutation, 'expired');
+      this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
+      return harnessDecisionView(request, false);
+    }
+    // A recorded time before creation cannot describe this request's lifetime, so
+    // it is the existing storage failure rather than a caller error.
+    if (compareInstants(sampled.instant, request.createdAt) < 0) {
+      throw storageFailure(
+        `${HARNESS_RESOLVE_OP} would precede its request creation`,
+        'STORAGE_FAILURE',
+      );
+    }
+    const resolution = HARNESS_CHOICES[choice];
+    const mutation = {
+      op: HARNESS_RESOLVE_OP,
+      request_id: requestId,
+      decision_id: this.#nextDecisionId(new Set()),
+      resolution,
+      response_text: resolution === 'responded' ? responseText : null,
+      resolved_at: sampled.text,
+      delivery_state: deliveryState,
+      key_id: keyId,
+      harness_id: harnessId,
+      owner_id: ownerId,
+      session_id: sessionId,
+      presentation_id: presentationId,
+    };
+    await this.#commitFor([mutation], [requestId]);
+    this.#installClosure(mutation, resolution);
+    request.response_text = mutation.response_text;
+    request.delivery_error = null;
+    request.resolution_source = {
+      channel: 'harness',
+      key_id: keyId,
+      harness_id: harnessId,
+      owner_id: ownerId,
+      session_id: sessionId,
+      presentation_id: presentationId,
+    };
+    this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
+    this.#logger('portable.request.resolved', { request_id: requestId, resolution });
+    return harnessDecisionView(request, true);
+  }
+
+  // One cursor-only observation: a refusal still consumes exactly its own update
+  // so it is never replayed, and appends nothing else.
+  async #commitCursor(updateId) {
+    if (this.#cursor !== null && updateId <= this.#cursor) return;
+    await this.#append([{ op: CURSOR_OP, last_update_id: updateId }]);
+    this.#cursor = updateId;
+  }
+
+  #allocateEnrollmentToken(exclude) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      let value;
+      try {
+        value = randomEnrollmentToken();
+      } catch (cause) {
+        throw storageFailure(
+          'the enrollment control token generator failed',
+          'STORAGE_FAILURE',
+          cause,
+        );
+      }
+      if (typeof value !== 'string' || !ENROLLMENT_TOKEN_PATTERN.test(value)) {
+        throw storageFailure('the enrollment control token generator produced an invalid token');
+      }
+      if (value === exclude || this.#enrollmentTokens.has(value)) continue;
+      return value;
+    }
+    throw storageFailure(
+      'a fresh enrollment control token collided with committed history',
+      'JOURNAL_IDENTIFIER_COLLISION',
+    );
+  }
+
+  #noticeView(enrollment) {
+    return {
+      enrollment_id: enrollment.enrollment_id,
+      harness_id: enrollment.harness_id,
+      owner_id: enrollment.owner_id,
+      key_id: enrollment.key_id,
+      expires_at: enrollment.expires_at,
+      chat_id: enrollment.notice.chat_id,
+      confirm_token: enrollment.notice.confirm_token,
+      deny_token: enrollment.notice.deny_token,
+    };
+  }
+
+  // One serialized `/harness <enrollment_id>` turn from the current paired private
+  // sender. The durable control tokens are allocated once and reused, and the
+  // command's own update is consumed in the same transaction.
+  async #noticeEnrollment({ enrollmentId, userId, chatId, updateId }) {
+    if (this.#cursor !== null && updateId <= this.#cursor) return null;
+    if (
+      this.#pairing === null ||
+      this.#pairing.user_id !== userId ||
+      this.#pairing.chat_id !== chatId
+    ) {
+      await this.#commitCursor(updateId);
+      return null;
+    }
+    const enrollment = this.#enrollments.get(enrollmentId);
+    const sampled = turnTime(
+      this.#clock,
+      'preparing a harness enrollment notice',
+      'enrollment notice',
+    );
+    const live =
+      enrollment !== undefined &&
+      enrollment.state === 'pending' &&
+      this.#pendingByOwner.get(enrollment.owner_id) === enrollmentId &&
+      compareInstants(sampled.instant, enrollment.createdAt) >= 0 &&
+      compareInstants(sampled.instant, enrollment.expiresAt) < 0;
+    if (!live) {
+      await this.#commitCursor(updateId);
+      return null;
+    }
+    if (enrollment.notice !== null) {
+      if (enrollment.notice.chat_id !== chatId) {
+        await this.#commitCursor(updateId);
+        return null;
+      }
+      await this.#commitCursor(updateId);
+      return this.#noticeView(enrollment);
+    }
+    const confirmToken = this.#allocateEnrollmentToken(null);
+    const denyToken = this.#allocateEnrollmentToken(confirmToken);
+    await this.#append([
+      {
+        op: ENROLL_NOTICE_OP,
+        enrollment_id: enrollmentId,
+        confirm_token: confirmToken,
+        deny_token: denyToken,
+        chat_id: chatId,
+        prepared_at: sampled.text,
+        update_id: updateId,
+      },
+      { op: CURSOR_OP, last_update_id: updateId },
+    ]);
+    this.#cursor = updateId;
+    enrollment.notice = {
+      chat_id: chatId,
+      prepared_at: sampled.text,
+      preparedAt: sampled.instant,
+      confirm_token: confirmToken,
+      deny_token: denyToken,
+    };
+    this.#enrollmentTokens.set(confirmToken, { enrollment_id: enrollmentId, kind: 'confirm' });
+    this.#enrollmentTokens.set(denyToken, { enrollment_id: enrollmentId, kind: 'deny' });
+    return this.#noticeView(enrollment);
+  }
+
+  // One serialized enrollment callback. Authority is the current paired private
+  // sender, not the token: an unknown, wrong-sender, superseded, closed or
+  // expired callback consumes only its own update and changes no enrollment.
+  async #enrollCallback({ kind, token, userId, chatId, updateId }) {
+    if (this.#cursor !== null && updateId <= this.#cursor) return { result: 'stale' };
+    const target = this.#enrollmentTokens.get(token);
+    if (target === undefined) {
+      await this.#commitCursor(updateId);
+      return { result: 'refused' };
+    }
+    const enrollment = this.#enrollments.get(target.enrollment_id);
+    const paired =
+      this.#pairing !== null &&
+      this.#pairing.user_id === userId &&
+      this.#pairing.chat_id === chatId;
+    const live =
+      enrollment !== undefined &&
+      enrollment.state === 'pending' &&
+      this.#pendingByOwner.get(enrollment.owner_id) === enrollment.enrollment_id &&
+      enrollment.notice !== null &&
+      enrollment.notice.chat_id === chatId &&
+      target.kind === kind;
+    if (!paired || !live) {
+      await this.#commitCursor(updateId);
+      return { result: 'refused' };
+    }
+    const sampled = turnTime(
+      this.#clock,
+      'recording an enrollment confirmation',
+      'enrollment confirmation',
+    );
+    if (
+      compareInstants(sampled.instant, enrollment.createdAt) < 0 ||
+      compareInstants(sampled.instant, enrollment.expiresAt) >= 0
+    ) {
+      await this.#commitCursor(updateId);
+      return { result: 'expired' };
+    }
+    const cursorMutation = { op: CURSOR_OP, last_update_id: updateId };
+    if (kind === 'confirm') {
+      const mutation = {
+        op: ENROLL_CONFIRM_OP,
+        enrollment_id: enrollment.enrollment_id,
+        key_id: enrollment.key_id,
+        harness_id: enrollment.harness_id,
+        owner_id: enrollment.owner_id,
+        user_id: userId,
+        chat_id: chatId,
+        update_id: updateId,
+        confirmed_at: sampled.text,
+      };
+      await this.#append([mutation, cursorMutation]);
+      this.#cursor = updateId;
+      enrollment.state = 'enrolled';
+      enrollment.confirmedAt = sampled.instant;
+      enrollment.user_id = userId;
+      enrollment.chat_id = chatId;
+      this.#pendingByOwner.delete(enrollment.owner_id);
+      this.#activeOperators.set(enrollment.key_id, {
+        key_id: enrollment.key_id,
+        harness_id: enrollment.harness_id,
+        owner_id: enrollment.owner_id,
+        enrollment_id: enrollment.enrollment_id,
+      });
+      this.#logger('portable.harness.enrollment.confirmed', {
+        enrollment_id: enrollment.enrollment_id,
+        harness_id: enrollment.harness_id,
+        owner_id: enrollment.owner_id,
+      });
+      return { result: 'confirmed' };
+    }
+    const mutation = {
+      op: ENROLL_DENY_OP,
+      enrollment_id: enrollment.enrollment_id,
+      denied_at: sampled.text,
+      update_id: updateId,
+    };
+    await this.#append([mutation, cursorMutation]);
+    this.#cursor = updateId;
+    enrollment.state = 'denied';
+    if (this.#pendingByOwner.get(enrollment.owner_id) === enrollment.enrollment_id) {
+      this.#pendingByOwner.delete(enrollment.owner_id);
+    }
+    this.#logger('portable.harness.enrollment.denied', {
+      enrollment_id: enrollment.enrollment_id,
+    });
+    return { result: 'denied' };
   }
 
   // One serialized allocation turn (design section 5, C2a-i). The target is
@@ -4151,11 +5678,16 @@ class PortableBroker {
     return null;
   }
 
-  // The only write path. A rejected append leaves the file in an uncertain state,
-  // so the instance is fenced before serialization is released; the original
-  // refusal is what the caller sees, and nothing is installed for it.
+  // The only write path. A harness operation first raises the history to its
+  // harness-capable format, so no harness record is ever committed under the
+  // older declared schema. A rejected append leaves the file in an uncertain
+  // state, so the instance is fenced before serialization is released; the
+  // original refusal is what the caller sees, and nothing is installed for it.
   async #append(mutations) {
     try {
+      if (mutations.some((mutation) => HARNESS_OPS.has(mutation?.op))) {
+        await this.#journal.ensureHarnessFormat();
+      }
       return await this.#journal.append(mutations);
     } catch (error) {
       throw this.#fenceJournal(error);

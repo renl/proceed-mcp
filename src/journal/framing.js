@@ -16,20 +16,35 @@
 // complete frames; the incomplete final frame is discarded on recovery.
 //
 // Version 2 leaves the layout above unchanged and only raises the declared file
-// and record versions, so the bytes stay readable by this framing. Files and
-// records still declaring version 1 are refused rather than migrated or
-// rewritten in place, and a build accepts exactly one version.
+// and record versions, so the bytes stay readable by this framing. Version 3 is
+// the harness-capable history: the same layout and framing, declared at file
+// format 3 with records at schema 3. A reader accepts exactly the version its
+// file header declares, so a build without version-3 support refuses this
+// history instead of ignoring harness enrollment, routing or occupancy. Files
+// and records still declaring version 1 are refused rather than migrated or
+// rewritten in place.
 import { createHash } from 'node:crypto';
 
 export const FILE_MAGIC = Buffer.from('PROCEEDJ', 'ascii');
 export const FILE_FORMAT_VERSION = 2;
+export const HARNESS_FILE_FORMAT_VERSION = 3;
 export const FILE_HEADER_LENGTH = 12;
 export const RECORD_SCHEMA_VERSION = 2;
+export const HARNESS_RECORD_SCHEMA_VERSION = 3;
+export const SUPPORTED_FILE_FORMAT_VERSIONS = Object.freeze([2, 3]);
 export const FRAME_PREFIX_LENGTH = 16;
 export const DIGEST_LENGTH = 32;
 export const MIN_FRAME_LENGTH = FRAME_PREFIX_LENGTH + DIGEST_LENGTH;
 export const MAX_PAYLOAD_LENGTH = 1024 * 1024;
 const MAX_SEQUENCE = Number.MAX_SAFE_INTEGER;
+
+// One record schema per declared file format: the header is the single version
+// authority for the whole history.
+export function recordSchemaFor(formatVersion) {
+  return formatVersion === HARNESS_FILE_FORMAT_VERSION
+    ? HARNESS_RECORD_SCHEMA_VERSION
+    : RECORD_SCHEMA_VERSION;
+}
 
 export class JournalFormatError extends Error {
   constructor(message, details = {}) {
@@ -41,13 +56,20 @@ export class JournalFormatError extends Error {
   }
 }
 
-export function createFileHeader() {
+export function createFileHeader(formatVersion = FILE_FORMAT_VERSION) {
+  if (!SUPPORTED_FILE_FORMAT_VERSIONS.includes(formatVersion)) {
+    throw new JournalFormatError(`journal format version ${formatVersion} cannot be written here`, {
+      code: 'JOURNAL_VERSION_UNSUPPORTED',
+    });
+  }
   const header = Buffer.alloc(FILE_HEADER_LENGTH);
   FILE_MAGIC.copy(header, 0);
-  header.writeUInt32BE(FILE_FORMAT_VERSION, 8);
+  header.writeUInt32BE(formatVersion, 8);
   return header;
 }
 
+// Returns the declared file format so recovery can decode exactly that record
+// schema. A version this build cannot read is refused, never guessed.
 export function readFileHeader(buffer) {
   if (buffer.length < FILE_HEADER_LENGTH) {
     throw new JournalFormatError('journal file is shorter than its header', {
@@ -63,18 +85,25 @@ export function readFileHeader(buffer) {
     });
   }
   const version = buffer.readUInt32BE(8);
-  if (version !== FILE_FORMAT_VERSION) {
+  if (!SUPPORTED_FILE_FORMAT_VERSIONS.includes(version)) {
     throw new JournalFormatError(
-      `journal format version ${version} is not supported by this build (${FILE_FORMAT_VERSION})`,
+      `journal format version ${version} is not supported by this build (${SUPPORTED_FILE_FORMAT_VERSIONS.join(', ')})`,
       { code: 'JOURNAL_VERSION_UNSUPPORTED', offset: 8 },
     );
   }
+  return version;
 }
 
 // Encodes one committed transaction. `mutations` is the ordered list of
 // operations that make up the transaction; the caller has already sampled
-// `committedAt` from the broker clock.
-export function encodeFrame({ sequence, committedAt, mutations }) {
+// `committedAt` from the broker clock. The record schema follows the file's
+// declared format.
+export function encodeFrame({
+  sequence,
+  committedAt,
+  mutations,
+  schemaVersion = RECORD_SCHEMA_VERSION,
+}) {
   if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence > MAX_SEQUENCE) {
     throw new JournalFormatError('journal sequence must be a positive safe integer', {
       code: 'JOURNAL_SEQUENCE_INVALID',
@@ -82,7 +111,7 @@ export function encodeFrame({ sequence, committedAt, mutations }) {
   }
   const payload = Buffer.from(
     JSON.stringify({
-      schema_version: RECORD_SCHEMA_VERSION,
+      schema_version: schemaVersion,
       sequence,
       committed_at: committedAt,
       mutations,
@@ -110,7 +139,8 @@ export function encodeFrame({ sequence, committedAt, mutations }) {
 
 // Decodes one frame starting at `offset`. A frame that runs past the end of the
 // buffer is reported as incomplete (a crash during append), never as corrupt.
-export function decodeFrame(buffer, offset) {
+// The payload must declare exactly the file's own record schema.
+export function decodeFrame(buffer, offset, schemaVersion = RECORD_SCHEMA_VERSION) {
   const remaining = buffer.length - offset;
   if (remaining < 4) {
     throw new JournalFormatError('journal frame has an incomplete length prefix', {
@@ -163,7 +193,7 @@ export function decodeFrame(buffer, offset) {
       offset,
     });
   }
-  if (payload?.schema_version !== RECORD_SCHEMA_VERSION) {
+  if (payload?.schema_version !== schemaVersion) {
     throw new JournalFormatError(
       `journal record schema_version ${JSON.stringify(payload?.schema_version)} is not supported`,
       { code: 'JOURNAL_RECORD_VERSION_UNSUPPORTED', offset },
@@ -189,9 +219,11 @@ export function decodeFrame(buffer, offset) {
 
 // Replays every complete record. Returns the applied mutations in commit order
 // together with the byte length of valid content, so recovery can truncate an
-// incomplete tail instead of leaving garbage before the next append.
+// incomplete tail instead of leaving garbage before the next append. The
+// declared file format is reported so the caller decodes and appends one schema.
 export function readJournal(buffer) {
-  readFileHeader(buffer);
+  const formatVersion = readFileHeader(buffer);
+  const schemaVersion = recordSchemaFor(formatVersion);
   const transactions = [];
   let offset = FILE_HEADER_LENGTH;
   let lastSequence = 0;
@@ -199,11 +231,11 @@ export function readJournal(buffer) {
   while (offset < buffer.length) {
     let decoded;
     try {
-      decoded = decodeFrame(buffer, offset);
+      decoded = decodeFrame(buffer, offset, schemaVersion);
     } catch (error) {
       // An interrupted append leaves an incomplete final frame; only that tail
       // may be discarded. Any other failure is corruption that stops recovery.
-      if (error.incomplete === true) return { transactions, validLength: offset };
+      if (error.incomplete === true) return { transactions, validLength: offset, formatVersion };
       throw error;
     }
     if (decoded.sequence !== lastSequence + 1) {
@@ -217,5 +249,5 @@ export function readJournal(buffer) {
     transactions.push(decoded.record);
   }
 
-  return { transactions, validLength: offset };
+  return { transactions, validLength: offset, formatVersion };
 }
