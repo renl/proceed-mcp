@@ -3,12 +3,14 @@
 // peer itself, so portable entry points stay free of the plugin SDK.
 //
 // The operator credential is loaded once and kept only in this setup generation's
-// closure. Every broker exchange uses the product operator transport: the exact
-// protected TLS-PSK admission, a 10000 ms budget and the 64 KiB response ceiling.
-// A command can open the local interaction, but only the operator's completed
-// dialog choice can submit a decision; command arguments and RPC inputs are
-// ignored. Dismissal, an expired deadline, disposal and Cleanup send nothing.
-import { createOperatorLocalClient } from '../http/local-client.js';
+// closure. The TUI performs no TLS exchange itself: every broker exchange is
+// delegated to one short-lived application-owned Node helper over parent-created
+// private pipes, which carries the unchanged protected TLS-PSK admission, the
+// remaining 10000 ms budget and the 64 KiB response ceiling. A command can open
+// the local interaction, but only the operator's completed dialog choice can
+// submit a decision; command arguments and RPC inputs are ignored. Dismissal, an
+// expired deadline, disposal and Cleanup send nothing.
+import { runHelperExchange, HelperChannelError } from './node-helper.js';
 import { resolveStateDir, statePaths } from '../state/paths.js';
 import { loadPortableConfiguration } from '../state/store.js';
 import { REQUEST_ID_PATTERN, isPlainObject } from '../util/values.js';
@@ -31,9 +33,6 @@ export const OPEN_QUESTION_COMMAND = 'proceed.harness.open';
 export const OPEN_QUESTION_BIND = 'ctrl+g';
 
 const OPTION_KEYS = Object.freeze(['state_dir', 'harness_id', 'owner_id', 'operator_key_file']);
-const DECISION_ROUTE = '/v1/harness/decisions';
-const ENROLLMENT_ROUTE = '/v1/harness/enrollments';
-const PENDING_ROUTE = '/v1/harness/pending';
 const RESOLUTIONS = new Set(['approved', 'rejected', 'responded', 'expired', 'cancelled']);
 
 // A broker refusal or an unreadable reply is reported by code, never by echoing
@@ -99,18 +98,26 @@ function showError(context, error) {
   });
 }
 
-// One operator-route exchange. A non-2xx reply is the broker's versioned envelope
-// and its code travels unchanged.
-async function exchange(generation, path, body) {
-  const response = await generation.client.request(
-    'POST',
-    path,
+// One operator-route exchange through the private helper. A non-2xx reply is the
+// broker's versioned envelope and its code travels unchanged; a fixed local
+// helper code never becomes a broker claim.
+async function exchange(generation, operation, body, presentationId = null) {
+  if (generation.disabled) throw new HelperChannelError('HELPER_PROTOCOL_INVALID');
+  const response = await runHelperExchange({
+    operation,
     body,
-    {},
-    {
-      signal: generation.controller.signal,
+    presentationId,
+    port: generation.port,
+    lockFile: generation.lockFile,
+    operatorCredential: generation.credential,
+    signal: generation.controller.signal,
+    isActive: () => generation.active,
+    // Unconfirmed owned cleanup disables further helper exchanges for this
+    // generation instead of reporting success.
+    onUnconfirmedCleanup: () => {
+      generation.disabled = true;
     },
-  );
+  });
   if (response.status >= 200 && response.status < 300) return response.body;
   const error = isPlainObject(response.body?.error) ? response.body.error : {};
   throw new HarnessRequestError(
@@ -184,7 +191,7 @@ async function proposeEnrollment(generation, context) {
   if (!generation.active) return;
   let enrollment;
   try {
-    const body = await exchange(generation, ENROLLMENT_ROUTE, {
+    const body = await exchange(generation, 'enrollments', {
       harness_id: generation.harnessId,
       owner_id: generation.ownerId,
     });
@@ -323,13 +330,14 @@ async function reportTransportUncertainty(generation, context, presentation) {
   try {
     const body = await exchange(
       generation,
-      `/v1/harness/presentations/${presentation.presentation_id}`,
+      'presentation',
       {
         harness_id: generation.harnessId,
         owner_id: generation.ownerId,
         session_id: presentation.session_id,
         request_id: presentation.request_id,
       },
+      presentation.presentation_id,
     );
     if (!generation.active) return;
     const status = retainedStatus(body, presentation);
@@ -365,18 +373,29 @@ async function submitDecision(generation, context, presentation, choice, text) {
   }
   let body;
   try {
-    body = await exchange(generation, DECISION_ROUTE, {
-      harness_id: generation.harnessId,
-      owner_id: generation.ownerId,
-      session_id: presentation.session_id,
-      request_id: presentation.request_id,
-      presentation_id: presentation.presentation_id,
-      choice,
-      response_text: choice === 'respond' ? text : null,
-    });
+    body = await exchange(
+      generation,
+      'decisions',
+      {
+        harness_id: generation.harnessId,
+        owner_id: generation.ownerId,
+        session_id: presentation.session_id,
+        request_id: presentation.request_id,
+        presentation_id: presentation.presentation_id,
+        choice,
+        response_text: choice === 'respond' ? text : null,
+      },
+      presentation.presentation_id,
+    );
   } catch (error) {
     if (!generation.active) return;
     if (error instanceof HarnessRequestError) {
+      showError(context, error);
+      return;
+    }
+    // A local helper failure before authority handoff cannot have submitted
+    // anything, so it is reported as a local failure rather than uncertainty.
+    if (error instanceof HelperChannelError && error.submitted === false) {
       showError(context, error);
       return;
     }
@@ -407,7 +426,7 @@ async function openQuestion(generation, context) {
   if (sessionId === null || !generation.active) return;
   let pending;
   try {
-    const body = await exchange(generation, PENDING_ROUTE, {
+    const body = await exchange(generation, 'pending', {
       harness_id: generation.harnessId,
       owner_id: generation.ownerId,
       session_id: sessionId,
@@ -501,20 +520,20 @@ export const harnessTuiDefinition = {
       return;
     }
 
-    // The credential and the mutable generation live only in this closure. The
-    // client reads the protected lock per exchange; nothing here reads owner,
-    // control or Telegram credentials.
+    // The credential and the mutable generation live only in this closure. Each
+    // exchange hands a transient copy to one short-lived private helper over
+    // parent-created pipes; nothing here reads owner, control or Telegram
+    // credentials and no key path ever leaves the TUI.
     const generation = {
       active: true,
+      disabled: false,
       controller: new AbortController(),
       harnessId: options.harnessId,
       ownerId: options.ownerId,
       keyId: loaded.keyId,
-      client: createOperatorLocalClient({
-        port: config.broker.port,
-        lockFile: statePaths(options.stateDir).brokerLockFile,
-        token: loaded.credential,
-      }),
+      credential: loaded.credential,
+      port: config.broker.port,
+      lockFile: statePaths(options.stateDir).brokerLockFile,
     };
 
     context.keymap.layer(() => ({
