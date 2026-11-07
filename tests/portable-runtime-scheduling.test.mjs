@@ -476,7 +476,7 @@ test(
       const healthyReady = await h.http('/v1/ready');
       assert.equal(healthyReady.status, 200);
       assert.equal(healthyReady.body.local_ready, true);
-      assert.deepEqual(healthyReady.body.telegram, { state: 'disabled', code: 'TOKEN_MISSING' });
+      assert.deepEqual(healthyReady.body.telegram, { state: 'disabled', code: null });
       const before = await h.bytes();
       fail = true;
       await observe(() => logs.some((args) => args[0] === logLine));
