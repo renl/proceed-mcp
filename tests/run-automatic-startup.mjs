@@ -106,6 +106,7 @@ try {
     'tests/fixtures/automatic-startup-certificate.mjs',
     'tests/automatic-startup-regressions.mjs',
     'tests/automatic-startup-remaining.mjs',
+    'tests/automatic-startup-admission.mjs',
     'tests/automatic-startup-package.mjs',
     'tests/release-pack.mjs',
     'tests/release-metadata.test.mjs',
@@ -148,36 +149,39 @@ try {
       'identity',
       'drain',
       'package-fixture',
+      'admission',
     ].includes(mode),
     'explicit bounded checkpoint selection',
   );
   const args =
-    mode === 'package' || mode === 'package-fixture'
-      ? [
-          'tests/automatic-startup-package.mjs',
-          ...(mode === 'package-fixture' ? ['--fixture-only'] : []),
-        ]
-      : ['regressions', 'health', 'identity', 'drain'].includes(mode)
+    mode === 'admission'
+      ? ['tests/automatic-startup-admission.mjs']
+      : mode === 'package' || mode === 'package-fixture'
         ? [
-            'tests/automatic-startup-regressions.mjs',
-            ...(mode === 'health' ? ['--health-only'] : []),
-            ...(['identity', 'drain'].includes(mode) ? [`--only=${mode}`] : []),
+            'tests/automatic-startup-package.mjs',
+            ...(mode === 'package-fixture' ? ['--fixture-only'] : []),
           ]
-        : mode === 'dispatcher'
-          ? ['--test', '--test-reporter=tap', '/workspace/tests/automatic-startup-cli.test.mjs']
-          : [
-              'tests/automatic-startup-checkpoint.mjs',
-              ...(mode === 'platform' ? ['--tls-platform-only'] : []),
-              ...(mode === 'file-safety' ? ['--file-safety-only'] : []),
-              ...(mode === 'deadline' ? ['--deadline-only'] : []),
-              ...(mode === 'deadline' && process.argv[3]
-                ? [`--deadline-stage=${process.argv[3]}`]
-                : []),
-              ...(mode === 'remaining' ? ['--remaining-only'] : []),
-              ...(mode === 'remaining' && process.argv[3]
-                ? [`--remaining-cases=${process.argv[3]}`]
-                : []),
-            ];
+        : ['regressions', 'health', 'identity', 'drain'].includes(mode)
+          ? [
+              'tests/automatic-startup-regressions.mjs',
+              ...(mode === 'health' ? ['--health-only'] : []),
+              ...(['identity', 'drain'].includes(mode) ? [`--only=${mode}`] : []),
+            ]
+          : mode === 'dispatcher'
+            ? ['--test', '--test-reporter=tap', '/workspace/tests/automatic-startup-cli.test.mjs']
+            : [
+                'tests/automatic-startup-checkpoint.mjs',
+                ...(mode === 'platform' ? ['--tls-platform-only'] : []),
+                ...(mode === 'file-safety' ? ['--file-safety-only'] : []),
+                ...(mode === 'deadline' ? ['--deadline-only'] : []),
+                ...(mode === 'deadline' && process.argv[3]
+                  ? [`--deadline-stage=${process.argv[3]}`]
+                  : []),
+                ...(mode === 'remaining' ? ['--remaining-only'] : []),
+                ...(mode === 'remaining' && process.argv[3]
+                  ? [`--remaining-cases=${process.argv[3]}`]
+                  : []),
+              ];
   await progress(`run-${mode}`);
   const result = await docker(
     [
