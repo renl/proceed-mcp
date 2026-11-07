@@ -2,6 +2,7 @@
 // `doctor` remains a documented target that this build does not implement, so
 // it fails as an invalid command rather than pretending to check anything.
 import { join, resolve } from 'node:path';
+import { writeSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { TELEGRAM_TOKEN_ENV } from '../config/portable-config.js';
@@ -113,6 +114,30 @@ function startupDeadlineFrom(env) {
 // original attempt, never to a fresh child or probe.
 function remainingStartupBudget(startedAt) {
   return STARTUP_BUDGET_MS - (performance.now() - startedAt);
+}
+
+// Design section 5 requires a startup-dependent call to return by its deadline.
+// A local prerequisite read cannot be cancelled, so the standalone command ends at
+// the deadline instead of waiting past it; nothing has been launched, owned or
+// written at that point.
+function abandonedStartupTimeout() {
+  const error = startupTimeout();
+  error.expiredWhilePending = true;
+  return error;
+}
+
+async function withinStartupBudget(startedAt, work) {
+  const remaining = remainingStartupBudget(startedAt);
+  if (remaining <= 0) throw startupTimeout();
+  let timer;
+  const expiry = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(abandonedStartupTimeout()), remaining);
+  });
+  try {
+    return await Promise.race([work(), expiry]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function noPositionals(positionals, command) {
@@ -476,10 +501,16 @@ async function runPair(argv, { stdout, env }) {
   noPositionals(positionals, 'pair');
 
   const attemptStart = performance.now();
-  const { file } = tokenFileFrom(options, env);
-  const paths = commandStatePaths(options, env);
-  const config = await loadPortableConfiguration(paths);
-  const control = await readLocalCredential(paths.controlCredentialFile, 'the control credential');
+  const { file, paths, config, control } = await withinStartupBudget(attemptStart, async () => {
+    const { file } = tokenFileFrom(options, env);
+    const paths = commandStatePaths(options, env);
+    const config = await loadPortableConfiguration(paths);
+    const control = await readLocalCredential(
+      paths.controlCredentialFile,
+      'the control credential',
+    );
+    return { file, paths, config, control };
+  });
 
   // Design sections 1 and 3: pairing ensures the same shared broker availability
   // before the control-authenticated challenge, so an initial pairing needs no
@@ -538,24 +569,26 @@ async function runMcp(argv, { env }) {
   // The one availability attempt starts at adapter launch: prerequisites, launch
   // and adoption all share this original budget.
   const attemptStart = performance.now();
-  const { file } = tokenFileFrom(options, env);
-  const paths = commandStatePaths(options, env);
-  const config = await loadPortableConfiguration(paths);
-  const ownerId = options.get('owner');
-  const owner = config.owners.find((entry) => entry.owner_id === ownerId);
-  if (owner === undefined) {
-    throw invalidArgument(
-      `owner ${ownerId} is not configured; run "proceed-mcp owner add ${ownerId} --label <label>"`,
+  const { file, paths, config, credential } = await withinStartupBudget(attemptStart, async () => {
+    const { file } = tokenFileFrom(options, env);
+    const paths = commandStatePaths(options, env);
+    const config = await loadPortableConfiguration(paths);
+    const ownerId = options.get('owner');
+    const owner = config.owners.find((entry) => entry.owner_id === ownerId);
+    if (owner === undefined) {
+      throw invalidArgument(
+        `owner ${ownerId} is not configured; run "proceed-mcp owner add ${ownerId} --label <label>"`,
+      );
+    }
+    // Fail closed when the principal has no usable authority: a missing or
+    // damaged owner credential is a startup blocker. The value authorizes broker
+    // calls only, so it is never logged, returned or written anywhere.
+    const credential = await readOwnerCredential(
+      paths.ownerCredentialFile(owner.owner_id),
+      owner.owner_id,
     );
-  }
-
-  // Fail closed when the principal has no usable authority: a missing or damaged
-  // owner credential is a startup blocker. The value authorizes broker calls only,
-  // so it is never logged, returned or written anywhere.
-  const credential = await readOwnerCredential(
-    paths.ownerCredentialFile(owner.owner_id),
-    owner.owner_id,
-  );
+    return { file, paths, config, credential };
+  });
   const credentialFile = file ?? defaultCredentialFile({ stateDir: paths.stateDir });
   const controller = new AbortController();
   const availability = awaitSecureAvailability({
@@ -894,7 +927,11 @@ async function dispatch(argv, context) {
   );
 }
 
-export async function run(argv, io = {}) {
+export async function run(argv, io) {
+  // Only the standalone executable has no injected io; an embedding caller always
+  // supplies streams and receives the exit code instead.
+  const standalone = io === undefined;
+  io = io ?? {};
   const stdout = io.stdout ?? process.stdout;
   const stderr = io.stderr ?? process.stderr;
   const env = io.env ?? process.env;
@@ -904,7 +941,20 @@ export async function run(argv, io = {}) {
     return await dispatch(argv, { stdout, stderr, env, stdin });
   } catch (error) {
     if (error instanceof CliError) {
-      stderr.write(`proceed-mcp: ${error.message}\n`);
+      const message = `proceed-mcp: ${error.message}\n`;
+      if (standalone && error.expiredWhilePending === true) {
+        // The documented startup deadline is stricter than an uncancellable pending
+        // prerequisite read. No detached process, ownership record or secret write
+        // exists at this point, so the standalone command ends exactly at its
+        // deadline with a synchronous diagnostic rather than waiting past it.
+        try {
+          writeSync(2, message);
+        } catch {
+          /* stderr is unavailable; the exit code still classifies the failure */
+        }
+        process.exit(error.exitCode);
+      }
+      stderr.write(message);
       return error.exitCode;
     }
     stderr.write(`proceed-mcp: unexpected failure: ${error?.message ?? 'unknown error'}\n`);
