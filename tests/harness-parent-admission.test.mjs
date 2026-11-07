@@ -84,7 +84,10 @@ test('actual resolver rejects a shell wrapper instead of selecting it as Node', 
 // TEST ONLY: script the imported ChildProcess boundary, not a production hook or
 // an observation comparator. Real parent framing, admission, catch and cleanup
 // execute against owned streams. No process, helper, broker or authority exists.
-function submittedChild(confirmClose, { stall = null, closeDelay = 0, terminationDelay = 0 } = {}) {
+function submittedChild(
+  confirmClose,
+  { stall = null, closeDelay = 0, terminationDelay = 0, responseTail = null } = {},
+) {
   const child = new EventEmitter();
   const frames = [];
   const kills = [];
@@ -101,6 +104,25 @@ function submittedChild(confirmClose, { stall = null, closeDelay = 0, terminatio
           outbound.write(frame({ ...ready(), exchange_id: value.exchange_id }));
       } else if (value.type === 'exchange') {
         if (stall === 'reply') return done();
+        if (responseTail !== null) {
+          const response = frame({
+            schema_version: 1,
+            type: 'response',
+            exchange_id: value.exchange_id,
+            status: 200,
+            body: { schema_version: 1, presentation: null },
+          });
+          const tail = {
+            valid: Buffer.alloc(0),
+            extra: response,
+            partial: Buffer.from([0, 0]),
+            malformed: Buffer.from([0, 0, 0, 1, 0xff]),
+          }[responseTail];
+          outbound.end(Buffer.concat([response, tail]), () => {
+            queueMicrotask(() => child.emit('close', 0, null));
+          });
+          return done();
+        }
         outbound.write(
           frame(
             stall === 'close'
@@ -156,6 +178,57 @@ function submittedChild(confirmClose, { stall = null, closeDelay = 0, terminatio
     },
   };
 }
+
+test('actual parent admits one ended response and refuses extra or trailing bytes without replay', async () => {
+  const original = childProcess.spawn;
+  try {
+    for (const responseTail of ['valid', 'extra', 'partial', 'malformed']) {
+      const fixture = submittedChild(true, { responseTail });
+      let attempts = 0;
+      childProcess.spawn = () => {
+        attempts++;
+        return fixture.child;
+      };
+      syncBuiltinESMExports();
+      try {
+        const exchange = runHelperExchange({
+          ...valid,
+          env: { PATH: dirname(process.execPath) },
+          cwd: root,
+          budgetMs: 3000,
+        });
+        if (responseTail === 'valid') {
+          assert.deepEqual(await exchange, {
+            status: 200,
+            body: { schema_version: 1, presentation: null },
+          });
+        } else {
+          await assert.rejects(exchange, (error) => {
+            assert.equal(error.code, 'HELPER_PROTOCOL_INVALID', responseTail);
+            assert.equal(error.submitted, true);
+            assert.equal(String(error).includes(syntheticOperator), false);
+            return true;
+          });
+        }
+        assert.equal(attempts, 1);
+        assert.deepEqual(
+          fixture.frames.map((value) => value.type),
+          ['hello', 'exchange'],
+        );
+        // Malformed bytes may fail before the scripted clean-close microtask.
+        // The parent then requests normal owned cleanup, not a second exchange.
+        assert.deepEqual(fixture.kills, responseTail === 'malformed' ? ['SIGTERM'] : []);
+        assert.ok(fixture.child.stdio.filter(Boolean).every((stream) => stream.destroyed));
+      } finally {
+        fixture.dispose();
+        for (const stream of fixture.child.stdio.filter(Boolean)) stream.destroy();
+      }
+    }
+  } finally {
+    childProcess.spawn = original;
+    syncBuiltinESMExports();
+  }
+});
 
 for (const confirmClose of [true, false]) {
   test(
