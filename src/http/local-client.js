@@ -241,6 +241,15 @@ async function stableRecord(lock) {
   return current;
 }
 
+// One exchange owns one absolute budget. The protected-record comparisons, TLS
+// establishment and the HTTP exchange all spend that same remaining time instead
+// of each starting a fresh timer, so a slow handshake cannot buy a slow response
+// extra time beyond the caller's deadline.
+function exchangeDeadline(budgetMs) {
+  const endsAt = performance.now() + Math.max(1, budgetMs);
+  return () => endsAt - performance.now();
+}
+
 function httpOverSocket({
   socket,
   port,
@@ -337,7 +346,10 @@ function httpOverSocket({
 
 // One authenticated exchange over a fresh channel. The stable protected record
 // is compared before the Authorization header and again after a readiness
-// response, so a later substitution never inherits an earlier success.
+// response, so a later substitution never inherits an earlier success. A single
+// absolute budget covers every phase, and the actual socket is aborted when it
+// expires: a phase that starts, or a response that settles, after the deadline
+// never authorizes a later exchange or adoption.
 export async function secureExchange({
   lock,
   token,
@@ -355,14 +367,31 @@ export async function secureExchange({
   if (signal?.aborted === true) {
     throw unavailableChannel('the local request was cancelled');
   }
+  const remainingTime = exchangeDeadline(timeoutMs);
+  // Check remaining budget before starting any phase. A protected-record read
+  // cannot be cancelled, so its result only authorizes the next phase while time
+  // remains.
+  const expired = () => {
+    if (signal?.aborted === true) {
+      throw unavailableChannel('the local request was cancelled');
+    }
+    if (remainingTime() <= 0) {
+      throw unavailableChannel('the secure broker did not answer in time');
+    }
+  };
+  expired();
   if (lock.path !== undefined) await stableRecord(lock);
+  expired();
   const socket = await openSecureSocket({
     port: lock.port,
     psk: lock.channel.psk,
-    timeoutMs: LOCAL_HANDSHAKE_TIMEOUT_MS,
+    timeoutMs: Math.min(LOCAL_HANDSHAKE_TIMEOUT_MS, remainingTime()),
   });
   try {
+    expired();
     await stableRecord(lock);
+    // No Authorization byte leaves for a phase the remaining budget cannot cover.
+    expired();
     const response = await httpOverSocket({
       socket,
       port: lock.port,
@@ -371,11 +400,16 @@ export async function secureExchange({
       path,
       body,
       headers,
-      timeoutMs,
+      timeoutMs: remainingTime(),
       maxBytes,
       signal,
     });
-    if (path === '/v1/ready' && lock.path !== undefined) await stableRecord(lock);
+    if (path === '/v1/ready' && lock.path !== undefined) {
+      await stableRecord(lock);
+      // Adoption is authority, not an observation: a readiness response that
+      // settled at or after the absolute deadline is refused rather than reused.
+      expired();
+    }
     return response;
   } finally {
     socket.destroy();

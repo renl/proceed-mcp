@@ -206,8 +206,14 @@ export async function awaitSecureAvailability({
     } else {
       const left = remaining();
       if (left <= 0) throw startupTimeout();
-      const result = await attemptReadiness(record, token, Math.min(1_000, left));
-      if (result.state === 'ready') return result.record;
+      const result = await attemptReadiness(record, token, Math.min(PROBE_TIMEOUT_MS, left));
+      if (result.state === 'ready') {
+        // Adoption is authority, not an observation: a readiness response that
+        // settled at or after the attempt deadline is never reused, and the
+        // uncancellable record check above cannot authorize a later adoption.
+        if (remaining() <= 0) throw startupTimeout();
+        return result.record;
+      }
     }
     const left = remaining();
     if (left <= 0) throw startupTimeout();
