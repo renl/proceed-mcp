@@ -246,6 +246,12 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       );
       for (const file of ['composition-summary.json', 'progress.jsonl'])
         await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)]);
+      for (const file of [
+        'composition-observations.json',
+        'transcript.ansi',
+        'plugin-diagnostics.log',
+      ])
+        await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)]);
     } else if (helper) {
       // No raw child bytes or arbitrary exception strings cross this boundary.
       await command(['cp', `${name}:/run/proceed/evidence/result.json`, join(run, 'result.json')]);
@@ -356,6 +362,30 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         );
       } catch {
         /* no raw capture fallback */
+      }
+      try {
+        // Also on failure, detailed evidence requires the complete raw scan.
+        await command(
+          ['cp', `${name}:/run/proceed/evidence/scan-pass.json`, join(run, 'scan-pass.json')],
+          3000,
+          true,
+        );
+        assertDetailedTransportExport(
+          JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')),
+        );
+        for (const file of [
+          'composition-observations.json',
+          'transcript.ansi',
+          'plugin-diagnostics.log',
+          'progress.jsonl',
+        ])
+          await command(
+            ['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)],
+            3000,
+            true,
+          );
+      } catch {
+        /* Missing/failed scan refuses every detailed capture. No raw fallback. */
       }
     } else if (created && transport) {
       // No result/error strings or detailed capture may bypass the full scan.

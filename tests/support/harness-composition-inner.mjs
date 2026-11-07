@@ -11,6 +11,12 @@ import {
 } from './harness-qualification-setup.mjs';
 import { transportFixtures, scanRequiredCaptures } from './harness-transport-fixtures.mjs';
 import {
+  awaitCompositionRender,
+  compositionRenderEvidence,
+  compositionErrorCode,
+} from './harness-composition-readiness.mjs';
+import { assertPluginInventory } from './harness-plugin-inventory.mjs';
+import {
   stageQualification,
   isolatedLinuxEnvironment,
   linuxScriptArguments,
@@ -23,8 +29,15 @@ let phase = 'policy',
   failure,
   child,
   exited = false,
+  closed = false,
   overflow = false;
 let transcript = Buffer.alloc(0);
+let errorCode,
+  renderEvidence,
+  scanStatus = 'UNRUN';
+let productCleanup = 'UNRUN',
+  hostExit = 'UNRUN';
+let commandEligibility = 'UNRUN';
 await mkdir(evidence, { recursive: true });
 const progress = async (next) => {
   phase = next;
@@ -148,6 +161,9 @@ try {
         child.on('exit', () => {
           exited = true;
         });
+        child.on('close', () => {
+          closed = true;
+        });
         child.on('error', () => {
           overflow = true;
         });
@@ -178,6 +194,7 @@ try {
           pending = last >= 0 && tail.length - last < 32 ? tail.slice(last) : '';
         });
         child.stderr.on('data', capture);
+        const readinessEnd = Math.min(end, Date.now() + 60000);
         await wait(
           'public-session-and-product-ready',
           async () => {
@@ -186,22 +203,41 @@ try {
                 await readFile(join(evidence, 'composition-fixture-failure.json'), 'utf8'),
               );
               assert.ok(
-                ['product-setup', 'public-session-create', 'host-session-sync'].includes(
-                  fixed.phase,
-                ),
+                [
+                  'product-setup',
+                  'public-session-create',
+                  'host-session-sync',
+                  'public-command-eligibility',
+                ].includes(fixed.phase),
               );
               phase = fixed.phase;
               throw Error('fixture setup failed');
             }
             return !exited && (await exists(join(evidence, 'composition-ready.json')));
           },
-          60000,
+          readinessEnd - Date.now(),
         );
         const runtime = JSON.parse(
           await readFile(join(evidence, 'composition-ready.json'), 'utf8'),
         );
         assert.equal(runtime.version, '2.2.5');
         assert.equal(runtime.bun, '1.4.4');
+        commandEligibility = runtime.commandEligible === true ? 'OBSERVED' : 'UNRUN';
+        await progress('rendered-host-and-product-registration');
+        await awaitCompositionRender({
+          observe: async () => ({
+            exited,
+            overflow,
+            commandEligible: runtime.commandEligible,
+            rendered: compositionRenderEvidence(plain(transcript)),
+          }),
+          pause: () => delay(20),
+          now: Date.now,
+          deadline: readinessEnd,
+          record: (observed) => {
+            renderEvidence = observed;
+          },
+        });
         child.stdin.write('\x07');
         await wait(
           'rendered-product-session-picker',
@@ -283,7 +319,84 @@ try {
             scope: 'One compiled-host empty pending exchange only',
           }),
         );
+      } catch (error) {
+        errorCode = compositionErrorCode(error);
+        throw error;
       } finally {
+        // One exit key only, never a dialog answer or repeated open-command key.
+        // A kill below is not evidence of the returned product Cleanup.
+        if (child && !closed) {
+          if (!exited) child.stdin.write('\x03');
+          const cleanupEnd = Math.min(end, Date.now() + 15000);
+          while (!closed && Date.now() < cleanupEnd) await delay(20);
+        }
+        hostExit = exited ? 'PASS' : 'UNRUN';
+        productCleanup = (await exists(join(evidence, 'composition-cleanup.json')))
+          ? 'OBSERVED'
+          : 'UNRUN';
+        renderEvidence = compositionRenderEvidence(plain(transcript));
+        // Failure captures stay private unless the SAME complete raw scan passes.
+        // Require host exit so exported bytes cannot race later terminal writes.
+        if (closed && !overflow) {
+          try {
+            const diagnosticBytes = await logs('/run/proceed/host-state');
+            const wirePath = '/run/proceed/qualification-private/composition-wire.jsonl';
+            const captures = {
+              tui: Buffer.concat([transcript, await readFile('/run/proceed/host-state/pty.raw')]),
+              telegram: Buffer.from(JSON.stringify(h.fixture.calls)),
+              journal: await readFile(join(h.state, 'journal.log')),
+              diagnostics: diagnosticBytes,
+              evidence: Buffer.concat(
+                await Promise.all(
+                  (await readdir(evidence))
+                    .filter((f) => f !== 'scan-pass.json')
+                    .map((f) => readFile(join(evidence, f))),
+                ),
+              ),
+              // An absent observer file before the first response means zero
+              // observed responses, not a successful exchange or helper absence.
+              api: (await exists(wirePath)) ? await readFile(wirePath) : Buffer.alloc(0),
+            };
+            assert.ok(captures.diagnostics.length > 0);
+            const scan = scanRequiredCaptures(captures, controls.secrets, Object.keys(captures));
+            await writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(scan));
+            scanStatus = 'PASS';
+            const lines = diagnosticBytes
+              .toString()
+              .split('\n')
+              .filter(
+                (line) => /component=plugin(?: |$)/.test(line) && /role=cli(?: |$)/.test(line),
+              );
+            let inventory;
+            try {
+              inventory = assertPluginInventory(lines, {
+                plugin: fixture,
+                entry: join(fixture, 'tui.ts'),
+                complete: lines.length <= 4096,
+              });
+            } catch {
+              inventory = { status: 'UNPROVEN' };
+            }
+            await writeFile(
+              join(evidence, 'composition-observations.json'),
+              JSON.stringify({
+                renderedEvidenceSeen: renderEvidence,
+                currentScreen: 'UNPROVEN',
+                commandEligibility,
+                productCleanup,
+                hostExit,
+                inventory,
+              }),
+            );
+            await writeFile(join(evidence, 'transcript.ansi'), transcript);
+            await writeFile(
+              join(evidence, 'plugin-diagnostics.log'),
+              lines.slice(0, 4096).join('\n'),
+            );
+          } catch {
+            scanStatus = 'REFUSED';
+          }
+        }
         if (child && !exited) {
           child.stdin.end();
           child.kill('SIGTERM');
@@ -294,7 +407,8 @@ try {
     },
     { brokerObserver: true },
   );
-} catch {
+} catch (error) {
+  errorCode ??= compositionErrorCode(error);
   failure = 'COMPOSITION_CONTROL_FAILURE';
 }
 // Only fixed phase and classification may leave without a full raw scan marker.
@@ -304,6 +418,14 @@ await writeFile(
     status: failure ? 'FAIL' : 'PASS',
     failure,
     phase,
+    errorCode,
+    renderedEvidenceSeen: renderEvidence,
+    currentScreen: 'UNPROVEN',
+    commandEligibility,
+    hostLoadingInventory: 'UNRUN_WITHOUT_SCANNED_OBSERVATIONS',
+    productCleanup,
+    hostExit,
+    rawScan: scanStatus,
     elapsed: Date.now() - started,
   }),
 );
