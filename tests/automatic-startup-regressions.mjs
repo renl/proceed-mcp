@@ -27,7 +27,13 @@ try {
       : selection === 'drain'
         ? 'SCHED-RUNTIME-DRAIN'
         : undefined;
-  for (const [id, file] of pattern ? suites.slice(0, 1) : suites) {
+  const selectedSuites =
+    selection === 'harness'
+      ? [['HARNESS-CHECKPOINT', 'harness-checkpoint.test.mjs']]
+      : pattern
+        ? suites.slice(0, 1)
+        : suites;
+  for (const [id, file] of selectedSuites) {
     current = id;
     await writeFile('/evidence/phase.json', JSON.stringify({ phase: id }));
     const child = spawn(
@@ -62,18 +68,33 @@ try {
     );
     // Only fixed IDs and counts leave the namespace, never TAP assertion values.
     const failure =
-      selection === 'identity' &&
+      selection === 'harness' &&
       code !== 0 &&
-      output.includes(
-        'served MCP identity must equal the candidate manifest, not the published predecessor',
-      ) &&
-      output.includes('0.1.0-preview.1') &&
-      output.includes('0.1.0-preview.2')
-        ? 'SERVED-VERSION-MISMATCH'
-        : code === 0
-          ? null
-          : 'UNCLASSIFIED';
-    await writeFile(`/evidence/${id}.json`, JSON.stringify({ counts, code, failure }));
+      counts.tests === 3 &&
+      counts.fail === 3 &&
+      output.includes('public CLI harness must succeed') &&
+      output.includes('new synthetic operator proposal must be admitted')
+        ? 'HARNESS-PUBLIC-BEHAVIOR-NOT-IMPLEMENTED'
+        : selection === 'identity' &&
+            code !== 0 &&
+            output.includes(
+              'served MCP identity must equal the candidate manifest, not the published predecessor',
+            ) &&
+            output.includes('0.1.0-preview.1') &&
+            output.includes('0.1.0-preview.2')
+          ? 'SERVED-VERSION-MISMATCH'
+          : code === 0
+            ? null
+            : 'UNCLASSIFIED';
+    const checkpoint =
+      selection === 'harness'
+        ? {
+            keygenReached: output.includes('public CLI harness must succeed'),
+            enrollmentReached: output.includes('new synthetic operator proposal must be admitted'),
+            laterAssertions: code === 0 ? 'PASS' : 'UNPROVEN',
+          }
+        : undefined;
+    await writeFile(`/evidence/${id}.json`, JSON.stringify({ counts, code, failure, checkpoint }));
     assert.ok(counts.tests > 0 && bytes <= 262144);
     assert.equal(code, 0, id);
     assert.equal(counts.fail, 0);
@@ -91,7 +112,8 @@ try {
     results.length ===
       (process.argv.includes('--health-only') ||
       process.argv.includes('--only=identity') ||
-      process.argv.includes('--only=drain')
+      process.argv.includes('--only=drain') ||
+      process.argv.includes('--only=harness')
         ? 1
         : 2) && results.every((item) => item.status === 'PASS');
   console.log(

@@ -31,20 +31,20 @@ None. This extends the existing approval and portable waiting-call capabilities.
 - `telegram-approval`: extend explicit human decision authority to the approved local operator while preserving Telegram pairing and instruction-only Respond semantics. Delta: [spec](specs/telegram-approval/spec.md).
 - `opencode-session-continuation`: add trusted harness interaction, session admission, fallback and truthful compatibility outcomes. Delta: [spec](specs/opencode-session-continuation/spec.md). The retained capability name remains portable.
 
-Both are product-behavior deltas under the primary authorship declared in [the project index](../../../AGENTS.md). No npm-distribution or nonexistent current skill capability is modified.
+Both are product-behavior deltas under the primary authorship declared in [the project index](../../../AGENTS.md). Neither `npm-distribution` nor the merged `proceed-agent-guidance` capability is modified.
 
 ## Boundary and Dependencies
 
-This is a user-visible dual-channel outcome, not an unexposed foundation. It cannot land independently of `add-automatic-broker-startup`: secure local admission and protected transport-principal handling are necessary before adding a human decision path. The dependency's provisional [proposal](../../../.worktree/add-automatic-broker-startup/openspec/changes/add-automatic-broker-startup/proposal.md), [design](../../../.worktree/add-automatic-broker-startup/openspec/changes/add-automatic-broker-startup/design.md) and [delta](../../../.worktree/add-automatic-broker-startup/openspec/changes/add-automatic-broker-startup/specs/opencode-session-continuation/spec.md) are read-only planning context until merged. They are not current authority. Replace these checkout-local links with merged dependency references when available. Current baselines are [approval](../../specs/telegram-approval/spec.md) and [delivery](../../specs/opencode-session-continuation/spec.md).
+This is a user-visible dual-channel outcome, not an unexposed foundation. Its `add-automatic-broker-startup` dependency is satisfied by merged `main` at `a42e23c5dd026c76cf41c43eab21b7f3a4cf5c45`, integrated into this branch at `00e1e8172bc347accf2b6f12e2d17fdcccc4d55b`. This change can now land independently in its own PR into `main`. Current authority is the merged [approval](../../specs/telegram-approval/spec.md) and [delivery](../../specs/opencode-session-continuation/spec.md) baseline. The startup [proposal](../archive/2026-11-07-add-automatic-broker-startup/proposal.md) and [design](../archive/2026-11-07-add-automatic-broker-startup/design.md) are read-only history, not active dependencies.
 
-Planning may proceed before that parent merges. No child implementation or archive proceeds before the approved merged dependency baseline is available and affected contracts are rechecked. The parent merges first. Before child archive, integrate the merged baseline, verify no inherited active parent folder remains, and review these deltas against the then-current specs. This planning branch starts from `main` at `f3d60184f03963774ed6a5954bb75331d54918d4`.
+The deltas retain the merged baseline's existing requirements and scenarios except for the explicit extensions shown. Protected storage, authenticated confidential local admission on every connection, private capability and principal boundaries, truthful readiness and shared-broker lifecycle remain required. Before archive, recheck these deltas against the then-current merged specs and verify no inherited active startup folder remains.
 
 ### Exclusions
 
 - Bridging native harness permission prompts is a separate follow-up, not completed or dropped by this change. Native permission rules remain independently effective.
 - Agent-facing decision-submission tools, caller-supplied human flags as authority, standing grants, extra reviewer roles and automatic action execution.
 - Automatic post-timeout resumption, MCP Events, exited-process recovery, new global queues and unrelated startup changes.
-- Installable skill implementation, publication, deployment and live credential access. If a skill capability is merged later, aligning its guidance is a correctness follow-up against that actual baseline, not a modification of an unmerged skill delta here.
+- Installable skill implementation, publication, deployment and live credential access. The merged `proceed-agent-guidance` capability remains unchanged. Any necessary guidance alignment must preserve that contract rather than silently redefine it.
 
 ## Acceptance and Delivery Boundary
 
@@ -55,6 +55,8 @@ OpenCode V2 is the first qualification target, not a core dependency. Actual Ope
 The supported empty-state setup must establish Telegram pairing, local principal and explicit trusted-harness configuration before the first dual-channel request, without manual stored-data edits. Setup never approves work.
 
 The user's hands-on test follows full program development and deployment. Independent applicable pre-merge verification remains mandatory. Deferred, unavailable or post-deploy checks are not pre-merge passes, and historical preview exceptions do not waive these checks. This proposal grants no publication, deployment or credential-use authority.
+
+Version `0.1.0-preview.2` is the merged but unpublished startup candidate, not an assigned harness release. This independently landing runtime change needs its own version disposition before PR. No version or publication choice is made here.
 
 ## Impact
 

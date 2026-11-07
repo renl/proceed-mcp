@@ -105,6 +105,7 @@ try {
     'tests/fixtures/automatic-startup-preload.mjs',
     'tests/fixtures/automatic-startup-certificate.mjs',
     'tests/automatic-startup-regressions.mjs',
+    'tests/harness-checkpoint.test.mjs',
     'tests/automatic-startup-remaining.mjs',
     'tests/automatic-startup-admission.mjs',
     'tests/automatic-startup-package.mjs',
@@ -150,6 +151,7 @@ try {
       'drain',
       'package-fixture',
       'admission',
+      'harness',
     ].includes(mode),
     'explicit bounded checkpoint selection',
   );
@@ -161,11 +163,11 @@ try {
             'tests/automatic-startup-package.mjs',
             ...(mode === 'package-fixture' ? ['--fixture-only'] : []),
           ]
-        : ['regressions', 'health', 'identity', 'drain'].includes(mode)
+        : ['regressions', 'health', 'identity', 'drain', 'harness'].includes(mode)
           ? [
               'tests/automatic-startup-regressions.mjs',
               ...(mode === 'health' ? ['--health-only'] : []),
-              ...(['identity', 'drain'].includes(mode) ? [`--only=${mode}`] : []),
+              ...(['identity', 'drain', 'harness'].includes(mode) ? [`--only=${mode}`] : []),
             ]
           : mode === 'dispatcher'
             ? ['--test', '--test-reporter=tap', '/workspace/tests/automatic-startup-cli.test.mjs']
