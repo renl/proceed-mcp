@@ -23,6 +23,13 @@ import {
   sessionProblem,
 } from './identifiers.js';
 import { loadOperatorKeyFile, validateOperatorKeyFileOption } from './operator-key.js';
+import {
+  confirmationMessage,
+  displayGeometry,
+  geometryAdmits,
+  identityDisplayProblem,
+  identityPreview,
+} from './session-identity.js';
 
 export const HARNESS_TUI_ID = 'proceed.harness';
 // Trusted harness interaction is claimed only for the pinned, reviewed host.
@@ -98,26 +105,48 @@ function showError(context, error) {
   });
 }
 
-// One local interaction owns its session picker, question/response dialogs and
-// any exchange it started. A newer interaction, disposal or Cleanup fences it
-// before its next phase, so a completion that arrives after replacement is
-// inert: it cannot open another dialog, start another helper exchange or reuse
-// an old presentation. The fence is local only; the durable request stays
-// pending, and no broker admission or decision is queued behind it.
+// One local interaction owns its session picker, identity confirmation,
+// question/response dialogs, the public resize listener it attached and any
+// exchange it started. A newer interaction, disposal or Cleanup fences it before
+// its next phase, so a completion that arrives after replacement is inert: it
+// cannot open another dialog, start another helper exchange or reuse an old
+// presentation. The fence is local only; the durable request stays pending, and
+// no broker admission or decision is queued behind it.
 function beginInteraction(generation) {
   const replaced = generation.interaction;
   generation.interaction = null;
   if (replaced !== null) {
     replaced.active = false;
+    releaseInteraction(replaced);
     replaced.controller.abort();
   }
-  const interaction = { active: true, controller: new AbortController() };
+  const interaction = {
+    active: true,
+    invalidated: false,
+    controller: new AbortController(),
+    teardowns: new Set(),
+  };
   generation.interaction = interaction;
   return interaction;
 }
 
+// Attachment cleanup belongs to the interaction that owns it, so a replacement,
+// disposal or Cleanup removes it even while a dialog promise is still
+// outstanding.
+function releaseInteraction(interaction) {
+  for (const teardown of [...interaction.teardowns]) {
+    interaction.teardowns.delete(teardown);
+    try {
+      teardown();
+    } catch {
+      // Cleanup failure cannot reopen authority; the fence already applied.
+    }
+  }
+}
+
 function disposeInteraction(generation, interaction) {
   interaction.active = false;
+  releaseInteraction(interaction);
   if (generation.interaction === interaction) generation.interaction = null;
 }
 
@@ -299,19 +328,148 @@ function questionTitle(presentation) {
   ].join('\n');
 }
 
-// Only a documented session the host can still resolve may receive a question.
-// The foreground session, tab order and recent activity are never substitutes.
-async function chooseSession(generation, interaction, context) {
+// The candidate list is captured once per interaction. Only the opaque ID is an
+// option value, never the title, ordinal or preview. Each row carries a unique
+// short ordinal and, at most, a clearly partial title preview, so equal and long
+// titles stay separate candidates.
+function sessionSnapshot(context) {
   let listed = [];
   try {
     listed = context.data.session.list();
   } catch {
     listed = [];
   }
-  const candidates = (Array.isArray(listed) ? listed : []).filter(
-    (entry) => isPlainObject(entry) && typeof entry.id === 'string' && entry.id !== '',
-  );
-  if (candidates.length === 0) {
+  const entries = Array.isArray(listed) ? listed : [];
+  const snapshot = [];
+  for (const entry of entries) {
+    if (!isPlainObject(entry)) continue;
+    if (typeof entry.id !== 'string' || entry.id === '') continue;
+    snapshot.push({
+      id: entry.id,
+      title: typeof entry.title === 'string' ? entry.title : null,
+      ordinal: `Session ${snapshot.length + 1}`,
+    });
+  }
+  return snapshot;
+}
+
+// A returned option value is resolved against this interaction's snapshot, never
+// against the foreground tab, the first matching title or other screen text.
+function snapshotCandidate(snapshot, value) {
+  if (typeof value !== 'string') return null;
+  return snapshot.find((candidate) => candidate.id === value) ?? null;
+}
+
+// The host record must still be the captured candidate: same opaque ID and the
+// same unchanged title. A missing record, a foreign ID or a changed title
+// refuses this interaction rather than silently confirming another identity.
+function hostRecordMatches(context, candidate) {
+  if (candidate.title === null) return false;
+  let record;
+  try {
+    record = context.data.session.get(candidate.id);
+  } catch {
+    return false;
+  }
+  return isPlainObject(record) && record.id === candidate.id && record.title === candidate.title;
+}
+
+async function verifyCandidate(context, candidate) {
+  if (hostRecordMatches(context, candidate)) return true;
+  // Preserve the previous best-effort refresh before refusing.
+  try {
+    await context.data.session.sync(candidate.id);
+  } catch {
+    return false;
+  }
+  return hostRecordMatches(context, candidate);
+}
+
+function refuseDisplay(context) {
+  context.ui.toast.show({
+    message:
+      'Proceed: the complete selected session identity cannot be displayed here. ' +
+      'Enlarge the terminal and reopen, or use Telegram. No question was opened.',
+    variant: 'warning',
+    duration: 30000,
+  });
+}
+
+// One additional navigation step. The operator sees the complete captured title
+// and exact opaque ID, with the selected ordinal, next to the Open question and
+// Cancel controls in the current dialog. Only a still-current `true` advances.
+// This stage opens no question by itself, grants no decision authority and never
+// rewrites the confirmed identity.
+async function confirmSelection(generation, interaction, context, candidate) {
+  if (
+    identityDisplayProblem(candidate.title) !== null ||
+    identityDisplayProblem(candidate.id) !== null
+  ) {
+    refuseDisplay(context);
+    return false;
+  }
+  const { message, lineCount } = confirmationMessage({
+    ordinal: candidate.ordinal,
+    title: candidate.title,
+    id: candidate.id,
+  });
+  const admitted = displayGeometry(context.renderer);
+  if (admitted === null || !geometryAdmits(admitted, lineCount)) {
+    refuseDisplay(context);
+    return false;
+  }
+  const renderer = context.renderer;
+  if (
+    typeof context.ui.dialog.confirm !== 'function' ||
+    typeof renderer?.on !== 'function' ||
+    typeof renderer?.removeListener !== 'function'
+  ) {
+    refuseDisplay(context);
+    return false;
+  }
+  // Even a same-size resize invalidates this stage: the approved geometry was
+  // observed for this dialog instance only, and reopening is required.
+  const onResize = () => {
+    interaction.invalidated = true;
+  };
+  renderer.on('resize', onResize);
+  const detach = () => {
+    renderer.removeListener('resize', onResize);
+  };
+  interaction.teardowns.add(detach);
+  let answer;
+  try {
+    answer = await context.ui.dialog.confirm({
+      title: 'Open Proceed question?',
+      message,
+      label: { confirm: 'Open question', cancel: 'Cancel' },
+    });
+  } finally {
+    interaction.teardowns.delete(detach);
+    detach();
+  }
+  // `false`, `undefined`, dismissal, a replaced/disposed interaction and a lost
+  // display admission all do nothing.
+  if (answer !== true) return false;
+  if (!interactionActive(generation, interaction) || interaction.invalidated) return false;
+  const current = displayGeometry(context.renderer);
+  if (
+    current === null ||
+    current.width !== admitted.width ||
+    current.height !== admitted.height ||
+    !geometryAdmits(current, lineCount)
+  ) {
+    refuseDisplay(context);
+    return false;
+  }
+  return true;
+}
+
+// Only a documented session the host can still resolve may receive a question.
+// The foreground session, tab order and recent activity are never substitutes.
+async function chooseSession(generation, interaction, context) {
+  const snapshot = sessionSnapshot(context);
+  if (snapshot.length === 0) {
     context.ui.toast.show({
       message: 'Proceed: no documented session is available to attach a question to.',
       variant: 'warning',
@@ -321,22 +479,24 @@ async function chooseSession(generation, interaction, context) {
   }
   const choice = await context.ui.dialog.select({
     title: 'Select the Proceed session whose pending question to open',
-    options: candidates.map((entry) => ({
-      title: `${inert(entry.title ?? entry.id)} (${inert(entry.id)})`,
-      value: entry.id,
+    options: snapshot.map((candidate) => ({
+      title: `${candidate.ordinal} - ${identityPreview(candidate.title)}`,
+      value: candidate.id,
     })),
   });
   // A replaced or disposed picker completion grants nothing and opens nothing.
   if (choice === undefined || !interactionActive(generation, interaction)) return null;
-  if (context.data.session.get(choice) === undefined) {
-    try {
-      await context.data.session.sync(choice);
-    } catch {
-      // An unresolvable session stays unresolvable; no decision UI is shown.
-    }
+  const candidate = snapshotCandidate(snapshot, choice);
+  if (candidate === null) {
+    context.ui.toast.show({
+      message: 'Proceed: that choice is not one of the captured sessions; no question was opened.',
+      variant: 'warning',
+      duration: 20000,
+    });
+    return null;
   }
-  if (!interactionActive(generation, interaction)) return null;
-  if (context.data.session.get(choice) === undefined) {
+  if (!(await verifyCandidate(context, candidate))) {
+    if (!interactionActive(generation, interaction)) return null;
     context.ui.toast.show({
       message: 'Proceed: that session cannot be resolved; no question was opened.',
       variant: 'warning',
@@ -344,7 +504,8 @@ async function chooseSession(generation, interaction, context) {
     });
     return null;
   }
-  return choice;
+  if (!interactionActive(generation, interaction)) return null;
+  return candidate;
 }
 
 function decisionFrom(body, presentation) {
@@ -466,8 +627,24 @@ async function openQuestion(generation, context) {
   if (!generation.active) return;
   const interaction = beginInteraction(generation);
   try {
-    const sessionId = await chooseSession(generation, interaction, context);
-    if (sessionId === null || !interactionActive(generation, interaction)) return;
+    const candidate = await chooseSession(generation, interaction, context);
+    if (candidate === null || !interactionActive(generation, interaction)) return;
+    if (!(await confirmSelection(generation, interaction, context, candidate))) return;
+    if (!interactionActive(generation, interaction)) return;
+    // Reverify the same ID and unchanged title immediately before the exact
+    // captured route is queried; the foreground or current pending slot is never
+    // substituted for it.
+    if (!(await verifyCandidate(context, candidate))) {
+      if (!interactionActive(generation, interaction)) return;
+      context.ui.toast.show({
+        message: 'Proceed: that session changed or cannot be resolved; reopen to select it again.',
+        variant: 'warning',
+        duration: 20000,
+      });
+      return;
+    }
+    if (!interactionActive(generation, interaction)) return;
+    const sessionId = candidate.id;
     let pending;
     try {
       const body = await exchange(generation, interaction, 'pending', {
@@ -622,6 +799,7 @@ export const harnessTuiDefinition = {
       generation.interaction = null;
       if (interaction !== null) {
         interaction.active = false;
+        releaseInteraction(interaction);
         interaction.controller.abort();
       }
     };
