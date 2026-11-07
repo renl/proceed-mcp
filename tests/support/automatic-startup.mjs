@@ -223,9 +223,12 @@ export async function context(root) {
     TEMP: directory,
     TMPDIR: directory,
   };
-  const executable = resolve('bin/proceed-mcp.js');
+  const executable = process.env.PROCEED_TEST_INSTALLED_BIN ?? resolve('bin/proceed-mcp.js');
+  if (process.env.PROCEED_TEST_INSTALLED_BIN)
+    assert.ok(executable.startsWith('/fixtures/') && executable.endsWith('/bin/proceed-mcp.js'));
   const preload = pathToFileURL(resolve('tests/fixtures/automatic-startup-preload.mjs'));
   preload.searchParams.set('root', directory);
+  if (process.env.PROCEED_TEST_INSTALLED_BIN) preload.searchParams.set('installed', executable);
   const start = (args, { state, input, moreEnv = {} } = {}) => {
     assert.ok(
       closing || performance.now() < runDeadline,

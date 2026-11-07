@@ -91,6 +91,10 @@ try {
   assert.equal(tracked.status, 0);
   const files = [
     'package.json',
+    'package-lock.json',
+    'server.json',
+    'README.md',
+    'LICENSE',
     ...tracked.stdout
       .trim()
       .split(/\r?\n/)
@@ -101,6 +105,13 @@ try {
     'tests/fixtures/automatic-startup-preload.mjs',
     'tests/fixtures/automatic-startup-certificate.mjs',
     'tests/automatic-startup-regressions.mjs',
+    'tests/automatic-startup-remaining.mjs',
+    'tests/automatic-startup-package.mjs',
+    'tests/release-pack.mjs',
+    'tests/release-metadata.test.mjs',
+    'tests/release-installed.test.mjs',
+    'tests/support/release-artifact.mjs',
+    'tests/fixtures/release-observer.mjs',
     'tests/portable-runtime-scheduling.test.mjs',
     'tests/portable-activation.test.mjs',
     'tests/fixtures/runtime-scheduling-preload.mjs',
@@ -123,22 +134,35 @@ try {
   await writeFile(join(directory, 'input-paths.json'), JSON.stringify(files));
   const mode = process.argv[2] ?? 'checkpoint';
   assert.ok(
-    ['checkpoint', 'platform', 'dispatcher', 'regressions', 'file-safety', 'deadline'].includes(
-      mode,
-    ),
+    [
+      'checkpoint',
+      'platform',
+      'dispatcher',
+      'regressions',
+      'file-safety',
+      'deadline',
+      'remaining',
+      'package',
+    ].includes(mode),
     'explicit bounded checkpoint selection',
   );
   const args =
-    mode === 'regressions'
-      ? ['tests/automatic-startup-regressions.mjs']
-      : mode === 'dispatcher'
-        ? ['--test', '--test-reporter=tap', '/workspace/tests/automatic-startup-cli.test.mjs']
-        : [
-            'tests/automatic-startup-checkpoint.mjs',
-            ...(mode === 'platform' ? ['--tls-platform-only'] : []),
-            ...(mode === 'file-safety' ? ['--file-safety-only'] : []),
-            ...(mode === 'deadline' ? ['--deadline-only'] : []),
-          ];
+    mode === 'package'
+      ? ['tests/automatic-startup-package.mjs']
+      : mode === 'regressions'
+        ? ['tests/automatic-startup-regressions.mjs']
+        : mode === 'dispatcher'
+          ? ['--test', '--test-reporter=tap', '/workspace/tests/automatic-startup-cli.test.mjs']
+          : [
+              'tests/automatic-startup-checkpoint.mjs',
+              ...(mode === 'platform' ? ['--tls-platform-only'] : []),
+              ...(mode === 'file-safety' ? ['--file-safety-only'] : []),
+              ...(mode === 'deadline' ? ['--deadline-only'] : []),
+              ...(mode === 'deadline' && process.argv[3]
+                ? [`--deadline-stage=${process.argv[3]}`]
+                : []),
+              ...(mode === 'remaining' ? ['--remaining-only'] : []),
+            ];
   await progress(`run-${mode}`);
   const result = await docker(
     [
@@ -151,6 +175,7 @@ try {
       '--network=none',
       '--read-only',
       '--cap-drop=ALL',
+      ...(mode === 'remaining' ? ['--cap-add=CHOWN'] : []),
       '--security-opt=no-new-privileges',
       '--memory=512m',
       '--cpus=2',
