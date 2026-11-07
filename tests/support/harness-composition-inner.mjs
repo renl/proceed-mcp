@@ -1,7 +1,16 @@
 // TEST ONLY. One normal product command in the actual compiled host, no model.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdir, readFile, writeFile, appendFile, symlink, access, readdir } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  writeFile,
+  appendFile,
+  symlink,
+  access,
+  readdir,
+  rename,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -11,7 +20,14 @@ import {
   withQualificationBroker,
   confirmQualificationEnrollment,
 } from './harness-qualification-setup.mjs';
-import { transportFixtures, scanRequiredCaptures } from './harness-transport-fixtures.mjs';
+import { transportFixtures } from './harness-transport-fixtures.mjs';
+import {
+  waitCompositionPhase,
+  failureSnapshot,
+  settleCompositionHost,
+  scanFrozenComposition,
+  persistCompositionDiagnostic,
+} from './harness-composition-retention.mjs';
 import {
   awaitCompositionKeyAdmission,
   compositionRenderEvidence,
@@ -51,7 +67,18 @@ let readinessObservation;
 const guardJournal = compositionGuardJournal();
 const recordGuard = (stage, snapshot) => guardJournal.record(stage, snapshot);
 let lastGuardState, readGuardFiles, readinessEnd;
+let failureAt;
+let priorPids = new Set();
+let lifecycle = { exitObserved: false, closeObserved: false, termination: 'NOT_REQUESTED' };
 await mkdir(evidence, { recursive: true });
+const diagnosticIO = {
+  write: (bytes) => writeFile(join(evidence, 'composition-diagnostic.next'), bytes),
+  commit: () =>
+    rename(
+      join(evidence, 'composition-diagnostic.next'),
+      join(evidence, 'composition-diagnostic.json'),
+    ),
+};
 const progress = async (next) => {
   phase = next;
   await appendFile(
@@ -67,12 +94,13 @@ const exists = (p) =>
 async function wait(label, predicate, budget = 15000) {
   await progress(label);
   const deadline = Math.min(end, Date.now() + budget);
-  while (Date.now() < deadline) {
-    assert.equal(overflow, false, 'capture ceiling');
-    if (await predicate()) return;
-    await delay(20);
-  }
-  throw Error('bounded phase failed');
+  await waitCompositionPhase({
+    predicate,
+    deadline,
+    now: Date.now,
+    pause: () => delay(20),
+    overflow: () => overflow,
+  });
 }
 const plain = (b) =>
   b
@@ -155,6 +183,8 @@ try {
         JSON.stringify({ plugins: [{ package: fixture, options: staging.options }] }),
       );
       const controls = await transportFixtures(h);
+      const requiredSecrets = Object.freeze(controls.secrets.slice());
+      let controlsClosed = false;
       try {
         assert.match(
           execFileSync('/usr/local/bin/opencode', ['--version'], {
@@ -168,10 +198,15 @@ try {
         await progress('compiled-product-start');
         const run = randomUUID();
         await writeFile(join(evidence, 'composition-binding.json'), JSON.stringify({ run }));
+        // Establish the empty observer stream before any exchange. Missing later
+        // is a capture failure, never an invented zero-response scan input.
+        await writeFile('/run/proceed/qualification-private/composition-wire.jsonl', '');
+        priorPids = new Set((await readdir('/proc')).filter((p) => /^\d+$/.test(p)));
         child = spawn('/usr/bin/script', linuxScriptArguments('/run/proceed/host-state/pty.raw'), {
           env,
           cwd: '/run/proceed/host-state/work',
           stdio: ['pipe', 'pipe', 'pipe'],
+          detached: true,
         });
         child.on('exit', () => {
           exited = true;
@@ -381,19 +416,6 @@ try {
           { productCleanup: 'PASS' },
         );
         await wait('actual-host-exit', () => exited);
-        const captures = {
-          tui: Buffer.concat([transcript, await readFile('/run/proceed/host-state/pty.raw')]),
-          telegram: Buffer.from(JSON.stringify(h.fixture.calls)),
-          journal: await readFile(join(h.state, 'journal.log')),
-          diagnostics: await logs('/run/proceed/host-state'),
-          evidence: Buffer.concat(
-            await Promise.all((await readdir(evidence)).map((f) => readFile(join(evidence, f)))),
-          ),
-          api: Buffer.from(JSON.stringify(wire)),
-        };
-        assert.ok(captures.diagnostics.length > 0);
-        const scan = scanRequiredCaptures(captures, controls.secrets, Object.keys(captures));
-        await writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(scan));
         await writeFile(
           join(evidence, 'composition-summary.json'),
           JSON.stringify({
@@ -407,12 +429,44 @@ try {
             helperAbsence: 'PASS',
             productCleanup: 'PASS',
             zeroWork: 'PASS',
-            scan,
             scope: 'One compiled-host empty pending exchange only',
           }),
         );
       } catch (error) {
         errorCode = compositionErrorCode(error);
+        // Freeze failure-time operands before Ctrl+C, cleanup files or phase changes.
+        failureAt = failureSnapshot({
+          error,
+          phase,
+          keys,
+          state: {
+            ...lastGuardState,
+            ...readGuardFiles?.(),
+            frame: compositionCurrentFrame(transcript.toString()),
+            frameToken: transcript.length,
+            exited,
+            overflow,
+          },
+          now: Date.now(),
+          deadline: readinessEnd,
+        });
+        // Persist the safe failure BEFORE cleanup can stall or be terminated.
+        // The final record may add lifecycle observations but cannot replace
+        // this frozen failure-time phase, guard or key counts.
+        await persistCompositionDiagnostic(diagnosticIO, {
+          status: 'FAIL',
+          failure: 'COMPOSITION_CONTROL_FAILURE',
+          phase,
+          errorCode,
+          failureAt,
+          keys,
+          lifecycle,
+          commandEligibility,
+          hostExit,
+          productCleanup,
+          rawScan: scanStatus,
+          elapsed: Date.now() - started,
+        });
         throw error;
       } finally {
         // Driver cleanup entry, not a claim that product Cleanup has run.
@@ -431,23 +485,41 @@ try {
         );
         // One exit key only, never a dialog answer or repeated open-command key.
         // A kill below is not evidence of the returned product Cleanup.
-        if (child && !closed) {
-          if (!exited) {
-            keys.exit++;
-            child.stdin.write('\x03');
-          }
-          const cleanupEnd = Math.min(end, Date.now() + 15000);
-          while (!closed && Date.now() < cleanupEnd) await delay(20);
-        }
+        if (child)
+          lifecycle = await settleCompositionHost({
+            observe: () => ({ exited, closed }),
+            exitSent: keys.exit > 0,
+            requestExit: () => {
+              keys.exit++;
+              child.stdin.write('\x03');
+            },
+            terminate: (signal) => {
+              try {
+                process.kill(-child.pid, signal);
+              } catch {
+                /* absence is checked separately */
+              }
+            },
+            now: Date.now,
+            deadline: Math.min(end, Date.now() + 15000),
+            pause: () => delay(20),
+          });
         hostExit = exited ? 'PASS' : 'UNRUN';
         productCleanup = (await exists(join(evidence, 'composition-cleanup.json')))
           ? 'OBSERVED'
           : 'UNRUN';
         renderEvidence = compositionRenderEvidence(compositionCurrentFrame(transcript.toString()));
         // Failure captures stay private unless the SAME complete raw scan passes.
-        // Require host exit so exported bytes cannot race later terminal writes.
-        if (closed && !overflow) {
+        // Close is not graceful exit. Forced exit is eligible only after actual
+        // writer absence and every required input is available and bounded.
+        if (child) {
           try {
+            await controls.close();
+            controlsClosed = true;
+            const remainingPids = (await readdir('/proc')).filter(
+              (p) => /^\d+$/.test(p) && !priorPids.has(p),
+            );
+            const complete = closed && remainingPids.length === 0;
             const diagnosticBytes = await logs('/run/proceed/host-state');
             const wirePath = '/run/proceed/qualification-private/composition-wire.jsonl';
             const captures = {
@@ -463,14 +535,10 @@ try {
                     .map((f) => readFile(join(evidence, f))),
                 )),
               ]),
-              // An absent observer file before the first response means zero
-              // observed responses, not a successful exchange or helper absence.
-              api: (await exists(wirePath)) ? await readFile(wirePath) : Buffer.alloc(0),
+              // Explicitly created before launch. Absence refuses the full scan.
+              api: await readFile(wirePath),
             };
             assert.ok(captures.diagnostics.length > 0);
-            const scan = scanRequiredCaptures(captures, controls.secrets, Object.keys(captures));
-            await writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(scan));
-            scanStatus = 'PASS';
             const lines = diagnosticBytes
               .toString()
               .split('\n')
@@ -487,8 +555,7 @@ try {
             } catch {
               inventory = { status: 'UNPROVEN' };
             }
-            await writeFile(
-              join(evidence, 'composition-observations.json'),
+            const observations = Buffer.from(
               JSON.stringify({
                 renderedEvidenceSeen: renderEvidence,
                 currentScreen: 'UNPROVEN',
@@ -500,48 +567,65 @@ try {
                 hostExit,
                 inventory,
                 guardJournal: guardJournal.value(),
+                failureAt,
+                lifecycle,
               }),
             );
-            await writeFile(join(evidence, 'transcript.ansi'), transcript);
-            await writeFile(
-              join(evidence, 'plugin-diagnostics.log'),
-              lines.slice(0, 4096).join('\n'),
-            );
+            const pluginBytes = Buffer.from(lines.slice(0, 4096).join('\n'));
+            // Freeze the exact detailed exports, complete capture set and secret
+            // set before scanning. Never scan an earlier version then export new bytes.
+            captures.evidence = Buffer.concat([captures.evidence, observations, pluginBytes]);
+            const frozen = scanFrozenComposition({
+              captures,
+              secrets: requiredSecrets,
+              complete,
+              overflow,
+            });
+            await writeFile(join(evidence, 'composition-observations.json'), observations);
+            await writeFile(join(evidence, 'transcript.ansi'), frozen.captures.tui);
+            await writeFile(join(evidence, 'plugin-diagnostics.log'), pluginBytes);
+            await writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(frozen.scan));
+            scanStatus = 'PASS';
           } catch {
             scanStatus = 'REFUSED';
           }
         }
-        if (child && !exited) {
-          child.stdin.end();
-          child.kill('SIGTERM');
-        }
         if (child) for (const s of [child.stdin, child.stdout, child.stderr]) s.destroy();
-        await controls.close();
+        if (!controlsClosed) await controls.close();
+        if (scanStatus !== 'PASS')
+          throw Object.assign(Error('scan refused'), { code: 'CAPTURE_SCAN_REFUSED' });
       }
     },
     { brokerObserver: true },
   );
 } catch (error) {
   errorCode ??= compositionErrorCode(error);
+  failureAt ??= failureSnapshot({
+    error,
+    phase,
+    keys,
+    state: { exited, overflow },
+    now: Date.now(),
+    deadline: readinessEnd,
+  });
   failure = 'COMPOSITION_CONTROL_FAILURE';
 }
 // Only fixed phase and classification may leave without a full raw scan marker.
-await writeFile(
-  join(evidence, 'composition-diagnostic.json'),
-  JSON.stringify({
-    status: failure ? 'FAIL' : 'PASS',
-    failure,
-    phase,
-    errorCode,
-    renderedEvidenceSeen: renderEvidence,
-    currentScreen: 'UNPROVEN',
-    commandEligibility,
-    keys,
-    hostLoadingInventory: 'UNRUN_WITHOUT_SCANNED_OBSERVATIONS',
-    productCleanup,
-    hostExit,
-    rawScan: scanStatus,
-    elapsed: Date.now() - started,
-  }),
-);
+await persistCompositionDiagnostic(diagnosticIO, {
+  status: failure ? 'FAIL' : 'PASS',
+  failure,
+  phase,
+  errorCode,
+  failureAt,
+  lifecycle,
+  renderedEvidenceSeen: renderEvidence,
+  currentScreen: 'UNPROVEN',
+  commandEligibility,
+  keys,
+  hostLoadingInventory: 'UNRUN_WITHOUT_SCANNED_OBSERVATIONS',
+  productCleanup,
+  hostExit,
+  rawScan: scanStatus,
+  elapsed: Date.now() - started,
+});
 process.exitCode = failure ? 1 : 0;

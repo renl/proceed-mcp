@@ -2,11 +2,25 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, copyFile, writeFile, readFile, lstat } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  copyFile,
+  writeFile,
+  readFile,
+  lstat,
+  appendFile,
+  rm,
+} from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { hostBudgets } from './harness-host-plan.mjs';
+import {
+  retainProgress,
+  safeCompositionDiagnostic,
+  assertCompositionExport,
+} from './harness-composition-retention.mjs';
 import {
   assertTransportDiagnostic,
   assertDetailedTransportExport,
@@ -118,11 +132,31 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
   const run = await mkdtemp(join(scratch, 'run-linux-'));
   const stage = join(run, 'payload');
   const name = `proceed-harness-host-${randomUUID()}`;
-  const progress = async (phase, extra = {}) =>
-    writeFile(
-      join(run, 'progress.json'),
-      JSON.stringify({ phase, elapsed: Date.now() - started, name, ...extra }, null, 2),
-    );
+  let progressState;
+  const evidenceDestination = (file) =>
+    join(run, file === 'progress.jsonl' ? 'inner-progress.jsonl' : file);
+  const progress = async (phase, extra = {}) => {
+    progressState = retainProgress(progressState, phase, extra);
+    const record = { ...progressState, elapsed: Date.now() - started, name };
+    await appendFile(join(run, 'progress.jsonl'), JSON.stringify(record) + '\n');
+    await writeFile(join(run, 'progress.json'), JSON.stringify(record, null, 2));
+  };
+  const retainDiagnostic = async (cleanup = false) => {
+    // Quarantine never becomes retained diagnostic evidence without revalidation.
+    const privatePath = join(run, 'composition-diagnostic.private');
+    try {
+      await command(
+        ['cp', `${name}:/run/proceed/evidence/composition-diagnostic.json`, privatePath],
+        3000,
+        cleanup,
+      );
+      const safe = safeCompositionDiagnostic(JSON.parse(await readFile(privatePath, 'utf8')));
+      await writeFile(join(run, 'composition-diagnostic.json'), JSON.stringify(safe));
+      return safe;
+    } finally {
+      await rm(privatePath, { force: true });
+    }
+  };
   let created = false;
   let failure;
   let cleanup = 'UNRUN';
@@ -221,18 +255,14 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
     ]);
     await progress('execution');
     const waited = await command(['wait', name], executionEnd - Date.now());
-    await progress('evidence', { containerExit: waited.stdout.trim() });
+    const observedExit = waited.stdout.trim();
+    await progress('evidence', {
+      containerExit: /^\d{1,3}$/.test(observedExit) ? observedExit : 'UNLISTED_EXIT',
+    });
     if (composition) {
       // Fixed phase/classification is not raw capture. Detailed assertion export
       // is forbidden until the complete in-container raw scan has passed.
-      await command([
-        'cp',
-        `${name}:/run/proceed/evidence/composition-diagnostic.json`,
-        join(run, 'composition-diagnostic.json'),
-      ]);
-      const diagnostic = JSON.parse(
-        await readFile(join(run, 'composition-diagnostic.json'), 'utf8'),
-      );
+      const diagnostic = await retainDiagnostic();
       assert.ok(['PASS', 'FAIL'].includes(diagnostic.status));
       assert.equal(waited.stdout.trim(), '0', 'COMPOSITION_CONTROL_FAILURE');
       assert.equal(diagnostic.status, 'PASS');
@@ -241,17 +271,15 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         `${name}:/run/proceed/evidence/scan-pass.json`,
         join(run, 'scan-pass.json'),
       ]);
-      assertDetailedTransportExport(
-        JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')),
-      );
+      assertCompositionExport(JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')));
       for (const file of ['composition-summary.json', 'progress.jsonl'])
-        await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)]);
+        await command(['cp', `${name}:/run/proceed/evidence/${file}`, evidenceDestination(file)]);
       for (const file of [
         'composition-observations.json',
         'transcript.ansi',
         'plugin-diagnostics.log',
       ])
-        await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)]);
+        await command(['cp', `${name}:/run/proceed/evidence/${file}`, evidenceDestination(file)]);
     } else if (helper) {
       // No raw child bytes or arbitrary exception strings cross this boundary.
       await command(['cp', `${name}:/run/proceed/evidence/result.json`, join(run, 'result.json')]);
@@ -290,7 +318,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           'transport-summary.json',
           'transport-cleanup.json',
         ])
-          await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)]);
+          await command(['cp', `${name}:/run/proceed/evidence/${file}`, evidenceDestination(file)]);
         const result = JSON.parse(await readFile(join(run, 'result.json'), 'utf8'));
         assert.equal(waited.stdout.trim(), '0', result.failure ?? 'embedded transport failed');
         assert.equal(result.status, 'PASS', result.failure);
@@ -309,7 +337,10 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         'server-inventory.json',
       ]) {
         try {
-          await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)], 10000);
+          await command(
+            ['cp', `${name}:/run/proceed/evidence/${file}`, evidenceDestination(file)],
+            10000,
+          );
         } catch (error) {
           if (file === 'result.json') throw error;
         }
@@ -341,7 +372,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       ]) {
         try {
           await command(
-            ['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)],
+            ['cp', `${name}:/run/proceed/evidence/${file}`, evidenceDestination(file)],
             3000,
             true,
           );
@@ -351,15 +382,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       }
     if (created && composition) {
       try {
-        await command(
-          [
-            'cp',
-            `${name}:/run/proceed/evidence/composition-diagnostic.json`,
-            join(run, 'composition-diagnostic.json'),
-          ],
-          3000,
-          true,
-        );
+        await retainDiagnostic(true);
       } catch {
         /* no raw capture fallback */
       }
@@ -370,9 +393,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           3000,
           true,
         );
-        assertDetailedTransportExport(
-          JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')),
-        );
+        assertCompositionExport(JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')));
         for (const file of [
           'composition-observations.json',
           'transcript.ansi',
@@ -380,7 +401,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           'progress.jsonl',
         ])
           await command(
-            ['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)],
+            ['cp', `${name}:/run/proceed/evidence/${file}`, evidenceDestination(file)],
             3000,
             true,
           );
@@ -433,6 +454,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           status: failure ? 'FAIL' : 'PASS',
           failure,
           cleanup,
+          containerExit: progressState?.containerExit ?? 'UNRUN',
           elapsed: Date.now() - started,
           image: linuxImage,
         },

@@ -46,9 +46,7 @@ test('composition stages its maintained runner and uses the actual public produc
     new URL('support/harness-composition-inner.mjs', import.meta.url),
     'utf8',
   );
-  assert.ok(
-    inner.indexOf('scanRequiredCaptures(captures') < inner.indexOf("'composition-summary.json'"),
-  );
+  assert.ok(/scanFrozenComposition\(\{\s*captures/.test(inner));
   assert.match(inner, /physical-helper-absence/);
   assert.match(inner, /exact-product-PluginCleanup/);
   assert.match(inner, /selected session has no pending question/);
@@ -64,18 +62,24 @@ test('composition stages its maintained runner and uses the actual public produc
   assert.match(fixture, /live = false;[\s\S]*publish\(\);[\s\S]*await cleanup\(\)/);
   assert.doesNotMatch(fixture, /keymap\.dispatch|command\.run/);
   const failureCapture = inner.slice(inner.indexOf('// Failure captures'));
+  const catchBlock = inner.slice(inner.indexOf('} catch (error) {'), inner.indexOf('} finally {'));
   assert.ok(
-    failureCapture.indexOf('scanRequiredCaptures(captures') <
-      failureCapture.indexOf("'transcript.ansi'"),
+    catchBlock.indexOf('failureSnapshot({') < catchBlock.indexOf('persistCompositionDiagnostic('),
   );
-  assert.match(failureCapture, /closed && !overflow/);
+  assert.ok(
+    catchBlock.indexOf('persistCompositionDiagnostic(') < catchBlock.indexOf('throw error'),
+  );
+  assert.ok(
+    failureCapture.indexOf('scanFrozenComposition({') < failureCapture.indexOf("'transcript.ansi'"),
+  );
+  assert.match(failureCapture, /complete = closed && remainingPids.length === 0/);
   assert.ok(
     failureCapture.indexOf('JSON.stringify(guardJournal.value())') <
-      failureCapture.indexOf('scanRequiredCaptures(captures'),
+      failureCapture.indexOf('scanFrozenComposition({'),
   );
   assert.ok(
-    failureCapture.indexOf('scanRequiredCaptures(captures') <
-      failureCapture.indexOf('guardJournal: guardJournal.value()'),
+    failureCapture.indexOf('guardJournal: guardJournal.value()') <
+      failureCapture.indexOf('scanFrozenComposition({'),
   );
   assert.match(failureCapture, /currentScreen: 'UNPROVEN'/);
   const runner = await readFile(
@@ -84,8 +88,7 @@ test('composition stages its maintained runner and uses the actual public produc
   );
   const failureExport = runner.slice(runner.indexOf('if (created && composition)'));
   assert.ok(
-    failureExport.indexOf('assertDetailedTransportExport(') <
-      failureExport.indexOf("'transcript.ansi'"),
+    failureExport.indexOf('assertCompositionExport(') < failureExport.indexOf("'transcript.ansi'"),
   );
 });
 

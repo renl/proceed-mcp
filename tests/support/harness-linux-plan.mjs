@@ -7,6 +7,7 @@ import { mkdir, readdir, copyFile, writeFile, readFile, lstat } from 'node:fs/pr
 export const qualificationSupport = Object.freeze([
   'tests/support/harness-composition-inner.mjs',
   'tests/support/harness-composition-readiness.mjs',
+  'tests/support/harness-composition-retention.mjs',
   'tests/fixtures/harness-composition/tui.ts',
   'tests/fixtures/harness-composition/broker-observer.mjs',
   'tests/support/harness-parent-inner.mjs',

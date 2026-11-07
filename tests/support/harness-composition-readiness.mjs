@@ -376,11 +376,13 @@ export function compositionErrorCode(error) {
     'HOST_EXITED',
     'CAPTURE_LIMIT',
     'READINESS_DEADLINE',
+    'PHASE_DEADLINE',
+    'CAPTURE_SCAN_REFUSED',
     'ERR_ASSERTION',
     'ENOENT',
     'EACCES',
     'ETIMEDOUT',
-  ].includes(error?.code)
-    ? error.code
+  ].includes(own(error, 'code'))
+    ? own(error, 'code')
     : 'CONTROL_ASSERTION_OR_IO';
 }
