@@ -521,6 +521,31 @@ try {
       'probe capped by actual remaining time',
     );
   });
+  await check('AUTO-STOP-POLL-WAIT-EXPIRY-NO-READ', async () => {
+    let expiry;
+    read = async () => {
+      if (reads === 2) {
+        // The first completion observation still finds this instance. Expire
+        // during its polling wait, not during the preceding protected read.
+        offset += 29000;
+        expiry = setTimeout(() => {
+          observed.expiredDuringPollWait = reads === 2;
+          offset += 2000;
+        }, 0);
+      }
+      return record;
+    };
+    try {
+      const code = await stop();
+      observed.exitCode = code;
+      observed.postExpiryReads = Math.max(0, reads - 2);
+      assert.equal(observed.expiredDuringPollWait, true, 'poll-wait expiry witnessed');
+      assert.equal(code, 3, 'expired stop must refuse');
+      assert.equal(reads, 2, 'expired polling wait cannot admit another protected read');
+    } finally {
+      clearTimeout(expiry);
+    }
+  });
   await check('AUTO-STOP-POSITIVE-CONTROL', async () => {
     read = async () => (reads === 1 ? record : { absent: true });
     assert.equal(await stop(), 0);
