@@ -123,7 +123,9 @@ try {
   await writeFile(join(directory, 'input-paths.json'), JSON.stringify(files));
   const mode = process.argv[2] ?? 'checkpoint';
   assert.ok(
-    ['checkpoint', 'platform', 'dispatcher', 'regressions', 'file-safety'].includes(mode),
+    ['checkpoint', 'platform', 'dispatcher', 'regressions', 'file-safety', 'deadline'].includes(
+      mode,
+    ),
     'explicit bounded checkpoint selection',
   );
   const args =
@@ -135,6 +137,7 @@ try {
             'tests/automatic-startup-checkpoint.mjs',
             ...(mode === 'platform' ? ['--tls-platform-only'] : []),
             ...(mode === 'file-safety' ? ['--file-safety-only'] : []),
+            ...(mode === 'deadline' ? ['--deadline-only'] : []),
           ];
   await progress(`run-${mode}`);
   const result = await docker(

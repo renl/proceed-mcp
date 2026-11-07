@@ -28,6 +28,12 @@ if (fault) {
   const open = fsp.open.bind(fsp);
   fsp.open = async (path, ...args) => {
     if (String(path) !== faultFile) return open(path, ...args);
+    if (fault === 'load-deadline' && process.argv[2] === 'serve') {
+      // A real pending credential-open phase, not a shortened product clock.
+      // The child's 150000 ms startup budget must expire before it can publish.
+      record({ event: 'credential-fault', fault, pid: process.pid });
+      await new Promise((done) => setTimeout(done, 152000));
+    }
     if (fault === 'load-substitute') {
       await fsp.rename(faultFile, `${faultFile}.original`);
       await fsp.writeFile(faultFile, 'SYNTHETIC_REPLACEMENT\n', { mode: 0o600 });
