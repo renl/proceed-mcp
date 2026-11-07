@@ -2,7 +2,7 @@
 
 ### Requirement: Trusted harness human decision authority
 
-Harness decisions MUST require an operator-configured trusted harness interaction that establishes a genuine local human response bound to the specific Proceed request. The local operator is an additional authorized decision-maker, not necessarily the paired Telegram person. Capability advertisement, ordinary response correlation and session routing metadata MUST NOT alone establish human authority. The merged [delivery baseline](../../../../specs/opencode-session-continuation/spec.md) requirements for protected storage, authenticated confidential admission on every connection, private capability and principal boundaries, truthful readiness and shared-broker lifecycle MUST remain effective.
+Harness decisions MUST require an operator-configured trusted harness interaction that establishes a genuine local human response bound to the specific Proceed request. The local operator is an additional authorized decision-maker, not necessarily the paired Telegram person. Capability advertisement, ordinary response correlation and session routing metadata MUST NOT alone establish human authority.
 
 #### Scenario: Establish trusted operator access
 
@@ -17,6 +17,16 @@ Harness decisions MUST require an operator-configured trusted harness interactio
 - **WHEN** it claims to Approve, Reject or Respond as a human
 - **THEN** no human decision authority is granted and no decision is recorded through that claim
 - **AND** no agent-facing approval-submission tool or standing grant is provided.
+
+### Requirement: Harness interaction preserves merged delivery safeguards
+
+The merged [delivery baseline](../../../../specs/opencode-session-continuation/spec.md) requirements for protected storage, authenticated confidential admission on every connection, private capability and principal boundaries, truthful readiness and shared-broker lifecycle MUST remain effective.
+
+#### Scenario: Preserve safeguards with the harness channel enabled
+
+- **GIVEN** the trusted harness channel is configured
+- **WHEN** setup, connection, request handling, status reporting or shared-broker lifecycle operations occur
+- **THEN** all merged delivery baseline safeguards remain effective without weakened protection, admission, authority boundaries, readiness reporting or lifecycle guarantees.
 
 ### Requirement: One request on two human surfaces
 
