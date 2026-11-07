@@ -149,6 +149,8 @@ export async function runLinuxHost(preflight) {
       'transcript.ansi',
       'fixture.jsonl',
       'isolation.json',
+      'staging.json',
+      'plugin-diagnostics.log',
     ]) {
       try {
         await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)], 10000);
@@ -169,6 +171,8 @@ export async function runLinuxHost(preflight) {
         'transcript.ansi',
         'fixture.jsonl',
         'isolation.json',
+        'staging.json',
+        'plugin-diagnostics.log',
       ]) {
         try {
           await command(

@@ -1,6 +1,23 @@
 // TEST ONLY. No inherited environment or downloaded SDK is staged into the host.
 import assert from 'node:assert/strict';
 import { posix } from 'node:path';
+import { join } from 'node:path';
+import { mkdir, readdir, copyFile, writeFile } from 'node:fs/promises';
+
+export async function stageLinuxFixture(env, evidence, fixture) {
+  // Assert clean roots BEFORE adding the one intentional explicit plugin/config.
+  for (const key of ['HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR'])
+    assert.deepEqual(await readdir(env[key]), [], `initial ${key} must be empty`);
+  const plugin = join(env.OPENCODE_CONFIG_DIR, 'plugins/proceed-qualification');
+  await mkdir(plugin, { recursive: true });
+  await copyFile(fixture, join(plugin, 'tui.ts'));
+  const config = join(env.OPENCODE_CONFIG_DIR, 'cli.json');
+  await writeFile(
+    config,
+    JSON.stringify({ plugins: [{ package: plugin, options: { evidence_directory: evidence } }] }),
+  );
+  return { config, plugin, entry: join(plugin, 'tui.ts'), initialEffectiveConfigEmpty: true };
+}
 
 export const linuxImage = 'sha256:a8302764b5f4896690dcba9cdbe27755f6c0f4f88db92974a029f8499f3700cb';
 export const linuxPayload = Object.freeze([

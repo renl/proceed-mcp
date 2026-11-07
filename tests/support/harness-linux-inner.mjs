@@ -1,20 +1,16 @@
 // TEST ONLY. Container-local state, real pinned TUI, actual PTY keyboard input.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import {
-  mkdir,
-  readFile,
-  writeFile,
-  appendFile,
-  readdir,
-  copyFile,
-  access,
-} from 'node:fs/promises';
+import { mkdir, readFile, writeFile, appendFile, readdir, access, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
-import { isolatedLinuxEnvironment, linuxScriptArguments } from './harness-linux-plan.mjs';
+import {
+  isolatedLinuxEnvironment,
+  linuxScriptArguments,
+  stageLinuxFixture,
+} from './harness-linux-plan.mjs';
 import { hostBudgets, dialogObserved } from './harness-host-plan.mjs';
 
 const started = Date.now();
@@ -108,16 +104,14 @@ try {
   }
   for (const name of ['home', 'data', 'config', 'cache', 'state', 'service-config', 'tmp', 'work'])
     await mkdir(join(root, name), { recursive: true });
-  const plugin = join(env.XDG_CONFIG_HOME, 'opencode/plugins/proceed-qualification');
-  await mkdir(plugin, { recursive: true });
-  await copyFile('/payload/tests/fixtures/harness-platform/tui.ts', join(plugin, 'tui.ts'));
-  const configuration = {
-    plugins: [{ package: plugin, options: { evidence_directory: evidence } }],
-  };
-  await writeFile(join(env.XDG_CONFIG_HOME, 'opencode/cli.json'), JSON.stringify(configuration));
-  assert.deepEqual(await files(env.XDG_DATA_HOME), []);
-  assert.deepEqual(await files(env.HOME), []);
-  assert.deepEqual(await files(env.OPENCODE_CONFIG_DIR), []);
+  const staging = await stageLinuxFixture(
+    env,
+    evidence,
+    '/payload/tests/fixtures/harness-platform/tui.ts',
+  );
+  const { plugin } = staging;
+  await progress('effective-config-staged');
+  await writeFile(join(evidence, 'staging.json'), JSON.stringify(staging, null, 2));
   const interfaces = networkInterfaces();
   assert.ok(
     Object.values(interfaces)
@@ -135,7 +129,9 @@ try {
         systemConfigAbsent: true,
         initialDataEmpty: true,
         initialHomeEmpty: true,
-        serviceConfigEmpty: true,
+        initialEffectiveConfigEmpty: true,
+        effectiveConfig: staging.config,
+        pluginEntry: staging.entry,
         configuredPlugins: [plugin],
         interfaces: Object.keys(interfaces),
         externalRoutes: 0,
@@ -208,6 +204,7 @@ try {
       failure = 'PTY output ceiling exceeded';
     else transcript += buffer.toString('utf8');
   });
+  await progress('await-plugin-reconciliation');
   await wait(
     'fixture-and-rendered-readiness',
     async () => {
@@ -221,6 +218,7 @@ try {
     hostBudgets.readiness,
   );
   checks.fixture = 'PASS';
+  await progress('plugin-setup-and-ready-render-observed');
   checks.rendered = 'PASS';
   for (const [id, key, outcome] of [
     [1, '\x1b', 'dismissed'],
@@ -328,6 +326,36 @@ try {
     .replace(/(Bearer|Basic) [A-Za-z0-9._~+/=-]+/g, '$1 [REDACTED]')
     .replace(/hop_[a-f0-9]{64}/g, '[REDACTED]');
   await writeFile(join(evidence, 'transcript.ansi'), sanitized.slice(0, 1048576));
+  // Selected bounded loader diagnostics only. Never export raw runtime logs/state.
+  const diagnostics = [];
+  for (const directory of [env.XDG_DATA_HOME, env.XDG_STATE_HOME, env.XDG_CACHE_HOME]) {
+    for (const path of (await files(directory).catch(() => []))
+      .filter((p) => /\.log$/.test(p))
+      .slice(0, 8)) {
+      const handle = await open(path, 'r');
+      let content;
+      try {
+        const { size } = await handle.stat();
+        const buffer = Buffer.alloc(Math.min(size, 65536));
+        await handle.read(buffer, 0, buffer.length, Math.max(0, size - buffer.length));
+        content = buffer.toString('utf8');
+      } finally {
+        await handle.close();
+      }
+      diagnostics.push(
+        ...plain(content)
+          .split('\n')
+          .filter((line) => /plugin|reconcil|error|failed/i.test(line))
+          .map((line) =>
+            line
+              .replace(/(Bearer|Basic) [A-Za-z0-9._~+/=-]+/g, '$1 [REDACTED]')
+              .replace(/hop_[a-f0-9]{64}/g, '[REDACTED]')
+              .slice(0, 2000),
+          ),
+      );
+    }
+  }
+  await writeFile(join(evidence, 'plugin-diagnostics.log'), diagnostics.slice(-40).join('\n'));
   await writeFile(
     join(evidence, 'result.json'),
     JSON.stringify(

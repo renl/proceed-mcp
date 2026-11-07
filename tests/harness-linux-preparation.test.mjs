@@ -1,13 +1,46 @@
 // TEST ONLY. Native containment-plan checks, not a real TUI qualification.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   linuxImage,
   linuxPayload,
   isolatedLinuxEnvironment,
   linuxScriptArguments,
   assertContainerPolicy,
+  stageLinuxFixture,
 } from './support/harness-linux-plan.mjs';
+
+test('LINUX-PREP stages into distinct effective config root, refuses dirty initial roots', async () => {
+  const scratch = new URL('../.scratch/harness-host/', import.meta.url);
+  await mkdir(scratch, { recursive: true });
+  const root = await mkdtemp(new URL('prep-config-', scratch));
+  try {
+    const env = Object.fromEntries(
+      ['HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR'].map((key) => [
+        key,
+        join(root, key),
+      ]),
+    );
+    for (const directory of Object.values(env)) await mkdir(directory);
+    const fixture = new URL('fixtures/harness-platform/tui.ts', import.meta.url);
+    const staged = await stageLinuxFixture(env, root, fixture);
+    const config = JSON.parse(await readFile(staged.config, 'utf8'));
+    assert.equal(staged.config, join(env.OPENCODE_CONFIG_DIR, 'cli.json'));
+    assert.equal(config.plugins[0].package, staged.plugin);
+    assert.equal(config.plugins[0].options.evidence_directory, root);
+    assert.equal(await readFile(staged.entry, 'utf8'), await readFile(fixture, 'utf8'));
+    assert.deepEqual(await readdir(env.XDG_CONFIG_HOME), []);
+    assert.equal(staged.initialEffectiveConfigEmpty, true);
+    await assert.rejects(
+      stageLinuxFixture(env, root, fixture),
+      /initial OPENCODE_CONFIG_DIR must be empty/,
+    );
+  } finally {
+    await rm(root, { recursive: true });
+  }
+});
 
 test('LINUX-PREP fresh environment contains only owned roots and no inherited authority', () => {
   const env = isolatedLinuxEnvironment('/run/proceed/owned');
