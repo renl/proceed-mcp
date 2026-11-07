@@ -70,8 +70,10 @@ function envelopeProblem(response, record) {
 
 // One readiness exchange against a stable schema-2 record. A refused connection
 // means the candidate is still starting; any established connection that cannot
-// prove the expected channel is a conflict, not a slower start.
-async function attemptReadiness(record, token, timeoutMs) {
+// prove the expected channel is a conflict, not a slower start. Caller
+// cancellation travels through the same secure exchange, so an aborted attempt
+// destroys that socket instead of waiting for the probe budget.
+async function attemptReadiness(record, token, timeoutMs, signal) {
   let response;
   try {
     response = await secureExchange({
@@ -81,6 +83,7 @@ async function attemptReadiness(record, token, timeoutMs) {
       path: '/v1/ready',
       timeoutMs,
       maxBytes: 16_384,
+      signal,
     });
   } catch (error) {
     if (error instanceof SecureChannelError && error.code === 'BROKER_UNAVAILABLE') {
@@ -168,20 +171,27 @@ export async function awaitSecureAvailability({
 } = {}) {
   const deadline = performance.now() + budgetMs;
   const remaining = () => deadline - performance.now();
-  let launched = false;
-  for (;;) {
+  // Cancellation and expiry are admission gates, not observations: neither may
+  // admit another read, probe, launch or adoption after any awaited boundary.
+  const ensureActive = () => {
     if (signal?.aborted === true) {
       throw blockedPrerequisite('the startup attempt was cancelled', 'BROKER_UNAVAILABLE');
     }
-    // Check remaining time before every phase, including the first record read:
-    // an expired attempt may not start occupancy or launch work.
     if (remaining() <= 0) throw startupTimeout();
+  };
+  let launched = false;
+  for (;;) {
+    ensureActive();
     const record = await readSecureOwnership(lockFile);
+    // A record read cannot be cancelled, so its result must not start occupancy
+    // work once the caller has cancelled or the original budget has expired.
+    ensureActive();
     if (record.absent === true) {
-      if (remaining() <= 0) throw startupTimeout();
+      ensureActive();
       const probe = await probeOccupancy(port, {
         timeoutMs: Math.min(PROBE_TIMEOUT_MS, Math.max(1, remaining())),
       });
+      ensureActive();
       if (probe === 'occupied') {
         throw startupConflict(
           'the configured port is occupied by a listener without a matching ownership record',
@@ -191,34 +201,34 @@ export async function awaitSecureAvailability({
         // Recheck absence after the probe and before launching; a race after these
         // observations is expected and the exclusive ownership record still decides.
         const again = await readSecureOwnership(lockFile);
-        const left = remaining();
-        if (left <= 0) throw startupTimeout();
+        ensureActive();
         if (again.absent === true && !launched && typeof launch === 'function') {
           launched = true;
           logger('starting the broker for this state directory');
           // The absolute instant travels to the child: process-entry and startup
           // latency are charged to this attempt, never to a fresh child budget.
-          launch({ deadlineAt: Date.now() + left });
+          launch({ deadlineAt: Date.now() + remaining() });
         }
       }
     } else if (record.schemaVersion === 1) {
       throw upgradeGuidance('the running broker uses the legacy local channel');
     } else {
-      const left = remaining();
-      if (left <= 0) throw startupTimeout();
-      const result = await attemptReadiness(record, token, Math.min(PROBE_TIMEOUT_MS, left));
+      const result = await attemptReadiness(
+        record,
+        token,
+        Math.min(PROBE_TIMEOUT_MS, Math.max(1, remaining())),
+        signal,
+      );
+      // Adoption is authority, not an observation: cancellation or expiry while
+      // readiness was pending is refused before the record is reused.
+      ensureActive();
       if (result.state === 'ready') {
-        // Adoption is authority, not an observation: a readiness response that
-        // settled at or after the attempt deadline is never reused, and the
-        // uncancellable record check above cannot authorize a later adoption.
-        if (remaining() <= 0) throw startupTimeout();
         return result.record;
       }
     }
-    const left = remaining();
-    if (left <= 0) throw startupTimeout();
+    ensureActive();
     try {
-      await delay(Math.min(PROBE_SPACING_MS, left), { signal });
+      await delay(Math.min(PROBE_SPACING_MS, remaining()), { signal });
     } catch {
       throw blockedPrerequisite('the startup attempt was cancelled', 'BROKER_UNAVAILABLE');
     }

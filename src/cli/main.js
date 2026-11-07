@@ -19,6 +19,7 @@ import {
   spawnDetachedBroker,
   startupConflict,
   startupTimeout,
+  PROBE_TIMEOUT_MS,
   STARTUP_BUDGET_MS,
   STARTUP_DEADLINE_ENV,
 } from '../broker/availability.js';
@@ -810,14 +811,37 @@ async function runStop(argv, { stdout, env }) {
   const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir'] });
   noPositionals(positionals, 'stop');
 
-  const paths = commandStatePaths(options, env);
-  const config = await loadPortableConfiguration(paths);
-  const control = await readLocalCredential(paths.controlCredentialFile, 'the control credential');
+  // Design section 6: the whole 30000 ms command budget covers prerequisites and
+  // the final success check, not just the shutdown exchange. Every phase is
+  // admitted only while real time remains, and no phase gets a fresh clamp that
+  // would hide an expired caller budget.
   const deadline = performance.now() + STOP_BUDGET_MS;
+  const remaining = () => deadline - performance.now();
+  const ensureBudget = () => {
+    if (remaining() <= 0) {
+      throw blockedPrerequisite(
+        'the broker stop was not confirmed in time; ownership is preserved (BROKER_STOP_TIMEOUT)',
+        'BROKER_STOP_TIMEOUT',
+      );
+    }
+  };
+
+  const paths = commandStatePaths(options, env);
+  ensureBudget();
+  const config = await loadPortableConfiguration(paths);
+  ensureBudget();
+  const control = await readLocalCredential(paths.controlCredentialFile, 'the control credential');
+  ensureBudget();
 
   const record = await readSecureOwnership(paths.brokerLockFile);
+  // An uncancellable read that settles after the deadline is not success and may
+  // not admit the occupancy probe.
+  ensureBudget();
   if (record.absent === true) {
-    const probe = await probeOccupancy(config.broker.port);
+    const probe = await probeOccupancy(config.broker.port, {
+      timeoutMs: Math.min(PROBE_TIMEOUT_MS, Math.max(1, remaining())),
+    });
+    ensureBudget();
     if (probe === 'refused') {
       stdout.write('No broker is running for this state directory.\n');
       return EXIT_CODE.OK;
@@ -837,12 +861,13 @@ async function runStop(argv, { stdout, env }) {
       token: control,
       method: 'GET',
       path: '/v1/ready',
-      timeoutMs: Math.min(1000, Math.max(1, deadline - performance.now())),
+      timeoutMs: Math.min(1000, Math.max(1, remaining())),
       maxBytes: 16_384,
     });
   } catch (error) {
     throw channelCliFailure(error);
   }
+  ensureBudget();
   if (readiness.status !== 200 || lifecycleEnvelopeProblem(readiness.body, record) !== null) {
     throw startupConflict(
       'the broker did not confirm matching readiness (BROKER_INSTANCE_CONFLICT)',
@@ -857,12 +882,15 @@ async function runStop(argv, { stdout, env }) {
       method: 'POST',
       path: '/v1/shutdown',
       body: { instance: record.instance },
-      timeoutMs: Math.max(1, deadline - performance.now()),
+      timeoutMs: Math.max(1, remaining()),
       maxBytes: 16_384,
     });
   } catch (error) {
     throw channelCliFailure(error);
   }
+  // Expiry while the shutdown exchange was pending refuses the result instead of
+  // treating a late 202 as an accepted stop.
+  ensureBudget();
   if (accepted.status === 409) {
     throw startupConflict(
       'the broker instance changed before stop was accepted (BROKER_INSTANCE_CONFLICT)',
@@ -883,20 +911,20 @@ async function runStop(argv, { stdout, env }) {
   // disappear and the matching listener to cease, without force-killing anything.
   for (;;) {
     const current = await readSecureOwnership(paths.brokerLockFile);
+    ensureBudget();
     if (current.absent === true) {
-      const probe = await probeOccupancy(config.broker.port);
+      const probe = await probeOccupancy(config.broker.port, {
+        timeoutMs: Math.min(PROBE_TIMEOUT_MS, Math.max(1, remaining())),
+      });
+      // An expired observation is not an idempotent success.
+      ensureBudget();
       if (probe === 'refused') {
         stdout.write('Broker stopped.\n');
         return EXIT_CODE.OK;
       }
     }
-    if (performance.now() >= deadline) {
-      throw blockedPrerequisite(
-        'the broker stop was not confirmed in time; ownership is preserved (BROKER_STOP_TIMEOUT)',
-        'BROKER_STOP_TIMEOUT',
-      );
-    }
-    await delay(100);
+    ensureBudget();
+    await delay(Math.min(100, Math.max(1, remaining())));
   }
 }
 

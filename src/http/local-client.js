@@ -175,11 +175,19 @@ function profileProblem(socket) {
 
 // One TLS-PSK connection using only the protected record key. No certificate is
 // presented or accepted, strict client validation stays on, and the callbacks
-// select the fixed public identity rather than a peer-supplied key.
-function openSecureSocket({ port, psk, timeoutMs = LOCAL_HANDSHAKE_TIMEOUT_MS }) {
+// select the fixed public identity rather than a peer-supplied key. Cancellation
+// is transport cancellation here too: an aborted attempt destroys the socket it
+// already owns rather than waiting for the handshake timer.
+function openSecureSocket({
+  port,
+  psk,
+  timeoutMs = LOCAL_HANDSHAKE_TIMEOUT_MS,
+  signal = undefined,
+}) {
   return new Promise((resolve, reject) => {
     let tcpConnected = false;
     let settled = false;
+    let timer;
     const key = Buffer.from(psk, 'hex');
     const socket = tls.connect({
       host: '127.0.0.1',
@@ -192,10 +200,12 @@ function openSecureSocket({ port, psk, timeoutMs = LOCAL_HANDSHAKE_TIMEOUT_MS })
       checkServerIdentity: () => undefined,
       pskCallback: () => ({ identity: LOCAL_CHANNEL_IDENTITY, psk: key }),
     });
+    const cancel = () => finish(unavailableChannel('the local request was cancelled'));
     const finish = (error, value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
       if (error !== null) {
         socket.destroy();
         reject(error);
@@ -203,7 +213,7 @@ function openSecureSocket({ port, psk, timeoutMs = LOCAL_HANDSHAKE_TIMEOUT_MS })
       }
       resolve(value);
     };
-    const timer = setTimeout(
+    timer = setTimeout(
       () => {
         finish(
           tcpConnected
@@ -213,6 +223,13 @@ function openSecureSocket({ port, psk, timeoutMs = LOCAL_HANDSHAKE_TIMEOUT_MS })
       },
       Math.max(1, timeoutMs),
     );
+    if (signal !== undefined && signal !== null) {
+      if (signal.aborted) {
+        cancel();
+        return;
+      }
+      signal.addEventListener('abort', cancel, { once: true });
+    }
     socket.once('connect', () => {
       tcpConnected = true;
     });
@@ -248,6 +265,23 @@ async function stableRecord(lock) {
 function exchangeDeadline(budgetMs) {
   const endsAt = performance.now() + Math.max(1, budgetMs);
   return () => endsAt - performance.now();
+}
+
+// A socket that this exchange already owns is bounded even while the caller is
+// awaiting a protected-record read that cannot itself be cancelled: expiry or
+// cancellation destroys the live transport, and the pending read's later result
+// is refused by the next budget check instead of authorizing continuation.
+function guardOwnedSocket(socket, signal, remainingTime) {
+  const abort = () => socket.destroy();
+  const timer = setTimeout(abort, Math.max(1, remainingTime()));
+  if (signal !== undefined && signal !== null) {
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+  }
+  return () => {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  };
 }
 
 function httpOverSocket({
@@ -385,8 +419,13 @@ export async function secureExchange({
   const socket = await openSecureSocket({
     port: lock.port,
     psk: lock.channel.psk,
-    timeoutMs: Math.min(LOCAL_HANDSHAKE_TIMEOUT_MS, remainingTime()),
+    timeoutMs: Math.min(LOCAL_HANDSHAKE_TIMEOUT_MS, Math.max(1, remainingTime())),
+    signal,
   });
+  // The socket is owned from here until the exchange settles: a deadline or
+  // cancellation during either protected-read window destroys it, so no later
+  // phase can reuse a transport the caller no longer permits.
+  const releaseGuard = guardOwnedSocket(socket, signal, remainingTime);
   try {
     expired();
     await stableRecord(lock);
@@ -400,10 +439,13 @@ export async function secureExchange({
       path,
       body,
       headers,
-      timeoutMs: remainingTime(),
+      timeoutMs: Math.max(1, remainingTime()),
       maxBytes,
       signal,
     });
+    // A response that settled after the deadline, or a cancellation during
+    // synchronous parsing, is refused before another read or any success return.
+    expired();
     if (path === '/v1/ready' && lock.path !== undefined) {
       await stableRecord(lock);
       // Adoption is authority, not an observation: a readiness response that
@@ -412,6 +454,7 @@ export async function secureExchange({
     }
     return response;
   } finally {
+    releaseGuard();
     socket.destroy();
   }
 }
@@ -433,6 +476,21 @@ export function createSecureLocalClient({
   }
   return {
     async request(method, path, body, extraHeaders = {}, options = {}) {
+      const signal = options?.signal;
+      // One operation budget starts before the first protected read: a slow record
+      // read is charged to the caller's original limit instead of handing the
+      // exchange a fresh timer, and an already-cancelled call touches no file.
+      const startedAt = performance.now();
+      const remainingTime = () => timeoutMs - (performance.now() - startedAt);
+      const expired = () => {
+        if (signal?.aborted === true) {
+          throw new LocalRequestError('BROKER_UNAVAILABLE', 'the local request was cancelled');
+        }
+        if (remainingTime() <= 0) {
+          throw new LocalRequestError('BROKER_UNAVAILABLE', 'the broker did not answer in time');
+        }
+      };
+      expired();
       let lock;
       try {
         lock = await readSecureOwnership(lockFile);
@@ -442,6 +500,9 @@ export function createSecureLocalClient({
           'the broker ownership record is not usable',
         );
       }
+      // The pending read cannot be cancelled, so its result does not authorize a
+      // later exchange once the caller has cancelled or the budget has expired.
+      expired();
       if (lock.absent === true) {
         throw new LocalRequestError('BROKER_UNAVAILABLE', 'the broker is not running');
       }
@@ -458,8 +519,8 @@ export function createSecureLocalClient({
         path,
         body,
         headers: extraHeaders,
-        timeoutMs,
-        signal: options?.signal,
+        timeoutMs: remainingTime(),
+        signal,
       });
     },
   };
