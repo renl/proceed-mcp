@@ -307,11 +307,20 @@ for the discovery and loading contract.
 
 ### Try one harmless approval
 
-Starting from empty state? First [install the runtime](#install), then follow
-[Set up the broker and Telegram](#set-up-the-broker-and-telegram), including
-[adding an owner](#2-add-one-owner), [pairing the private chat](#5-pair-the-private-chat), and
-[connecting your MCP client](#6-connect-an-mcp-client). Keep the foreground broker running.
-Installing the skill alone does not configure or connect the MCP server.
+Choose the setup for your runtime before trying the skill:
+
+- **Published preview.1:** [install the published preview](#install-the-published-preview-manual-broker-only)
+  and follow that section's manual setup and adapter instructions. Keep its foreground broker running.
+- **Unpublished preview.2 candidate:** follow [One-time setup for automatic startup](#one-time-setup-for-automatic-startup-unreleased-candidate)
+  using the candidate CLI, not the published npm command. For empty state, complete all six steps,
+  including [adding an owner](#2-add-one-owner), [private token provisioning](#4-provision-the-broker-only-token),
+  [pairing the private chat](#5-pair-the-private-chat), and [connecting your MCP client](#6-connect-an-mcp-client).
+  For existing state, first follow [Existing setup: stop the old broker once](#existing-setup-stop-the-old-broker-once).
+  After provisioning, the candidate runtime starts or securely reuses the broker without a separate
+  terminal. [Optional foreground mode](#optional-foreground-mode) remains available without saving a token file.
+
+Follow the linked token privacy requirements. Installing the skill alone does not configure or
+connect the MCP server or implement automatic startup.
 
 Once setup is complete, use the installed skill in a new agent session:
 
@@ -334,7 +343,7 @@ receipt naming the request_id and outcome without the request_capability.
 
 These are expected results to check, not a claim that your installation has been verified.
 Rejection, Respond instructions, pending status, expiry, cancellation, and errors are not approval.
-For additional manual outcome checks, see [First manual test](#first-manual-test).
+For additional manual outcome checks, see [Optional approval example](#optional-approval-example).
 
 ### If something is missing
 

@@ -197,14 +197,46 @@ test('README: linked supported setup and harmless active-wait first use', async 
     assert.ok(anchors.has(target.slice(1)), `broken README anchor: ${target}`);
   }
   for (const anchor of [
-    '#install',
-    '#set-up-the-broker-and-telegram',
+    '#install-the-published-preview-manual-broker-only',
+    '#one-time-setup-for-automatic-startup-unreleased-candidate',
     '#2-add-one-owner',
+    '#4-provision-the-broker-only-token',
     '#5-pair-the-private-chat',
     '#6-connect-an-mcp-client',
+    '#existing-setup-stop-the-old-broker-once',
+    '#optional-foreground-mode',
+    '#optional-approval-example',
   ]) {
     assert.ok(links.includes(anchor), `link existing setup rather than duplicate it: ${anchor}`);
+    assert.ok(anchors.has(anchor.slice(1)), `setup destination must exist: ${anchor}`);
   }
+  const firstUse = text.match(/^### Try one harmless approval\r?\n([\s\S]*?)(?=^### )/m)?.[1];
+  assert.ok(firstUse, 'README must retain the skill first-use section');
+  const manualSetup = firstUse.match(
+    /\*\*Published preview\.1:\*\*([\s\S]*?)(?=^- |^Follow )/m,
+  )?.[1];
+  const automaticSetup = firstUse.match(
+    /\*\*Unpublished preview\.2 candidate:\*\*([\s\S]*?)(?=^- |^Follow )/m,
+  )?.[1];
+  assert.ok(manualSetup, 'first use must distinguish published manual setup');
+  assert.ok(automaticSetup, 'first use must distinguish unpublished automatic setup');
+  assert.match(manualSetup, /#install-the-published-preview-manual-broker-only/);
+  assert.match(manualSetup, /manual setup/i);
+  assert.match(manualSetup, /keep.{0,40}foreground broker running/i);
+  assert.match(automaticSetup, /#one-time-setup-for-automatic-startup-unreleased-candidate/);
+  assert.match(automaticSetup, /candidate CLI, not the published npm command/i);
+  assert.match(automaticSetup, /empty state.{0,40}all six steps/is);
+  assert.match(automaticSetup, /existing state.{0,100}#existing-setup-stop-the-old-broker-once/is);
+  assert.match(
+    automaticSetup,
+    /after provisioning.{0,100}starts or securely reuses.{0,80}without a separate\s+terminal/is,
+  );
+  assert.match(automaticSetup, /#optional-foreground-mode.{0,80}without saving a token file/is);
+  assert.doesNotMatch(automaticSetup, /keep.{0,40}foreground broker running/i);
+  assert.match(
+    firstUse,
+    /Installing the skill alone does not configure or\s+connect the MCP server or implement automatic startup/i,
+  );
   for (const pattern of [
     /harmless/i,
     /Approve/,
