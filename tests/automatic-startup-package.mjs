@@ -2,7 +2,7 @@
 // Actual qualified npm resolution, no global/user configuration or downloads.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { cp, mkdir, readdir, readFile, realpath, writeFile, rm } from 'node:fs/promises';
+import { chmod, cp, mkdir, readdir, readFile, realpath, writeFile, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createHash } from 'node:crypto';
 
@@ -13,6 +13,16 @@ const baseline = new Set((await readdir('/proc')).filter((n) => /^\d+$/.test(n))
 const candidate = '/fixtures/package-candidate';
 await mkdir(candidate);
 await cp('/workspace', candidate, { recursive: true });
+// Normalize only this fresh disposable copy. Windows bind modes are not a safe
+// state ancestor. Never modify /workspace or relax the product trust checks.
+async function protectCopy(directory) {
+  await chmod(directory, 0o700);
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    assert.equal(entry.isSymbolicLink(), false, 'allowlist contains no redirected paths');
+    if (entry.isDirectory()) await protectCopy(join(directory, entry.name));
+  }
+}
+await protectCopy(candidate);
 process.chdir(candidate);
 const results = [];
 let cleanup = false;
@@ -52,6 +62,7 @@ try {
     'npm-cli.js',
     'resolve actual image npm CLI, not a guessed installation',
   );
+  assert.equal(npm, '/usr/local/lib/node_modules/npm/bin/npm-cli.js');
   const config = '/fixtures/npmrc';
   const global = '/fixtures/global-npmrc';
   await writeFile(config, 'audit=false\nfund=false\nignore-scripts=true\nupdate-notifier=false\n');
@@ -107,35 +118,37 @@ try {
     'SYNTHETIC_README_EXAMPLE\n',
   );
   results.push({ id: 'AUTO-README-BASH-SYNTAX-SYNTHETIC-ADMISSION', status: 'PASS' });
-  await writeFile(
-    '/evidence/phase.json',
-    JSON.stringify({ phase: 'pack-install-public-workflow' }),
-  );
-  await mkdir(join(candidate, '.scratch'), { recursive: true });
-  await execute(process.execPath, ['tests/release-pack.mjs'], {
-    ...env,
-    PROCEED_TEST_NPM_CLI: npm,
-    PROCEED_TEST_AUTOMATIC_PACKAGE: '1',
-    PROCEED_TEST_ARTIFACT_DIR: join(candidate, '.scratch/retained-automatic-artifact'),
-  });
-  const retained = join(candidate, '.scratch/retained-automatic-artifact');
-  const manifest = JSON.parse(await readFile(join(retained, 'artifact.json')));
-  assert.equal(manifest.cleanup, 'pass');
-  const bytes = await readFile(join(retained, manifest.filename));
-  assert.equal(createHash('sha256').update(bytes).digest('hex'), manifest.sha256);
-  // Package bytes contain only the already admitted public package allowlist.
-  // Retain exact local bytes and inventory, never raw TAP, fixtures or authority.
-  await mkdir('/evidence/artifact');
-  await cp(retained, '/evidence/artifact', { recursive: true });
-  await writeFile(
-    '/evidence/artifact/candidate.json',
-    JSON.stringify({
-      identity: 'local-unreleased-candidate-not-public-preview',
-      sha256: manifest.sha256,
-      versionDisposition: 'required-before-PR',
-    }),
-  );
-  results.push({ id: 'AUTO-INSTALLED-BYTES-PUBLIC-MCP-AUTOMATIC-RESPOND', status: 'PASS' });
+  if (!process.argv.includes('--fixture-only')) {
+    await writeFile(
+      '/evidence/phase.json',
+      JSON.stringify({ phase: 'pack-install-public-workflow' }),
+    );
+    await mkdir(join(candidate, '.scratch'), { recursive: true });
+    await execute(process.execPath, ['tests/release-pack.mjs'], {
+      ...env,
+      PROCEED_TEST_NPM_CLI: npm,
+      PROCEED_TEST_AUTOMATIC_PACKAGE: '1',
+      PROCEED_TEST_ARTIFACT_DIR: join(candidate, '.scratch/retained-automatic-artifact'),
+    });
+    const retained = join(candidate, '.scratch/retained-automatic-artifact');
+    const manifest = JSON.parse(await readFile(join(retained, 'artifact.json')));
+    assert.equal(manifest.cleanup, 'pass');
+    const bytes = await readFile(join(retained, manifest.filename));
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), manifest.sha256);
+    // Package bytes contain only the already admitted public package allowlist.
+    // Retain exact local bytes and inventory, never raw TAP, fixtures or authority.
+    await mkdir('/evidence/artifact');
+    await cp(retained, '/evidence/artifact', { recursive: true });
+    await writeFile(
+      '/evidence/artifact/candidate.json',
+      JSON.stringify({
+        identity: 'local-unreleased-candidate-not-public-preview',
+        sha256: manifest.sha256,
+        versionDisposition: 'required-before-PR',
+      }),
+    );
+    results.push({ id: 'AUTO-INSTALLED-BYTES-PUBLIC-MCP-AUTOMATIC-RESPOND', status: 'PASS' });
+  }
 } catch {
   results.push({ id: 'AUTO-PACKAGE-ADMISSION', status: 'FAIL' });
 } finally {
@@ -154,7 +167,9 @@ try {
   cleanup = (await readdir('/proc')).filter((n) => /^\d+$/.test(n)).every((n) => baseline.has(n));
   if (cleanup) await rm(candidate, { recursive: true });
   clearTimeout(timer);
-  const assertions = results.length === 3 && results.every((item) => item.status === 'PASS');
+  const assertions =
+    results.length === (process.argv.includes('--fixture-only') ? 2 : 3) &&
+    results.every((item) => item.status === 'PASS');
   console.log(
     JSON.stringify({
       assertions: assertions ? 'PASS' : 'FAIL',

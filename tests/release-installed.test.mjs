@@ -156,7 +156,7 @@ test(
         await readFile(join(dirname(dirname(executable)), 'package.json'), 'utf8'),
       );
       assert.equal(manifest.name, '@meshimize/proceed-mcp');
-      assert.equal(manifest.version, '0.1.0-preview.1');
+      assert.equal(manifest.version, '0.1.0-preview.2');
       const preload = pathToFileURL(resolve('tests/fixtures/release-observer.mjs')).href;
       const result = await managed(
         async (context) => {

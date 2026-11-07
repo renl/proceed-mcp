@@ -19,8 +19,15 @@ try {
     ['AUTO-REGRESSION-SCHEDULING', 'portable-runtime-scheduling.test.mjs'],
     ['AUTO-REGRESSION-ACTIVATION', 'portable-activation.test.mjs'],
   ];
-  const healthOnly = process.argv.includes('--health-only');
-  for (const [id, file] of healthOnly ? suites.slice(0, 1) : suites) {
+  const selection = process.argv.find((arg) => arg.startsWith('--only='))?.slice(7);
+  const pattern = process.argv.includes('--health-only')
+    ? 'SCHED-RUNTIME-FAULT'
+    : selection === 'identity'
+      ? 'SCHED-MCP-IDENTITY'
+      : selection === 'drain'
+        ? 'SCHED-RUNTIME-DRAIN'
+        : undefined;
+  for (const [id, file] of pattern ? suites.slice(0, 1) : suites) {
     current = id;
     await writeFile('/evidence/phase.json', JSON.stringify({ phase: id }));
     const child = spawn(
@@ -28,7 +35,7 @@ try {
       [
         '--test',
         '--test-reporter=tap',
-        ...(healthOnly ? ['--test-name-pattern=SCHED-RUNTIME-FAULT'] : []),
+        ...(pattern ? [`--test-name-pattern=${pattern}`] : []),
         `/workspace/tests/${file}`,
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
@@ -69,8 +76,12 @@ try {
   cleanup = residual.length === 0;
   clearTimeout(timer);
   const assertions =
-    results.length === (process.argv.includes('--health-only') ? 1 : 2) &&
-    results.every((item) => item.status === 'PASS');
+    results.length ===
+      (process.argv.includes('--health-only') ||
+      process.argv.includes('--only=identity') ||
+      process.argv.includes('--only=drain')
+        ? 1
+        : 2) && results.every((item) => item.status === 'PASS');
   console.log(
     JSON.stringify({
       assertions: assertions ? 'PASS' : 'FAIL',

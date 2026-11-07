@@ -145,16 +145,23 @@ try {
       'remaining',
       'package',
       'health',
+      'identity',
+      'drain',
+      'package-fixture',
     ].includes(mode),
     'explicit bounded checkpoint selection',
   );
   const args =
-    mode === 'package'
-      ? ['tests/automatic-startup-package.mjs']
-      : mode === 'regressions' || mode === 'health'
+    mode === 'package' || mode === 'package-fixture'
+      ? [
+          'tests/automatic-startup-package.mjs',
+          ...(mode === 'package-fixture' ? ['--fixture-only'] : []),
+        ]
+      : ['regressions', 'health', 'identity', 'drain'].includes(mode)
         ? [
             'tests/automatic-startup-regressions.mjs',
             ...(mode === 'health' ? ['--health-only'] : []),
+            ...(['identity', 'drain'].includes(mode) ? [`--only=${mode}`] : []),
           ]
         : mode === 'dispatcher'
           ? ['--test', '--test-reporter=tap', '/workspace/tests/automatic-startup-cli.test.mjs']
@@ -189,7 +196,9 @@ try {
       '--cpus=2',
       '--pids-limit=256',
       '--tmpfs',
-      mode === 'package' ? '/fixtures:rw,exec,mode=0700' : '/fixtures:rw,mode=0700',
+      mode === 'package' || mode === 'package-fixture'
+        ? '/fixtures:rw,exec,mode=0700'
+        : '/fixtures:rw,mode=0700',
       '--tmpfs',
       '/tmp:rw,mode=0700',
       '--mount',

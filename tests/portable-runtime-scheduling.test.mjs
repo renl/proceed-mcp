@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createServer, Server } from 'node:net';
+import { createServer } from 'node:net';
 import { Journal } from '../src/journal/journal.js';
 import { readJournal } from '../src/journal/framing.js';
 import { createPortableBroker } from '../src/broker/portable.js';
@@ -19,6 +19,7 @@ import { sha256Hex } from '../src/util/values.js';
 import { managed, bounded } from './support/managed-spike.mjs';
 import { freePort, completed, stopped } from './support/startup-guards.mjs';
 import { lockAt, exchange } from './support/automatic-startup.mjs';
+import { catalogPeer, initializeResult } from './support/catalog-consumer.mjs';
 const executable = resolve('bin/proceed-mcp.js');
 const preload = pathToFileURL(resolve('tests/fixtures/runtime-scheduling-preload.mjs')).href;
 const logLine = 'expiry scheduling stopped after a storage failure; stop and restart serve';
@@ -533,11 +534,10 @@ test(
   { timeout: 75000 },
   () =>
     fixture(async (h) => {
-      const originalOpen = fs.open,
-        originalClose = Server.prototype.close;
+      const originalOpen = fs.open;
       const entered = deferred(),
         release = deferred(),
-        order = [];
+        journalClosed = deferred();
       let armed = false,
         recoverySyncs = 0,
         now = h.deadline - 1,
@@ -557,8 +557,13 @@ test(
           };
           fh.close = async () => {
             if (armed) {
-              order.push('journal');
               await access(h.paths.brokerLockFile);
+              assert.equal(
+                (await h.http('/v1/ready')).status,
+                503,
+                'authenticated lifecycle remains reachable until journal drain completes',
+              );
+              journalClosed.resolve();
             }
             return close();
           };
@@ -567,21 +572,12 @@ test(
       };
       syncBuiltinESMExports();
       try {
-        const runtime = await h.runtime({ clock: () => now });
+        const runtime = await h.runtime({ clock: () => now, secure: true });
         assert.equal(
           recoverySyncs,
           2,
           'actual Journal.open and broker replay flushes reached observer while unarmed',
         );
-        const coreClose = runtime.broker.close.bind(runtime.broker);
-        runtime.broker.close = () => {
-          order.push('broker');
-          return coreClose();
-        };
-        Server.prototype.close = function (...args) {
-          if (this.address()?.port === h.config.broker.port) order.push('server');
-          return originalClose.apply(this, args);
-        };
         armed = true;
         now = h.deadline;
         await bounded(() => entered.promise, 2500, 'runtime scheduled actual Journal sync');
@@ -595,11 +591,20 @@ test(
         assert.equal(runtime.stop(), stop);
         await delay(1100);
         assert.equal(pending, true);
-        assert.deepEqual(order, []);
+        assert.equal(
+          (await h.http('/v1/ready')).status,
+          503,
+          'stop withdraws readiness without dropping authenticated lifecycle during held sync',
+        );
         await access(h.paths.brokerLockFile);
         release.resolve();
         await stop;
-        assert.deepEqual(order, ['server', 'broker', 'journal']);
+        await bounded(() => journalClosed.promise, 1000, 'actual journal close witnessed');
+        assert.equal(
+          closures(await h.bytes()).length,
+          1,
+          'scheduled expiry is durable before release',
+        );
         await assert.rejects(access(h.paths.brokerLockFile), { code: 'ENOENT' });
         assert.equal(runtime.ready, false);
         assert.equal(runtime.stop(), stop, 'same promise after settlement');
@@ -607,8 +612,37 @@ test(
         release.resolve();
         await stop;
         fs.open = originalOpen;
-        Server.prototype.close = originalClose;
         syncBuiltinESMExports();
+      }
+    }),
+);
+test(
+  'SCHED-MCP-IDENTITY: public CLI initialize serves the current package identity',
+  { timeout: 75000 },
+  () =>
+    fixture(async (h) => {
+      await h.runtime({ secure: true });
+      const adapter = h.start(['mcp', '--owner', 'a']);
+      const peer = catalogPeer(adapter.child, { secrets: [h.control, h.owner] });
+      try {
+        const init = initializeResult(
+          await peer.call('initialize', {
+            protocolVersion: '2025-11-25',
+            capabilities: {},
+            clientInfo: { name: 'candidate-identity', version: '1' },
+          }).outcome,
+        );
+        const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url)));
+        assert.equal(init.serverInfo.name, 'proceed-mcp');
+        assert.equal(
+          init.serverInfo.version,
+          manifest.version,
+          'served MCP identity must equal the candidate manifest, not the published predecessor',
+        );
+      } finally {
+        adapter.child.stdin.end();
+        assert.equal(await completed(adapter), 0);
+        peer.assertComplete();
       }
     }),
 );
