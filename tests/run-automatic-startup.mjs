@@ -144,14 +144,18 @@ try {
       'deadline',
       'remaining',
       'package',
+      'health',
     ].includes(mode),
     'explicit bounded checkpoint selection',
   );
   const args =
     mode === 'package'
       ? ['tests/automatic-startup-package.mjs']
-      : mode === 'regressions'
-        ? ['tests/automatic-startup-regressions.mjs']
+      : mode === 'regressions' || mode === 'health'
+        ? [
+            'tests/automatic-startup-regressions.mjs',
+            ...(mode === 'health' ? ['--health-only'] : []),
+          ]
         : mode === 'dispatcher'
           ? ['--test', '--test-reporter=tap', '/workspace/tests/automatic-startup-cli.test.mjs']
           : [

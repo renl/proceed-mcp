@@ -473,11 +473,24 @@ test(
         logger: (...args) => logs.push(args),
       });
       assert.equal(runtime.ready, true);
+      const healthyReady = await h.http('/v1/ready');
+      assert.equal(healthyReady.status, 200);
+      assert.equal(healthyReady.body.local_ready, true);
+      assert.deepEqual(healthyReady.body.telegram, { state: 'disabled', code: 'TOKEN_MISSING' });
       const before = await h.bytes();
       fail = true;
       await observe(() => logs.some((args) => args[0] === logLine));
       const sampled = calls;
       assert.equal(runtime.ready, false);
+      const failedReady = await h.http('/v1/ready');
+      assert.equal(failedReady.status, 503);
+      assert.equal(failedReady.body.error.code, 'STORAGE_FAILURE');
+      assert.equal(failedReady.body.error.retryable, false);
+      assert.equal(
+        (await h.http('/v1/ready', '')).status,
+        401,
+        'authenticate before storage health',
+      );
       await delay(2200);
       assert.equal(calls, sampled, 'no retry ticks');
       assert.deepEqual(logs, [[logLine]], 'one fixed line, no exception argument');

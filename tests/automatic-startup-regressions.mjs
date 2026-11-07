@@ -15,15 +15,22 @@ let cleanup = false,
   current = 'setup';
 const timer = setTimeout(() => process.exit(1), 540000);
 try {
-  for (const [id, file] of [
+  const suites = [
     ['AUTO-REGRESSION-SCHEDULING', 'portable-runtime-scheduling.test.mjs'],
     ['AUTO-REGRESSION-ACTIVATION', 'portable-activation.test.mjs'],
-  ]) {
+  ];
+  const healthOnly = process.argv.includes('--health-only');
+  for (const [id, file] of healthOnly ? suites.slice(0, 1) : suites) {
     current = id;
     await writeFile('/evidence/phase.json', JSON.stringify({ phase: id }));
     const child = spawn(
       process.execPath,
-      ['--test', '--test-reporter=tap', `/workspace/tests/${file}`],
+      [
+        '--test',
+        '--test-reporter=tap',
+        ...(healthOnly ? ['--test-name-pattern=SCHED-RUNTIME-FAULT'] : []),
+        `/workspace/tests/${file}`,
+      ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );
     let output = '',
@@ -61,7 +68,9 @@ try {
   );
   cleanup = residual.length === 0;
   clearTimeout(timer);
-  const assertions = results.length === 2 && results.every((item) => item.status === 'PASS');
+  const assertions =
+    results.length === (process.argv.includes('--health-only') ? 1 : 2) &&
+    results.every((item) => item.status === 'PASS');
   console.log(
     JSON.stringify({
       assertions: assertions ? 'PASS' : 'FAIL',

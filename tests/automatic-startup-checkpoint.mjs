@@ -494,119 +494,143 @@ try {
     await closed(setup.path, setup.config.broker.port);
   });
   if (process.argv.includes('--deadline-only')) {
-    await check('AUTO-CHILD-ABSOLUTE-STARTUP-DEADLINE', async () => {
-      const setup = await setupState('deadline-state');
-      state = setup.path;
-      const credential = join(c.directory, 'deadline-credentials/telegram.token');
-      assert.equal(
-        (
-          await c.cli(
-            ['telegram', 'provision', '--token-stdin', '--telegram-token-file', credential],
-            { state, input: `${token}\n` },
-          )
-        ).code,
-        0,
-      );
-      const { telegramFixture } = await import('./support/portable-waiting.mjs');
-      const telegram = await telegramFixture();
-      c.telegram = telegram;
-      await writeFile(join(c.directory, 'telegram-port'), new URL(telegram.address).port);
-      const start = performance.now();
-      const wallStart = Date.now();
-      const deadlineStage =
-        process.argv.find((value) => value.startsWith('--deadline-stage='))?.split('=')[1] ??
-        'credential';
-      assert.ok(
-        ['credential', 'entry', 'ownership', 'recovery', 'final-ready'].includes(deadlineStage),
-      );
-      const adapter = c.start(['mcp', '--owner', 'alice', '--telegram-token-file', credential], {
-        state,
-        moreEnv: {
-          PROCEED_TEST_CREDENTIAL_FAULT: deadlineStage === 'credential' ? 'load-deadline' : '',
-          PROCEED_TEST_CREDENTIAL_FAULT_FILE: credential,
-          PROCEED_TEST_DEADLINE_STAGE: deadlineStage,
-        },
-      });
-      const peer = rpcPeer(adapter.child);
-      await peer.handshake();
-      const operation = peer.call(
-        'tools/call',
-        { name: 'prepare_approval', arguments: {} },
-        { ms: 155000 },
-      );
-      await until(
-        async () =>
-          (await readFile(c.manifest, 'utf8'))
-            .split('\n')
-            .filter(Boolean)
-            .map(JSON.parse)
-            .some(
-              (e) =>
-                (e.event === 'credential-fault' && e.fault === 'load-deadline') ||
-                (e.event === 'deadline-phase-delay' && e.phase === deadlineStage),
-            ),
-        5000,
-        'real child reaches delayed credential open',
-      );
-      const outcome = await operation.outcome;
-      const returnedAfter = performance.now() - start;
-      adapter.child.stdin.end();
-      assert.equal((await c.finish(adapter, 10000)).code, 0);
-      peer.close();
-      // Observe the separate cleanup window. Do not kill the pre-ready child or
-      // delete its record. A late ready service is stopped publicly before RED.
-      let lateReady = false;
-      const observationEnd = start + 180000;
-      while (performance.now() < observationEnd) {
-        if (!(await absent(join(state, 'broker.lock')))) {
-          try {
-            const lock = await lockAt(state);
-            const control = (
-              await readFile(join(state, 'credentials/control.token'), 'utf8')
-            ).trim();
-            lateReady = (await exchange(lock, control)).status === 200;
-          } catch {
-            /* Partial ownership is not readiness. */
+    await check(
+      process.argv.includes('--deadline-stage=prerequisite')
+        ? 'AUTO-CALLER-PREREQUISITE-ABSOLUTE-DEADLINE'
+        : 'AUTO-CHILD-ABSOLUTE-STARTUP-DEADLINE',
+      async () => {
+        const setup = await setupState('deadline-state');
+        state = setup.path;
+        const credential = join(c.directory, 'deadline-credentials/telegram.token');
+        assert.equal(
+          (
+            await c.cli(
+              ['telegram', 'provision', '--token-stdin', '--telegram-token-file', credential],
+              { state, input: `${token}\n` },
+            )
+          ).code,
+          0,
+        );
+        const { telegramFixture } = await import('./support/portable-waiting.mjs');
+        const telegram = await telegramFixture();
+        c.telegram = telegram;
+        await writeFile(join(c.directory, 'telegram-port'), new URL(telegram.address).port);
+        const start = performance.now();
+        const wallStart = Date.now();
+        const deadlineStage =
+          process.argv.find((value) => value.startsWith('--deadline-stage='))?.split('=')[1] ??
+          'credential';
+        assert.ok(
+          ['credential', 'entry', 'ownership', 'recovery', 'final-ready', 'prerequisite'].includes(
+            deadlineStage,
+          ),
+        );
+        const prerequisite = deadlineStage === 'prerequisite';
+        const adapter = c.start(
+          [
+            ...(prerequisite ? ['pair'] : ['mcp', '--owner', 'alice']),
+            '--telegram-token-file',
+            credential,
+          ],
+          {
+            state,
+            moreEnv: {
+              PROCEED_TEST_CREDENTIAL_FAULT: deadlineStage === 'credential' ? 'load-deadline' : '',
+              PROCEED_TEST_CREDENTIAL_FAULT_FILE: credential,
+              PROCEED_TEST_DEADLINE_STAGE: deadlineStage,
+            },
+          },
+        );
+        const peer = prerequisite ? null : rpcPeer(adapter.child);
+        await peer?.handshake();
+        const operation = peer?.call(
+          'tools/call',
+          { name: 'prepare_approval', arguments: {} },
+          { ms: 155000 },
+        );
+        await until(
+          async () =>
+            (await readFile(c.manifest, 'utf8'))
+              .split('\n')
+              .filter(Boolean)
+              .map(JSON.parse)
+              .some(
+                (e) =>
+                  (e.event === 'credential-fault' && e.fault === 'load-deadline') ||
+                  (e.event === 'deadline-phase-delay' && e.phase === deadlineStage),
+              ),
+          5000,
+          'real child reaches delayed credential open',
+        );
+        const outcome = prerequisite ? await c.finish(adapter, 155000) : await operation.outcome;
+        const returnedAfter = performance.now() - start;
+        adapter.child.stdin.end();
+        if (!prerequisite) assert.equal((await c.finish(adapter, 10000)).code, 0);
+        peer?.close();
+        // Observe the separate cleanup window. Do not kill the pre-ready child or
+        // delete its record. A late ready service is stopped publicly before RED.
+        let lateReady = false;
+        const observationEnd = start + 180000;
+        while (performance.now() < observationEnd) {
+          if (!(await absent(join(state, 'broker.lock')))) {
+            try {
+              const lock = await lockAt(state);
+              const control = (
+                await readFile(join(state, 'credentials/control.token'), 'utf8')
+              ).trim();
+              lateReady = (await exchange(lock, control)).status === 200;
+            } catch {
+              /* Partial ownership is not readiness. */
+            }
+            if (lateReady) break;
           }
-          if (lateReady) break;
+          await new Promise((done) => setTimeout(done, 100));
         }
-        await new Promise((done) => setTimeout(done, 100));
-      }
-      if (lateReady) {
-        assert.equal((await c.cli(['stop'], { state })).code, 0);
-        await closed(state, setup.config.broker.port);
-        stopped = true;
-      }
-      const witnessed = (await readFile(c.manifest, 'utf8'))
-        .split('\n')
-        .filter(Boolean)
-        .map(JSON.parse);
-      const publications = witnessed.filter(
-        (e) => e.event === 'ready-publication' || e.event === 'ready-admission',
-      );
-      assert.ok(
-        publications.every((e) => e.at <= wallStart + 150000),
-        'no late public publication or admitted readiness, including a brief interval between probes',
-      );
-      assert.equal(outcome.kind, 'response', 'startup-dependent call has a bounded public result');
-      assert.equal(outcome.frame.result.isError, true);
-      const failure = outcome.frame.result.structuredContent;
-      assert.equal(failure.error.code, 'BROKER_UNAVAILABLE');
-      assert.equal(failure.error.retryable, true);
-      assert.match(failure.error.message, /startup deadline/);
-      assert.match(failure.error.message, /proceed-mcp status/);
-      assert.ok(returnedAfter <= 151500, 'public result uses the real 150000 ms budget');
-      assert.equal(
-        lateReady,
-        false,
-        'child must not publish readiness after its absolute startup deadline',
-      );
-      assert.equal(
-        await absent(join(state, 'broker.lock')),
-        true,
-        'failed child releases only its owned lock',
-      );
-    });
+        if (lateReady) {
+          assert.equal((await c.cli(['stop'], { state })).code, 0);
+          await closed(state, setup.config.broker.port);
+          stopped = true;
+        }
+        const witnessed = (await readFile(c.manifest, 'utf8'))
+          .split('\n')
+          .filter(Boolean)
+          .map(JSON.parse);
+        const publications = witnessed.filter(
+          (e) => e.event === 'ready-publication' || e.event === 'ready-admission',
+        );
+        assert.ok(
+          publications.every((e) => e.at <= wallStart + 150000),
+          'no late public publication or admitted readiness, including a brief interval between probes',
+        );
+        if (prerequisite) {
+          assert.equal(outcome.code, 3, 'public pair observes original prerequisite budget');
+          assert.match(outcome.output, /BROKER_STARTUP_TIMEOUT/);
+        } else {
+          assert.equal(
+            outcome.kind,
+            'response',
+            'startup-dependent call has a bounded public result',
+          );
+          assert.equal(outcome.frame.result.isError, true);
+          const failure = outcome.frame.result.structuredContent;
+          assert.equal(failure.error.code, 'BROKER_UNAVAILABLE');
+          assert.equal(failure.error.retryable, true);
+          assert.match(failure.error.message, /startup deadline/);
+          assert.match(failure.error.message, /proceed-mcp status/);
+        }
+        assert.ok(returnedAfter <= 151500, 'public result uses the real 150000 ms budget');
+        assert.equal(
+          lateReady,
+          false,
+          'child must not publish readiness after its absolute startup deadline',
+        );
+        assert.equal(
+          await absent(join(state, 'broker.lock')),
+          true,
+          'failed child releases only its owned lock',
+        );
+      },
+    );
     assertions = results.every((result) => result.status === 'PASS');
   } else if (process.argv.includes('--remaining-only')) {
     const { remainingCases } = await import('./automatic-startup-remaining.mjs');

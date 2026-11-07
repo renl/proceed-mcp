@@ -13,6 +13,8 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import net from 'node:net';
+import { Readable } from 'node:stream';
+import { run } from '../src/cli/main.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { awaitSecureAvailability } from '../src/broker/availability.js';
 import { rpcPeer } from './support/spike-rpc.mjs';
@@ -70,6 +72,52 @@ export async function remainingCases(h) {
     assert.equal((await c.finish(adapter.resource, 10000)).code, 0);
     adapter.peer.close();
   };
+
+  await check(
+    'AUTO-CREDENTIAL-TTY-AND-INPUT-ERROR',
+    async () => {
+      const setup = await setupState('stdin-refusals');
+      for (const tty of [true, false]) {
+        const destination = join(c.directory, `stdin-${tty}/telegram.token`);
+        const stdin = tty
+          ? {
+              isTTY: true,
+              [Symbol.asyncIterator]() {
+                throw Error('must not read terminal');
+              },
+            }
+          : Readable.from(
+              (async function* () {
+                throw Object.assign(Error('synthetic input failure'), { code: 'EIO' });
+              })(),
+            );
+        let output = '';
+        const writer = {
+          write(value) {
+            output += value;
+          },
+        };
+        assert.equal(
+          await run(
+            [
+              'telegram',
+              'provision',
+              '--token-stdin',
+              '--telegram-token-file',
+              destination,
+              '--state-dir',
+              setup.path,
+            ],
+            { stdin, env: c.env, stdout: writer, stderr: writer },
+          ),
+          2,
+        );
+        assert.equal(await absent(destination), true);
+        assert.ok(!output.includes('synthetic input failure'), 'no raw input exception');
+      }
+    },
+    independent,
+  );
 
   await check(
     'AUTO-CREDENTIAL-INCOMPLETE-STDIN',
@@ -146,6 +194,59 @@ export async function remainingCases(h) {
           );
           assert.equal((await readFile(`${file}.original`)).length, 0, 'original stays key-free');
         } else assert.equal(await absent(file), true);
+      },
+      independent,
+    );
+  }
+
+  for (const kind of ['symlink-state', 'replaceable-ancestor']) {
+    await check(
+      `AUTO-LOCK-PUBLICATION-${kind.toUpperCase()}`,
+      async () => {
+        const setup = await setupState(`publication-${kind}`);
+        const journal = await readFile(join(setup.path, 'journal.log'));
+        const offset = (await events()).length;
+        let selected = setup.path;
+        let ancestor;
+        const beforeMode = (await stat(c.directory)).mode & 0o7777;
+        try {
+          if (kind === 'symlink-state') {
+            selected = join(c.directory, 'symlink-state-alias');
+            await symlink(setup.path, selected);
+          } else {
+            ancestor = c.directory;
+            // Make this real ancestor reachable and replaceable from another UID.
+            // /fixtures is the dedicated synthetic root. Restore both modes below.
+            await chmod('/fixtures', 0o711);
+            await chmod(ancestor, 0o777);
+          }
+          const resource = c.start(['serve', '--secure-local'], { state: selected, input: '' });
+          await until(
+            async () =>
+              resource.code !== undefined ||
+              (await events()).slice(offset).some((e) => e.event === 'ready-publication'),
+            5000,
+            'secure start settles',
+          );
+          const refusedBeforeStop = resource.code === 4;
+          if (resource.code === undefined) {
+            assert.equal((await c.cli(['stop'], { state: selected })).code, 0);
+            await c.finish(resource, 30000);
+            await closed(setup.path, setup.config.broker.port);
+          }
+          assert.equal(
+            refusedBeforeStop,
+            true,
+            'trust publication refuses unsafe state ancestry before key/journal',
+          );
+          assert.ok(!(await events()).slice(offset).some((e) => e.event === 'journal-open'));
+          assert.ok((await readFile(join(setup.path, 'journal.log'))).equals(journal));
+        } finally {
+          if (ancestor) {
+            await chmod(ancestor, beforeMode);
+            await chmod('/fixtures', 0o700);
+          }
+        }
       },
       independent,
     );
@@ -282,11 +383,13 @@ export async function remainingCases(h) {
     );
   }
 
-  await check(
-    'AUTO-READY-NOT-READY-SPACING-STORAGE',
-    async () => {
-      const setup = await setupState('readiness-states');
-      for (const code of ['BROKER_NOT_READY', 'STORAGE_FAILURE']) {
+  for (const code of ['BROKER_NOT_READY', 'STORAGE_FAILURE']) {
+    await check(
+      code === 'BROKER_NOT_READY'
+        ? 'AUTO-NOT-READY-SETTLED-PROBE-SPACING'
+        : 'AUTO-READINESS-STORAGE-CLASSIFICATION',
+      async () => {
+        const setup = await setupState(`readiness-${code}`);
         const lock = await syntheticLock(setup);
         const settled = [],
           began = [];
@@ -326,10 +429,10 @@ export async function remainingCases(h) {
           await c.closeServers();
           await removeSynthetic(lock);
         }
-      }
-    },
-    independent,
-  );
+      },
+      independent,
+    );
+  }
 
   const telegram = await telegramFixture();
   c.telegram = telegram;

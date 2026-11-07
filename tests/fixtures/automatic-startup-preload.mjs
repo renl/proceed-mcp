@@ -82,6 +82,17 @@ const delayed = async (name) => {
   await new Promise((done) => setTimeout(done, 152000));
 };
 if (process.argv[2] === 'serve' && stage === 'entry') await delayed('entry');
+if (process.argv[2] === 'pair' && stage === 'prerequisite') {
+  const read = fsp.readFile.bind(fsp);
+  let once = false;
+  fsp.readFile = async (path, ...args) => {
+    if (!once && String(path).endsWith('/config.json')) {
+      once = true;
+      await delayed('prerequisite');
+    }
+    return read(path, ...args);
+  };
+}
 if (process.argv[2] === 'serve' && stage === 'final-ready') {
   const serverListen = net.Server.prototype.listen;
   net.Server.prototype.listen = function (...args) {
