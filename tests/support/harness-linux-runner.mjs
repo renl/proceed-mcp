@@ -151,6 +151,8 @@ export async function runLinuxHost(preflight) {
       'isolation.json',
       'staging.json',
       'plugin-diagnostics.log',
+      'plugin-inventory.json',
+      'server-inventory.json',
     ]) {
       try {
         await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)], 10000);
@@ -173,6 +175,8 @@ export async function runLinuxHost(preflight) {
         'isolation.json',
         'staging.json',
         'plugin-diagnostics.log',
+        'plugin-inventory.json',
+        'server-inventory.json',
       ]) {
         try {
           await command(

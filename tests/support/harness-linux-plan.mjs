@@ -25,6 +25,7 @@ export const linuxPayload = Object.freeze([
   'tests/support/harness-linux-inner.mjs',
   'tests/support/harness-linux-plan.mjs',
   'tests/support/harness-host-plan.mjs',
+  'tests/support/harness-plugin-inventory.mjs',
 ]);
 
 export function isolatedLinuxEnvironment(root) {
@@ -48,6 +49,7 @@ export function isolatedLinuxEnvironment(root) {
     OPENCODE_CONFIG_PROJECT_DISABLE: '1',
     OPENCODE_DISABLE_MODELS_FETCH: '1',
     OPENCODE_DISABLE_AUTOUPDATE: '1',
+    OPENCODE_LOG_LEVEL: 'DEBUG',
   };
 }
 

@@ -4,7 +4,29 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { pins, hostBudgets, launchBlockers } from './support/harness-host-plan.mjs';
 
-if (['--linux-preflight', '--linux-run'].includes(process.argv[2])) {
+if (process.argv[2] === '--qualification-preflight') {
+  assert.equal(process.argv.length, 3);
+  // Always NO-LAUNCH. Source presence cannot establish runtime qualification.
+  console.log(
+    JSON.stringify(
+      {
+        mode: 'QUALIFICATION-NO-LAUNCH',
+        runtime: 'UNRUN',
+        cleanup: 'NOT APPLICABLE - no resources started',
+        blocked: [
+          'Genuine production TUI entry, protected operator loading and package inclusion are not implemented',
+          'Compose synthetic broker/transport fixtures and product/adversary entries in the existing contained lifecycle after source handoff',
+          'Bind actual ordinary RPC/helper targets and programmatic command dispatch to the implemented entry, without decision test APIs',
+          'Establish a representative direct/Code Mode original-call invocation path before metadata proof, with separate model/cost permission if needed',
+          'Next actual platform/runtime execution needs coordination authorization after combined affected boundary review',
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  process.exitCode = 2;
+} else if (['--linux-preflight', '--linux-run'].includes(process.argv[2])) {
   assert.equal(process.argv.length, 3);
   const { runLinuxHost } = await import('./support/harness-linux-runner.mjs');
   await runLinuxHost(process.argv[2] === '--linux-preflight');

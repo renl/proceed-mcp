@@ -1,18 +1,38 @@
 // TEST ONLY. Actual OpenCode 2.2.5 TUI plugin, never a product dependency.
-// Host loading and rendered keyboard execution remain UNRUN until preflight gates close.
+// Original platform primitives passed at fab593f. New inventory checks remain UNRUN.
 import * as Plugin from '@opencode/plugin/tui/plugin';
-import { appendFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+import { assertServiceInventory } from '/payload/tests/support/harness-plugin-inventory.mjs';
 
 export default Plugin.define({
   id: 'proceed.qualification',
-  setup(context) {
+  async setup(context) {
     if (context.app.version !== '2.2.5') throw new Error('Pinned host version required');
     const directory = context.options.evidence_directory;
     if (typeof directory !== 'string' || !isAbsolute(directory))
       throw new Error('Run-owned evidence directory required');
     // The runner creates this directory. Do not create or default to an external path.
     const evidence = join(realpathSync(directory), 'fixture.jsonl');
+    // Real read-only service inventory. Do not equate the TUI count with the
+    // service inventory or require zero built-in plugins in either runtime.
+    const listed = await context.client.plugin.list({
+      location: context.location ?? context.data.location.default(),
+    });
+    assertServiceInventory(listed.data, {
+      plugin: '/run/proceed/state/service-config/plugins/proceed-qualification',
+    });
+    writeFileSync(
+      join(realpathSync(directory), 'server-inventory.json'),
+      JSON.stringify(
+        listed.data.map((plugin) => ({
+          id: plugin.id,
+          source: plugin.source,
+          features: plugin.features,
+          state: { status: plugin.state.status },
+        })),
+      ),
+    );
     let active = true;
     let busy = false;
     let invocation = 0;

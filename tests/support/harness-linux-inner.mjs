@@ -12,6 +12,7 @@ import {
   stageLinuxFixture,
 } from './harness-linux-plan.mjs';
 import { hostBudgets, dialogObserved } from './harness-host-plan.mjs';
+import { assertPluginInventory, assertServiceInventory } from './harness-plugin-inventory.mjs';
 
 const started = Date.now();
 const end = started + 210000;
@@ -29,6 +30,7 @@ const checks = Object.fromEntries(
     'respond',
     'credentials',
     'pluginCleanup',
+    'inventory',
   ].map((k) => [k, 'UNRUN']),
 );
 let child;
@@ -326,22 +328,40 @@ try {
     .replace(/(Bearer|Basic) [A-Za-z0-9._~+/=-]+/g, '$1 [REDACTED]')
     .replace(/hop_[a-f0-9]{64}/g, '[REDACTED]');
   await writeFile(join(evidence, 'transcript.ansi'), sanitized.slice(0, 1048576));
-  // Selected bounded loader diagnostics only. Never export raw runtime logs/state.
+  // Select from complete bounded logs, not a tail, so an additional external
+  // entry cannot disappear behind the earlier 40-line diagnostic ceiling.
   const diagnostics = [];
+  let complete = true;
+  const exitDeadline = Math.min(end, Date.now() + 5000);
+  while (child && !exited && Date.now() < exitDeadline) await delay(50);
+  if (child && !exited) complete = false;
   for (const directory of [env.XDG_DATA_HOME, env.XDG_STATE_HOME, env.XDG_CACHE_HOME]) {
-    for (const path of (await files(directory).catch(() => []))
-      .filter((p) => /\.log$/.test(p))
-      .slice(0, 8)) {
+    const found = await files(directory).catch(() => {
+      complete = false;
+      return [];
+    });
+    if (found.some((p) => /\.log[.-]/.test(p))) complete = false;
+    const logs = found.filter((p) => /\.log$/.test(p));
+    if (logs.length > 8) complete = false;
+    for (const path of logs.slice(0, 8)) {
       const handle = await open(path, 'r');
       let content;
       try {
         const { size } = await handle.stat();
-        const buffer = Buffer.alloc(Math.min(size, 65536));
-        await handle.read(buffer, 0, buffer.length, Math.max(0, size - buffer.length));
+        if (size > 1048576) complete = false;
+        const buffer = Buffer.alloc(Math.min(size, 1048576));
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        if (bytesRead !== size) complete = false;
         content = buffer.toString('utf8');
       } finally {
         await handle.close();
       }
+      if (
+        plain(content)
+          .split('\n')
+          .some((line) => /plugin|reconcil|error|failed/i.test(line) && line.length > 2000)
+      )
+        complete = false;
       diagnostics.push(
         ...plain(content)
           .split('\n')
@@ -355,7 +375,29 @@ try {
       );
     }
   }
-  await writeFile(join(evidence, 'plugin-diagnostics.log'), diagnostics.slice(-40).join('\n'));
+  if (diagnostics.length > 4096) complete = false;
+  await writeFile(join(evidence, 'plugin-diagnostics.log'), diagnostics.slice(0, 4096).join('\n'));
+  try {
+    const serverInventory = JSON.parse(
+      await readFile(join(evidence, 'server-inventory.json'), 'utf8'),
+    );
+    assertServiceInventory(serverInventory, {
+      plugin: join(env.OPENCODE_CONFIG_DIR, 'plugins/proceed-qualification'),
+    });
+    const inventory = assertPluginInventory(diagnostics.slice(0, 4096), {
+      plugin: join(env.OPENCODE_CONFIG_DIR, 'plugins/proceed-qualification'),
+      entry: join(env.OPENCODE_CONFIG_DIR, 'plugins/proceed-qualification/tui.ts'),
+      complete,
+    });
+    await writeFile(
+      join(evidence, 'plugin-inventory.json'),
+      JSON.stringify({ ...inventory, serverInventory }, null, 2),
+    );
+    checks.inventory = 'PASS';
+  } catch (error) {
+    checks.inventory = 'FAIL';
+    failure ??= error.message;
+  }
   await writeFile(
     join(evidence, 'result.json'),
     JSON.stringify(

@@ -47,7 +47,7 @@ test('LINUX-PREP fresh environment contains only owned roots and no inherited au
   assert.equal(env.PATH, '/usr/local/bin:/usr/bin:/bin');
   for (const [key, value] of Object.entries(env)) {
     if (
-      !['PATH', 'TERM', 'LANG'].includes(key) &&
+      !['PATH', 'TERM', 'LANG', 'OPENCODE_LOG_LEVEL'].includes(key) &&
       !key.startsWith('OPENCODE_DISABLE_') &&
       key !== 'OPENCODE_CONFIG_PROJECT_DISABLE'
     )
@@ -56,6 +56,7 @@ test('LINUX-PREP fresh environment contains only owned roots and no inherited au
   assert.equal(env.OPENCODE_CONFIG_PROJECT_DISABLE, '1');
   assert.equal(env.OPENCODE_DISABLE_MODELS_FETCH, '1');
   assert.equal(env.OPENCODE_DISABLE_AUTOUPDATE, '1');
+  assert.equal(env.OPENCODE_LOG_LEVEL, 'DEBUG');
   assert.notEqual(env.OPENCODE_CONFIG_DIR, env.XDG_CONFIG_HOME);
   assert.throws(() => isolatedLinuxEnvironment('/home/user'));
   assert.ok(!linuxPayload.some((path) => /node_modules|src\//.test(path)));
