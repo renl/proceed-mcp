@@ -1,5 +1,5 @@
 // TEST ONLY. Public CLI dispatch, not process, OS-protection or Telegram proof.
-// Contract: openspec/changes/add-automatic-broker-startup/design.md sections 1/5.
+// Contract: openspec/changes/archive/2026-11-07-add-automatic-broker-startup/design.md sections 1/5.
 // Delta: Automatic broker availability for normal MCP use, Required local
 // authority or state protection is unavailable, and Setup or pairing is incomplete.
 import assert from 'node:assert/strict';
