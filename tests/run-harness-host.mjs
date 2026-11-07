@@ -4,7 +4,11 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { pins, hostBudgets, launchBlockers } from './support/harness-host-plan.mjs';
 
-if (['--broker-setup-preflight', '--broker-setup-run'].includes(process.argv[2])) {
+if (['--transport-preflight', '--transport-run'].includes(process.argv[2])) {
+  assert.equal(process.argv.length, 3);
+  const { runLinuxHost } = await import('./support/harness-linux-runner.mjs');
+  await runLinuxHost(process.argv[2] === '--transport-preflight', 'transport');
+} else if (['--broker-setup-preflight', '--broker-setup-run'].includes(process.argv[2])) {
   assert.equal(process.argv.length, 3);
   const { runLinuxHost } = await import('./support/harness-linux-runner.mjs');
   await runLinuxHost(process.argv[2] === '--broker-setup-preflight', 'broker-setup');

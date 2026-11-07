@@ -9,6 +9,8 @@ export const qualificationSupport = Object.freeze([
   'tests/fixtures/harness-transport/tui.ts',
   'tests/fixtures/harness-wrapper/server.mjs',
   'tests/support/harness-runtime-transport.mjs',
+  'tests/support/harness-transport-fixtures.mjs',
+  'tests/support/harness-transport-inner.mjs',
   'tests/support/harness-wrapper-invocation.mjs',
   'tests/support/harness-transparent-capture.mjs',
   'tests/support/harness-qualification-setup.mjs',

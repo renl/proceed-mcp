@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mkdir, mkdtemp, copyFile, writeFile, readFile, lstat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { hostBudgets } from './harness-host-plan.mjs';
 import {
   linuxImage,
@@ -18,17 +18,19 @@ const execute = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
 export async function runLinuxHost(preflight, mode = 'platform') {
-  assert.ok(['platform', 'broker-setup'].includes(mode));
+  assert.ok(['platform', 'broker-setup', 'transport'].includes(mode));
   const setupOnly = mode === 'broker-setup';
-  const payload = setupOnly
-    ? qualificationPayload(
-        (
-          await execute('git', ['ls-files', '--', 'src', 'bin'], { cwd: root, timeout: 10000 })
-        ).stdout
-          .trim()
-          .split(/\r?\n/),
-      )
-    : linuxPayload;
+  const transport = mode === 'transport';
+  const payload =
+    setupOnly || transport
+      ? qualificationPayload(
+          (
+            await execute('git', ['ls-files', '--', 'src', 'bin'], { cwd: root, timeout: 10000 })
+          ).stdout
+            .trim()
+            .split(/\r?\n/),
+        )
+      : linuxPayload;
   const started = Date.now();
   const end = started + hostBudgets.aggregate;
   const executionEnd = end - hostBudgets.teardownReserve;
@@ -55,6 +57,17 @@ export async function runLinuxHost(preflight, mode = 'platform') {
   assert.equal(image.Os, 'linux');
   assert.equal(image.Architecture, 'amd64');
   for (const path of payload) assert.ok((await lstat(join(root, path))).isFile());
+  if (transport) {
+    // Owner README/status overlays are excluded. Every staged input must be clean.
+    await execute('git', ['diff', '--quiet', 'HEAD', '--', ...payload], {
+      cwd: root,
+      timeout: 10000,
+    });
+    const tracked = (
+      await execute('git', ['ls-files'], { cwd: root, timeout: 10000 })
+    ).stdout.split(/\r?\n/);
+    for (const path of payload) assert.ok(tracked.includes(path), `uncommitted payload: ${path}`);
+  }
   await execute('git', ['check-ignore', '.scratch/harness-host/run-owned'], {
     cwd: root,
     timeout: 10000,
@@ -91,7 +104,16 @@ export async function runLinuxHost(preflight, mode = 'platform') {
       await mkdir(dirname(destination), { recursive: true });
       await copyFile(join(root, path), destination);
     }
-    if (setupOnly) await writeFile(join(stage, 'input-paths.json'), JSON.stringify(payload));
+    if (setupOnly || transport)
+      await writeFile(join(stage, 'input-paths.json'), JSON.stringify(payload));
+    const integrity = [];
+    for (const path of payload) {
+      const source = await readFile(join(root, path));
+      const staged = await readFile(join(stage, path));
+      assert.ok(source.equals(staged), `staged input differs: ${path}`);
+      integrity.push({ path, sha256: createHash('sha256').update(staged).digest('hex') });
+    }
+    await writeFile(join(run, 'input-integrity.json'), JSON.stringify(integrity, null, 2));
     const candidate = (
       await execute('git', ['rev-parse', 'HEAD'], { cwd: root, timeout: 10000 })
     ).stdout.trim();
@@ -102,7 +124,7 @@ export async function runLinuxHost(preflight, mode = 'platform') {
           candidate,
           image: linuxImage,
           payload,
-          command: `node tests/run-harness-host.mjs ${setupOnly ? '--broker-setup-run' : '--linux-run'}`,
+          command: `node tests/run-harness-host.mjs ${transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
         },
         null,
         2,
@@ -126,9 +148,11 @@ export async function runLinuxHost(preflight, mode = 'platform') {
       '--signal=KILL',
       '250',
       'node',
-      setupOnly
-        ? '/payload/tests/support/harness-setup-inner.mjs'
-        : '/payload/tests/support/harness-linux-inner.mjs',
+      transport
+        ? '/payload/tests/support/harness-transport-inner.mjs'
+        : setupOnly
+          ? '/payload/tests/support/harness-setup-inner.mjs'
+          : '/payload/tests/support/harness-linux-inner.mjs',
     ]);
     created = true;
     const policy = JSON.parse((await command(['inspect', name])).stdout)[0];
@@ -161,31 +185,51 @@ export async function runLinuxHost(preflight, mode = 'platform') {
     await progress('execution');
     const waited = await command(['wait', name], executionEnd - Date.now());
     await progress('evidence', { containerExit: waited.stdout.trim() });
-    // Only these synthetic/sanitized files may cross the container boundary.
-    for (const file of [
-      'result.json',
-      'progress.jsonl',
-      'transcript.ansi',
-      'fixture.jsonl',
-      'isolation.json',
-      'staging.json',
-      'plugin-diagnostics.log',
-      'plugin-inventory.json',
-      'server-inventory.json',
-    ]) {
-      try {
-        await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)], 10000);
-      } catch (error) {
-        if (file === 'result.json') throw error;
+    if (transport) {
+      // Mandatory scan marker must exist and pass BEFORE any detailed export.
+      await command([
+        'cp',
+        `${name}:/run/proceed/evidence/scan-pass.json`,
+        join(run, 'scan-pass.json'),
+      ]);
+      assert.equal(JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')).status, 'PASS');
+      for (const file of [
+        'result.json',
+        'progress.jsonl',
+        'transport-summary.json',
+        'transport-cleanup.json',
+      ])
+        await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)]);
+      const result = JSON.parse(await readFile(join(run, 'result.json'), 'utf8'));
+      assert.equal(waited.stdout.trim(), '0', result.failure ?? 'embedded transport failed');
+      assert.equal(result.status, 'PASS', result.failure);
+    } else {
+      // Only these synthetic/sanitized files may cross the container boundary.
+      for (const file of [
+        'result.json',
+        'progress.jsonl',
+        'transcript.ansi',
+        'fixture.jsonl',
+        'isolation.json',
+        'staging.json',
+        'plugin-diagnostics.log',
+        'plugin-inventory.json',
+        'server-inventory.json',
+      ]) {
+        try {
+          await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)], 10000);
+        } catch (error) {
+          if (file === 'result.json') throw error;
+        }
       }
+      const result = JSON.parse(await readFile(join(run, 'result.json'), 'utf8'));
+      assert.equal(waited.stdout.trim(), '0', result.failure ?? 'container failed');
+      assert.equal(result.status, 'PASS', result.failure);
     }
-    const result = JSON.parse(await readFile(join(run, 'result.json'), 'utf8'));
-    assert.equal(waited.stdout.trim(), '0', result.failure ?? 'container failed');
-    assert.equal(result.status, 'PASS', result.failure);
   } catch (error) {
     failure = error.message;
     // Failure evidence is copied before owned namespace destruction, never raw host logs.
-    if (created)
+    if (created && !transport)
       for (const file of [
         'result.json',
         'progress.jsonl',
@@ -207,6 +251,21 @@ export async function runLinuxHost(preflight, mode = 'platform') {
           /* absent means UNRUN */
         }
       }
+    if (created && transport) {
+      // Only fixed summary/progress can leave after an absent/failed raw scan.
+      // Do not export runtime assertions, logs, transcript or fixture payloads.
+      for (const file of ['result.json', 'progress.jsonl']) {
+        try {
+          await command(
+            ['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)],
+            3000,
+            true,
+          );
+        } catch {
+          /* no detailed capture export on failure */
+        }
+      }
+    }
   } finally {
     await progress('teardown');
     if (created) {
