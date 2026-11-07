@@ -65,3 +65,88 @@ export function forbiddenExchangeVectors() {
     ['custom-headers', { ...base, headers: { Authorization: 'not-authority' } }],
   ];
 }
+
+// Syntactically valid synthetic authority isolates closed-operation validation
+// from credential validation. It is not an enrolled key or production secret.
+export const syntheticOperator = `hop_${'a7'.repeat(32)}`;
+export function closedExchangeVectors(lockFile = '/never/read/broker.lock') {
+  const base = {
+    schema_version: 1,
+    type: 'exchange',
+    exchange_id: exchangeId,
+    port: 1,
+    lock_file: lockFile,
+    operator_credential: syntheticOperator,
+    operation: 'pending',
+    presentation_id: null,
+    body: { harness_id: 'qualification', owner_id: 'shared', session_id: 'transport-session' },
+  };
+  return [
+    ...['ready', 'start', 'stop', '/v1/ready', 'https://example.invalid/'].map((operation) => [
+      `authorized-closed-${operation}`,
+      { ...base, operation },
+    ]),
+    ...[
+      'url',
+      'method',
+      'headers',
+      'proxy',
+      'operator_key_file',
+      'owner_token',
+      'control_token',
+    ].map((key) => [`authorized-extra-${key}`, { ...base, [key]: 'forbidden' }]),
+    ['authorized-extra-body', { ...base, body: { ...base.body, choice: 'approve' } }],
+    ['authorized-wrong-presentation', { ...base, presentation_id: 'hpr_' + 'b'.repeat(32) }],
+  ];
+}
+
+export function ready(version = '24.22.2') {
+  return {
+    schema_version: 1,
+    type: 'ready',
+    exchange_id: exchangeId,
+    runtime: 'node',
+    node_version: version,
+  };
+}
+
+// Child-to-parent adversarial bytes. A composition driver must send them via
+// the actual private output pipe, not call a production parser directly.
+export function invalidChildVectors() {
+  const valid = ready();
+  const prefix = Buffer.alloc(4);
+  prefix.writeUInt32BE(81921);
+  return [
+    ['child-zero-length', Buffer.alloc(4)],
+    ['child-oversized-length', prefix],
+    ['child-partial-prefix', Buffer.from([0, 0])],
+    ['child-partial-body', frame(valid).subarray(0, 12)],
+    ['child-invalid-utf8', Buffer.from([0, 0, 0, 1, 0xff])],
+    ['child-bom', frame('\ufeff' + JSON.stringify(valid))],
+    ['child-invalid-json', frame('{')],
+    [
+      'child-duplicate-key',
+      frame(JSON.stringify(valid).replace('"runtime":"node"', '"runtime":"bun","runtime":"node"')),
+    ],
+    ['child-bun', frame({ ...valid, runtime: 'bun' })],
+    ['child-old-node', frame(ready('23.9.0'))],
+    ['child-invalid-version', frame(ready('24.22.2-injected'))],
+    ['child-version-too-long', frame(ready('2'.repeat(33)))],
+    ['child-extra-field', frame({ ...valid, diagnostic: syntheticOperator })],
+    ['child-wrong-id', frame({ ...valid, exchange_id: 'f'.repeat(32) })],
+    ['child-wrong-version', frame({ ...valid, schema_version: 2 })],
+    [
+      'child-response-before-ready',
+      frame({
+        schema_version: 1,
+        type: 'response',
+        exchange_id: exchangeId,
+        status: 200,
+        body: { schema_version: 1, presentation: null },
+      }),
+    ],
+    ['child-extra-ready', Buffer.concat([frame(valid), frame(valid)])],
+    ['child-trailing-byte', Buffer.concat([frame(valid), Buffer.from([0])])],
+    ['child-direction-limit', Buffer.alloc(98305, 0x20)],
+  ];
+}

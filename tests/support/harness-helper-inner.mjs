@@ -10,6 +10,7 @@ import {
   exchangeId,
   invalidHelloVectors,
   forbiddenExchangeVectors,
+  closedExchangeVectors,
 } from './harness-helper-vectors.mjs';
 
 assert.equal(process.platform, 'linux');
@@ -171,6 +172,7 @@ try {
   await exercise('partial-body-eof', frame(hello()).subarray(0, 12), false, true);
   await exercise('parent-pipe-eof', undefined, true, true);
   for (const [id, value] of forbiddenExchangeVectors()) await exercise(id, frame(value), true);
+  for (const [id, value] of closedExchangeVectors()) await exercise(id, frame(value), true);
 } catch {
   failed = true;
 }
