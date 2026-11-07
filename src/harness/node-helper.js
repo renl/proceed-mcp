@@ -556,6 +556,11 @@ export async function runHelperExchange({
     if (tripwire) throw channelError('HELPER_PROTOCOL_INVALID');
     assertActive();
     if (exit.code !== 0 || exit.signal !== null) throw channelError('HELPER_PROTOCOL_INVALID');
+    // Exactly one reply frame from a stream that then ended. An extra frame,
+    // trailing partial frame, late protocol failure or unobserved closure is a
+    // refused exchange rather than an accepted response.
+    const residual = channel.admissionProblem();
+    if (residual !== null) throw channelError(residual);
     outcome = { status: reply.frame.status, body: reply.frame.body };
   } catch (error) {
     failure = toChannelError(error);

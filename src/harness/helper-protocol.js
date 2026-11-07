@@ -228,6 +228,16 @@ export function createFrameChannel(stream) {
     get ended() {
       return ended;
     },
+    // Success admission after a caller consumed its one frame. A queued extra
+    // frame, a partial trailing frame or a late protocol failure means the stream
+    // carried more than the contract allows, and an open stream means closure was
+    // never observed. Each case fails closed instead of being ignored.
+    admissionProblem() {
+      if (failure !== null) return failure;
+      if (queue.length > 0 || reader.pendingBytes > 0) return 'HELPER_PROTOCOL_INVALID';
+      if (!ended) return 'HELPER_PROTOCOL_INVALID';
+      return null;
+    },
   };
 }
 
