@@ -2,13 +2,57 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { win32 } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   pins,
   isolatedWindowsEnvironment,
   scriptArguments,
   dialogObserved,
   interactionPlan,
+  hostBudgets,
+  launchBlockers,
 } from './support/harness-host-plan.mjs';
+
+test('HOST-PREP launch remains blocked before resources exist', () => {
+  assert.deepEqual(
+    launchBlockers.map((gate) => gate.check),
+    ['owned-process-containment', 'external-egress-isolation'],
+  );
+  assert.ok(launchBlockers.every((gate) => gate.status === 'BLOCKED' && gate.reason));
+  const result = spawnSync(process.execPath, ['tests/run-harness-host.mjs', '--preflight'], {
+    cwd: new URL('../', import.meta.url),
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 2, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.mode, 'NO-LAUNCH');
+  assert.equal(report.runtime, 'UNRUN');
+  assert.equal(report.cleanup, 'NOT APPLICABLE - no resources started');
+  assert.deepEqual(report.launchBlockers, launchBlockers);
+  assert.ok(report.checks.every((check) => check.status === 'PASS'));
+  // Unknown/live modes must fail before staging too, never silently fall back.
+  const live = spawnSync(process.execPath, ['tests/run-harness-host.mjs', '--run'], {
+    cwd: new URL('../', import.meta.url),
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  assert.ifError(live.error);
+  assert.notEqual(live.status, 0);
+  assert.match(live.stderr, /Only --preflight is implemented/);
+});
+
+test('HOST-PREP proposed deadlines leave teardown reachable, not runtime proof', () => {
+  const { aggregate, teardownReserve, readiness, interaction, outer } = hostBudgets;
+  assert.equal(aggregate, 300000);
+  assert.equal(teardownReserve, 45000);
+  assert.equal(readiness, 60000);
+  assert.equal(interaction, 15000);
+  assert.equal(outer, 310000);
+  assert.ok(readiness + interactionPlan.length * interaction < aggregate - teardownReserve);
+  assert.ok(aggregate < outer);
+});
 
 test('HOST-PREP isolation redirects import-time roots and drops inherited authority', () => {
   const root = 'C:\\project\\.scratch\\harness-host\\run-owned';

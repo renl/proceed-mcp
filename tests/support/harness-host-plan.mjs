@@ -10,6 +10,31 @@ export const pins = Object.freeze({
   source: '9bbb8ce18c80f099e0e448775f59d965ead40a21',
 });
 
+export const hostBudgets = Object.freeze({
+  aggregate: 300000,
+  teardownReserve: 45000,
+  readiness: 60000,
+  interaction: 15000,
+  outer: 310000,
+});
+
+// Fail closed before staging or spawn. These are missing mechanisms, not permissions
+// to install an adapter, alter a firewall or accept source flags as network proof.
+export const launchBlockers = Object.freeze([
+  {
+    check: 'owned-process-containment',
+    status: 'BLOCKED',
+    reason:
+      'MSYS script exposes PTY I/O, not a Windows descendant ownership boundary. EOF and root exit do not guarantee private serve child exit. No race-free owned PID registry, termination and absence mechanism is established.',
+  },
+  {
+    check: 'external-egress-isolation',
+    status: 'BLOCKED',
+    reason:
+      'The candidate has no process-scoped egress enforcement or descendant-attributed network observation. Disabled model fetch and updater flags do not block other host traffic. No firewall or network adapter change is authorized.',
+  },
+]);
+
 export function isolatedWindowsEnvironment(root, parent, toolPath) {
   assert.ok(win32.isAbsolute(root), 'absolute run root required');
   assert.ok(toolPath, 'explicit tool PATH required');

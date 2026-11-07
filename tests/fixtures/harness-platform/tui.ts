@@ -1,6 +1,6 @@
 // TEST ONLY. Actual OpenCode 2.2.5 TUI plugin, never a product dependency.
 // Host loading and rendered keyboard execution remain UNRUN until preflight gates close.
-import { Plugin } from '@opencode/plugin/tui';
+import * as Plugin from '@opencode/plugin/tui/plugin';
 import { appendFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
