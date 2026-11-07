@@ -7,12 +7,28 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { hostBudgets } from './harness-host-plan.mjs';
-import { linuxImage, linuxPayload, assertContainerPolicy } from './harness-linux-plan.mjs';
+import {
+  linuxImage,
+  linuxPayload,
+  qualificationPayload,
+  assertContainerPolicy,
+} from './harness-linux-plan.mjs';
 
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
-export async function runLinuxHost(preflight) {
+export async function runLinuxHost(preflight, mode = 'platform') {
+  assert.ok(['platform', 'broker-setup'].includes(mode));
+  const setupOnly = mode === 'broker-setup';
+  const payload = setupOnly
+    ? qualificationPayload(
+        (
+          await execute('git', ['ls-files', '--', 'src', 'bin'], { cwd: root, timeout: 10000 })
+        ).stdout
+          .trim()
+          .split(/\r?\n/),
+      )
+    : linuxPayload;
   const started = Date.now();
   const end = started + hostBudgets.aggregate;
   const executionEnd = end - hostBudgets.teardownReserve;
@@ -38,7 +54,7 @@ export async function runLinuxHost(preflight) {
   assert.equal(image.Id, linuxImage);
   assert.equal(image.Os, 'linux');
   assert.equal(image.Architecture, 'amd64');
-  for (const path of linuxPayload) assert.ok((await lstat(join(root, path))).isFile());
+  for (const path of payload) assert.ok((await lstat(join(root, path))).isFile());
   await execute('git', ['check-ignore', '.scratch/harness-host/run-owned'], {
     cwd: root,
     timeout: 10000,
@@ -49,7 +65,7 @@ export async function runLinuxHost(preflight) {
         mode: 'LINUX-NO-LAUNCH',
         image: linuxImage,
         checks: 'PASS',
-        payload: linuxPayload,
+        payload,
         budgets: hostBudgets,
       }),
     );
@@ -70,11 +86,12 @@ export async function runLinuxHost(preflight) {
   let cleanup = 'UNRUN';
   try {
     await progress('stage');
-    for (const path of linuxPayload) {
+    for (const path of payload) {
       const destination = join(stage, path);
       await mkdir(dirname(destination), { recursive: true });
       await copyFile(join(root, path), destination);
     }
+    if (setupOnly) await writeFile(join(stage, 'input-paths.json'), JSON.stringify(payload));
     const candidate = (
       await execute('git', ['rev-parse', 'HEAD'], { cwd: root, timeout: 10000 })
     ).stdout.trim();
@@ -84,8 +101,8 @@ export async function runLinuxHost(preflight) {
         {
           candidate,
           image: linuxImage,
-          payload: linuxPayload,
-          command: 'node tests/run-harness-host.mjs --linux-run',
+          payload,
+          command: `node tests/run-harness-host.mjs ${setupOnly ? '--broker-setup-run' : '--linux-run'}`,
         },
         null,
         2,
@@ -109,7 +126,9 @@ export async function runLinuxHost(preflight) {
       '--signal=KILL',
       '250',
       'node',
-      '/payload/tests/support/harness-linux-inner.mjs',
+      setupOnly
+        ? '/payload/tests/support/harness-setup-inner.mjs'
+        : '/payload/tests/support/harness-linux-inner.mjs',
     ]);
     created = true;
     const policy = JSON.parse((await command(['inspect', name])).stdout)[0];

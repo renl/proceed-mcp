@@ -174,7 +174,13 @@ export function success(outcome) {
 
 export async function portable(
   work,
-  { pair = true, strictProtocol = false, controlledClock = false, journalFaults = false } = {},
+  {
+    pair = true,
+    strictProtocol = false,
+    controlledClock = false,
+    journalFaults = false,
+    connectAdapter = true,
+  } = {},
 ) {
   await mkdir(resolve('.scratch/c3-activation'), { recursive: true });
   const fixture = await telegramFixture();
@@ -382,7 +388,9 @@ export async function portable(
                 },
               };
             };
-            const shared = await connect('shared');
+            // Qualification owns its sole adapter through the actual host. Setup
+            // must not silently start an unrelated MCP connection.
+            const shared = connectAdapter ? await connect('shared') : null;
             const restart = async ({ whileStopped, beforeReadiness } = {}) => {
               for (const { peer, resource } of connections) {
                 peer.close?.();

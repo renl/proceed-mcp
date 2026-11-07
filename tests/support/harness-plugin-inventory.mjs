@@ -21,7 +21,10 @@ export const builtinOrigins = Object.freeze([
   'packages/tui/src/feature-plugins/system/diff-viewer.tsx',
 ]);
 
-export function assertServiceInventory(items, { plugin }) {
+export function assertServiceInventory(items, { plugin, entries, complete = true }) {
+  assert.equal(complete, true, 'incomplete service inventory');
+  const expected = entries ?? [{ plugin, features: { tui: true, server: false, rpc: false } }];
+  const seen = new Set();
   assert.ok(Array.isArray(items));
   for (const item of items) {
     if (item.source.type === 'builtin') continue;
@@ -29,12 +32,15 @@ export function assertServiceInventory(items, { plugin }) {
     // entry even though it executes no server component. This is not an extra
     // user plugin. Retain and verify its actual origin/features, do not hide it.
     assert.equal(item.source.type, 'local', 'unexpected additional service plugin source');
-    assert.equal(item.source.path, plugin, 'unexpected additional service plugin origin');
-    assert.equal(item.features.tui, true);
-    assert.notEqual(item.features.server, true);
-    assert.notEqual(item.features.rpc, true);
+    const match = expected.find((e) => e.plugin === item.source.path);
+    assert.ok(match, 'unexpected additional service plugin origin');
+    assert.equal(seen.has(item.source.path), false, 'duplicate service origin');
+    seen.add(item.source.path);
+    for (const feature of ['tui', 'server', 'rpc'])
+      assert.equal(item.features[feature] === true, match.features[feature] === true);
     assert.equal(item.state.status, 'active');
   }
+  for (const e of expected) assert.ok(seen.has(e.plugin), 'missing expected service origin');
 }
 
 function field(line, name) {
@@ -46,7 +52,10 @@ function field(line, name) {
 // Caller must supply the complete bounded CLI plugin diagnostic selection from
 // startup, not a tail. The pinned context.tsx emits each external read/load/prepare
 // at DEBUG. Built-ins enter desired directly, before external target resolution.
-export function assertPluginInventory(lines, { plugin, entry, complete }) {
+export function assertPluginInventory(lines, { plugin, entry, entries, complete }) {
+  const expected = entries ?? [{ plugin, entry }];
+  assert.ok(expected.length > 0);
+  assert.equal(new Set(expected.map((e) => e.plugin)).size, expected.length);
   assert.equal(complete, true, 'truncated/missing logs cannot prove exclusive inventory');
   assert.ok(Array.isArray(lines) && lines.length <= 4096);
   const cli = lines.filter(
@@ -65,17 +74,27 @@ export function assertPluginInventory(lines, { plugin, entry, complete }) {
     const stage = field(line, 'stage');
     const target = field(line, 'target');
     assert.equal(stage, 'read', 'only the staged local external plugin may be loaded');
-    assert.equal(target, plugin, 'unexpected additional external target');
+    const match = expected.find((e) => e.plugin === target);
+    assert.ok(match, 'unexpected additional external target');
     const entrypoint = field(line, 'entrypoint');
-    assert.equal(entrypoint, entry, 'unexpected external entry origin');
+    assert.equal(entrypoint, match.entry, 'unexpected external entry origin');
     return { stage, target, entrypoint };
   });
+  for (const e of expected)
+    assert.ok(
+      origins.some((o) => o.target === e.plugin && o.entrypoint === e.entry),
+      'missing runtime external-entry origin',
+    );
   const counts = cli
     .filter((line) => line.includes('plugin reconciliation completed'))
     .map((line) => Number(field(line, 'plugins')));
   assert.ok(counts.length > 0, 'no completed reconciliation');
   for (const count of counts)
-    assert.equal(count, builtinOrigins.length + 1, 'unexpected desired plugin inventory');
+    assert.equal(
+      count,
+      builtinOrigins.length + expected.length,
+      'unexpected desired plugin inventory',
+    );
   return {
     source: hostSource,
     loader: sourceURL('packages/tui/src/plugin/context.tsx'),
@@ -83,6 +102,7 @@ export function assertPluginInventory(lines, { plugin, entry, complete }) {
     builtinOrigins,
     externalOrigins: origins,
     reconciliationCounts: counts,
-    scope: 'Pinned built-ins plus exactly the staged external entry. Not a built-in safety audit.',
+    scope:
+      'Observed external read origins plus source-expected built-ins. Not a runtime built-in enumeration or safety audit.',
   };
 }
