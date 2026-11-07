@@ -5,8 +5,10 @@
 //
 // One monotonic 10000 ms budget starts before resolution or spawn and covers
 // handshake, handoff, TLS/HTTP work, response admission and owned cleanup. The
-// child never learns a key path, and the parent never falls back to Bun, a shell,
-// `fork`, the current directory or an inherited environment.
+// final 1000 ms is reserved for cleanup, so active work stops before it and no
+// transition, wait or escalation ever renews the remaining time. The child never
+// learns a key path, and the parent never falls back to Bun, a shell, `fork`, the
+// current directory or an inherited environment.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { lstat, open, realpath } from 'node:fs/promises';
@@ -29,6 +31,11 @@ import { exchangeProblem } from './helper-operations.js';
 export const HELPER_OUTPUT_LIMIT_BYTES = 4096;
 export const HELPER_TERMINATION_GRACE_MS = 500;
 export const HELPER_CLEANUP_LIMIT_MS = 1000;
+// Implementation-owned scheduling headroom, not a contract tolerance: every
+// deadline-bound request is issued strictly before its exact bound so timer,
+// syscall and event-loop latency cannot turn an in-bound request into an
+// overrun. Exhausted time never becomes a fresh positive wait.
+const HELPER_SCHEDULING_HEADROOM_MS = 100;
 
 // Fixed nonsecret text selected by code. No raw runtime message, stack, path,
 // cause or authority value ever reaches the UI.
@@ -245,19 +252,25 @@ function writeFrame(stream, value) {
 function takeWithin(channel, milliseconds, signal, active) {
   return new Promise((done) => {
     let settled = false;
+    let timer = null;
     const finish = (value) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer !== null) clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
       done(value);
     };
     const onAbort = () => finish({ cancelled: true });
-    const timer = setTimeout(() => finish({ timeout: true }), Math.max(1, milliseconds));
     if (signal?.aborted === true) {
       finish({ cancelled: true });
       return;
     }
+    // An exhausted bound is a deadline outcome, never a fresh short wait.
+    if (!(milliseconds > 0)) {
+      finish({ timeout: true });
+      return;
+    }
+    timer = setTimeout(() => finish({ timeout: true }), milliseconds);
     signal?.addEventListener('abort', onAbort, { once: true });
     channel.take().then((outcome) => finish(active() ? outcome : { cancelled: true }));
   });
@@ -265,8 +278,10 @@ function takeWithin(channel, milliseconds, signal, active) {
 
 function waitForClose(promise, state, milliseconds) {
   if (state.done) return Promise.resolve(state);
+  // An exhausted bound is not a fresh positive wait.
+  if (!(milliseconds > 0)) return Promise.resolve(null);
   return new Promise((done) => {
-    const timer = setTimeout(() => done(null), Math.max(1, milliseconds));
+    const timer = setTimeout(() => done(null), milliseconds);
     promise.then((value) => {
       clearTimeout(timer);
       done(value);
@@ -274,8 +289,10 @@ function waitForClose(promise, state, milliseconds) {
   });
 }
 
-// Close the owned pipes, request termination immediately and escalate once. A
-// successful kill request is not exit proof: only the observed close event is.
+// Close the owned pipes, request termination immediately and escalate once. Every
+// wait here is measured against the absolute deadlines fixed below, never against
+// an initial limit minus a nominal duration. A successful kill request is not exit
+// proof: only the observed close event is.
 async function cleanupChild(
   child,
   { inbound, outbound, closePromise, close, endsAt, spawnFailure },
@@ -300,7 +317,13 @@ async function cleanupChild(
   }
   // No process exists after a spawn failure, so there is nothing to confirm.
   if (spawnFailure !== null) return true;
-  const limit = Math.min(HELPER_CLEANUP_LIMIT_MS, Math.max(1, endsAt - performance.now()));
+  // Fence/cleanup start. Exit and closure must be observed by the earlier of this
+  // instant plus the cleanup limit and the original exchange deadline.
+  const cleanupStartedAt = performance.now();
+  const cleanupEndsAt = Math.min(cleanupStartedAt + HELPER_CLEANUP_LIMIT_MS, endsAt);
+  // Forced termination is requested with headroom inside the grace bound so a
+  // late-scheduled request still lands inside the exact maximum.
+  const forceBy = Math.min(cleanupStartedAt + HELPER_TERMINATION_GRACE_MS, cleanupEndsAt);
   if (!close.done) {
     try {
       child.kill();
@@ -308,15 +331,24 @@ async function cleanupChild(
       // A refused termination request is followed by the escalation below.
     }
   }
-  const graceful = Math.min(HELPER_TERMINATION_GRACE_MS, limit);
-  let state = await waitForClose(closePromise, close, graceful);
+  if (close.done) return true;
+  let state = await waitForClose(
+    closePromise,
+    close,
+    forceBy - performance.now() - HELPER_SCHEDULING_HEADROOM_MS,
+  );
   if (state === null) {
     try {
       child.kill('SIGKILL');
     } catch {
       // Forced termination is the last step; absence is still verified below.
     }
-    state = await waitForClose(closePromise, close, Math.max(1, limit - graceful));
+    // Actual time left after the request, not the limit minus the nominal wait.
+    state = await waitForClose(
+      closePromise,
+      close,
+      cleanupEndsAt - performance.now() - HELPER_SCHEDULING_HEADROOM_MS,
+    );
   }
   return state !== null;
 }
@@ -339,12 +371,22 @@ export async function runHelperExchange({
   const budget = Math.min(MAX_EXCHANGE_BUDGET_MS, Math.max(1, Math.trunc(budgetMs) || 0));
   // One parent monotonic budget and one absolute deadline, both fixed at entry.
   const endsAt = performance.now() + budget;
+  // The final cleanup limit is reserved from entry, so no exchange phase can
+  // consume it. Active work stops before that reserve is reached.
+  const activeWorkEndsAt = endsAt - HELPER_CLEANUP_LIMIT_MS;
   const deadlineUnixMs = Date.now() + budget;
   const remaining = () => endsAt - performance.now();
+  const activeWorkRemaining = () =>
+    activeWorkEndsAt - performance.now() - HELPER_SCHEDULING_HEADROOM_MS;
   const active = () => isActive() && signal?.aborted !== true;
   const assertActive = () => {
     if (!active()) throw channelError('EXCHANGE_CANCELLED');
     if (remaining() <= 0) throw channelError('EXCHANGE_DEADLINE');
+  };
+  // No next phase begins while the reserved cleanup limit is the only time left.
+  const assertWorkable = () => {
+    assertActive();
+    if (activeWorkRemaining() <= 0) throw channelError('EXCHANGE_DEADLINE');
   };
 
   // The parent validates the exact frame it is about to send, so a malformed
@@ -367,12 +409,12 @@ export async function runHelperExchange({
   );
   if (frameProblem !== null) throw channelError('HELPER_PROTOCOL_INVALID');
 
-  assertActive();
+  assertWorkable();
   const runtime = await resolveNodeRuntime({ platform, env, cwd });
-  assertActive();
+  assertWorkable();
   const helper = await fileIdentity(packagedHelperEntry());
   if (helper === null) throw channelError('HELPER_PROTOCOL_INVALID');
-  assertActive();
+  assertWorkable();
   // Recheck both identities before spawn: a replacement in the resolution window
   // is a different executable, not the one that was admitted.
   if (!sameIdentity(runtime, await executableIdentity(runtime.path, platform))) {
@@ -381,7 +423,7 @@ export async function runHelperExchange({
   if (!sameIdentity(helper, await fileIdentity(helper.path))) {
     throw channelError('HELPER_PROTOCOL_INVALID');
   }
-  assertActive();
+  assertWorkable();
 
   let child;
   try {
@@ -453,7 +495,7 @@ export async function runHelperExchange({
   let failure = null;
   try {
     if (inbound === null || channel === null) throw channelError('HELPER_PROTOCOL_INVALID');
-    assertActive();
+    assertWorkable();
     writeFrame(inbound, {
       schema_version: PROTOCOL_SCHEMA_VERSION,
       type: 'hello',
@@ -462,8 +504,8 @@ export async function runHelperExchange({
       deadline_unix_ms: deadlineUnixMs,
     });
 
-    const ready = await takeWithin(channel, remaining(), signal, active);
-    assertActive();
+    const ready = await takeWithin(channel, activeWorkRemaining(), signal, active);
+    assertWorkable();
     if (spawnFailure !== null) throw channelError('NODE_UNAVAILABLE');
     if (pipeFailure || tripwire) throw channelError('HELPER_PROTOCOL_INVALID');
     if (ready.timeout === true) throw channelError('EXCHANGE_DEADLINE');
@@ -475,7 +517,7 @@ export async function runHelperExchange({
     }
 
     // Authority handoff happens once, and only after a genuine Node `ready`.
-    assertActive();
+    assertWorkable();
     writeFrame(inbound, {
       schema_version: PROTOCOL_SCHEMA_VERSION,
       type: 'exchange',
@@ -489,7 +531,7 @@ export async function runHelperExchange({
     });
     submitted = true;
 
-    const reply = await takeWithin(channel, remaining(), signal, active);
+    const reply = await takeWithin(channel, activeWorkRemaining(), signal, active);
     if (spawnFailure !== null) throw channelError('NODE_UNAVAILABLE');
     if (pipeFailure || tripwire) throw channelError('HELPER_PROTOCOL_INVALID');
     if (reply.timeout === true) throw channelError('EXCHANGE_DEADLINE');
@@ -509,7 +551,7 @@ export async function runHelperExchange({
     // A response is usable only after its own frame, a clean exit and pipe
     // closure are admitted inside the original deadline for a still-active
     // interaction. A late completion never authorizes the next phase.
-    const exit = await waitForClose(closePromise, close, remaining());
+    const exit = await waitForClose(closePromise, close, activeWorkRemaining());
     if (exit === null) throw channelError('EXCHANGE_DEADLINE');
     if (tripwire) throw channelError('HELPER_PROTOCOL_INVALID');
     assertActive();
