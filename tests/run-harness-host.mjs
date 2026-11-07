@@ -4,7 +4,22 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { pins, hostBudgets, launchBlockers } from './support/harness-host-plan.mjs';
 
-if (
+if (['--helper-contract-preflight', '--helper-contract-run'].includes(process.argv[2])) {
+  assert.ok(process.argv.length === 3 || process.argv.length === 4);
+  if (process.argv[3] === undefined) {
+    console.error(
+      'HELPER_ENTRY_REQUIRED: supply the packaged helper selected by implementation. No launch.',
+    );
+    process.exitCode = 1;
+  } else {
+    const { runLinuxHost } = await import('./support/harness-linux-runner.mjs');
+    await runLinuxHost(
+      process.argv[2] === '--helper-contract-preflight',
+      'helper-contract',
+      process.argv[3],
+    );
+  }
+} else if (
   ['--transport-first-exchange-preflight', '--transport-first-exchange-run'].includes(
     process.argv[2],
   )

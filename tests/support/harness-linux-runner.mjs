@@ -21,13 +21,31 @@ import {
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
-export async function runLinuxHost(preflight, mode = 'platform') {
-  assert.ok(['platform', 'broker-setup', 'transport', 'transport-first-exchange'].includes(mode));
+export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
+  assert.ok(
+    [
+      'platform',
+      'broker-setup',
+      'transport',
+      'transport-first-exchange',
+      'helper-contract',
+    ].includes(mode),
+  );
+  const helper = mode === 'helper-contract';
+  if (helper) {
+    assert.equal(
+      typeof helperEntry,
+      'string',
+      'HELPER_ENTRY_REQUIRED - implementation has not selected a packaged helper',
+    );
+    assert.match(helperEntry, /^src\/[a-zA-Z0-9_/-]+\.js$/);
+    assert.ok((await lstat(join(root, helperEntry))).isFile());
+  }
   const setupOnly = mode === 'broker-setup';
   const firstOnly = mode === 'transport-first-exchange';
   const transport = mode === 'transport' || firstOnly;
   const payload =
-    setupOnly || transport
+    setupOnly || transport || helper
       ? qualificationPayload(
           (
             await execute('git', ['ls-files', '--', 'src', 'bin'], { cwd: root, timeout: 10000 })
@@ -36,6 +54,7 @@ export async function runLinuxHost(preflight, mode = 'platform') {
             .split(/\r?\n/),
         )
       : linuxPayload;
+  if (helper) assert.ok(payload.includes(helperEntry), 'helper must be a tracked payload source');
   const started = Date.now();
   const end = started + hostBudgets.aggregate;
   const executionEnd = end - hostBudgets.teardownReserve;
@@ -62,7 +81,7 @@ export async function runLinuxHost(preflight, mode = 'platform') {
   assert.equal(image.Os, 'linux');
   assert.equal(image.Architecture, 'amd64');
   for (const path of payload) assert.ok((await lstat(join(root, path))).isFile());
-  if (transport) {
+  if (transport || helper) {
     // Owner README/status overlays are excluded. Every staged input must be clean.
     await execute('git', ['diff', '--quiet', 'HEAD', '--', ...payload], {
       cwd: root,
@@ -109,7 +128,7 @@ export async function runLinuxHost(preflight, mode = 'platform') {
       await mkdir(dirname(destination), { recursive: true });
       await copyFile(join(root, path), destination);
     }
-    if (setupOnly || transport)
+    if (setupOnly || transport || helper)
       await writeFile(join(stage, 'input-paths.json'), JSON.stringify(payload));
     const integrity = [];
     for (const path of payload) {
@@ -129,7 +148,7 @@ export async function runLinuxHost(preflight, mode = 'platform') {
           candidate,
           image: linuxImage,
           payload,
-          command: `node tests/run-harness-host.mjs ${firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
+          command: `node tests/run-harness-host.mjs ${helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
         },
         null,
         2,
@@ -153,12 +172,15 @@ export async function runLinuxHost(preflight, mode = 'platform') {
       '--signal=KILL',
       '250',
       'node',
-      transport
-        ? '/payload/tests/support/harness-transport-inner.mjs'
-        : setupOnly
-          ? '/payload/tests/support/harness-setup-inner.mjs'
-          : '/payload/tests/support/harness-linux-inner.mjs',
+      helper
+        ? '/payload/tests/support/harness-helper-inner.mjs'
+        : transport
+          ? '/payload/tests/support/harness-transport-inner.mjs'
+          : setupOnly
+            ? '/payload/tests/support/harness-setup-inner.mjs'
+            : '/payload/tests/support/harness-linux-inner.mjs',
       ...(firstOnly ? ['--first-exchange-only'] : []),
+      ...(helper ? ['/payload/' + helperEntry] : []),
     ]);
     created = true;
     const policy = JSON.parse((await command(['inspect', name])).stdout)[0];
@@ -191,7 +213,14 @@ export async function runLinuxHost(preflight, mode = 'platform') {
     await progress('execution');
     const waited = await command(['wait', name], executionEnd - Date.now());
     await progress('evidence', { containerExit: waited.stdout.trim() });
-    if (transport) {
+    if (helper) {
+      // No raw child bytes or arbitrary exception strings cross this boundary.
+      await command(['cp', `${name}:/run/proceed/evidence/result.json`, join(run, 'result.json')]);
+      const result = JSON.parse(await readFile(join(run, 'result.json'), 'utf8'));
+      assert.equal(waited.stdout.trim(), '0', 'HELPER_CONTRACT_FAILURE');
+      assert.equal(result.status, 'PASS');
+      assert.equal(result.cleanup, 'PASS');
+    } else if (transport) {
       // This one allowlisted diagnostic has its own in-container secret floor.
       // Nothing from the raw capture set is copied in diagnostic-only mode.
       await command([
@@ -251,9 +280,13 @@ export async function runLinuxHost(preflight, mode = 'platform') {
       assert.equal(result.status, 'PASS', result.failure);
     }
   } catch (error) {
-    failure = transport ? 'W3_EXPORT_OR_CONTROL_FAILURE' : error.message;
+    failure = helper
+      ? 'HELPER_CONTRACT_FAILURE'
+      : transport
+        ? 'W3_EXPORT_OR_CONTROL_FAILURE'
+        : error.message;
     // Failure evidence is copied before owned namespace destruction, never raw host logs.
-    if (created && !transport)
+    if (created && !transport && !helper)
       for (const file of [
         'result.json',
         'progress.jsonl',
@@ -309,7 +342,8 @@ export async function runLinuxHost(preflight, mode = 'platform') {
         }
         cleanup = 'PASS - exact container absent, private PID namespace destroyed';
       } catch (error) {
-        cleanup = transport ? 'FAIL - exact owned container cleanup' : `FAIL - ${error.message}`;
+        cleanup =
+          transport || helper ? 'FAIL - exact owned container cleanup' : `FAIL - ${error.message}`;
         failure ??= cleanup;
       }
     } else cleanup = 'NOT APPLICABLE - container not created';
