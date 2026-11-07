@@ -9,7 +9,7 @@
 // `fork`, the current directory or an inherited environment.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { lstat, realpath } from 'node:fs/promises';
+import { lstat, open, realpath } from 'node:fs/promises';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
@@ -117,7 +117,14 @@ async function fileIdentity(candidate) {
     return null;
   }
   if (!info.isFile()) return null;
-  return { path: real, size: info.size, mtimeMs: info.mtimeMs, dev: info.dev, ino: info.ino };
+  return {
+    path: real,
+    size: info.size,
+    mtimeMs: info.mtimeMs,
+    dev: info.dev,
+    ino: info.ino,
+    mode: info.mode,
+  };
 }
 
 // An identity is stable when the same real file is still the same object, so a
@@ -130,6 +137,78 @@ function sameIdentity(left, right) {
   if (left.ino !== 0 && right.ino !== 0 && left.ino !== right.ino) return false;
   if (left.dev !== 0 && right.dev !== 0 && left.dev !== right.dev) return false;
   return true;
+}
+
+// A runtime candidate must be a native executable image, decided from a bounded
+// header read rather than by running it: a shell/batch wrapper or text shim can
+// invoke any other program, so a searched basename or regular-file stat is not
+// executable trust, and a later self-reported ready frame can never grant it.
+const EXECUTABLE_HEADER_BYTES = 4096;
+const EXECUTABLE_BITS = 0o111;
+
+function nativeImageKind(header) {
+  if (header.length < 4) return null;
+  if (header[0] === 0x7f && header[1] === 0x45 && header[2] === 0x4c && header[3] === 0x46) {
+    return 'elf';
+  }
+  // Thin Mach-O 32/64-bit and universal images, in either byte order.
+  if (header[0] === 0xfe && header[1] === 0xed && header[2] === 0xfa) return 'macho';
+  if (header[0] === 0xcf && header[1] === 0xfa && header[2] === 0xed && header[3] === 0xfe) {
+    return 'macho';
+  }
+  if (header[0] === 0xca && header[1] === 0xfe && header[2] === 0xba) return 'macho';
+  if (header[0] === 0xbe && header[1] === 0xba && header[2] === 0xfe && header[3] === 0xca) {
+    return 'macho';
+  }
+  // PE: `MZ` plus the signature at the offset recorded in the DOS header.
+  if (header.length >= 0x40 && header[0] === 0x4d && header[1] === 0x5a) {
+    const offset = header.readUInt32LE(0x3c);
+    if (
+      offset >= 0x40 &&
+      offset + 4 <= header.length &&
+      header[offset] === 0x50 &&
+      header[offset + 1] === 0x45 &&
+      header[offset + 2] === 0x00 &&
+      header[offset + 3] === 0x00
+    ) {
+      return 'pe';
+    }
+  }
+  return null;
+}
+
+async function headerBytes(path, size) {
+  const length = Math.min(EXECUTABLE_HEADER_BYTES, size);
+  if (length < 4) return null;
+  const handle = await open(path, 'r');
+  try {
+    const header = Buffer.alloc(length);
+    let read = 0;
+    while (read < length) {
+      const { bytesRead } = await handle.read(header, read, length - read, read);
+      if (bytesRead === 0) break;
+      read += bytesRead;
+    }
+    return header.subarray(0, read);
+  } finally {
+    await handle.close();
+  }
+}
+
+// The one identity used for the resolved runtime: a real file, executable by
+// mode on POSIX, whose header is a native image. Anything else is an unusable
+// candidate, so the search continues without ever executing it.
+async function executableIdentity(candidate, platform) {
+  const identity = await fileIdentity(candidate);
+  if (identity === null) return null;
+  if (platform !== 'win32' && (identity.mode & EXECUTABLE_BITS) === 0) return null;
+  let header;
+  try {
+    header = await headerBytes(identity.path, identity.size);
+  } catch {
+    return null;
+  }
+  return header !== null && nativeImageKind(header) !== null ? identity : null;
 }
 
 // Resolve `node` (`node.exe` on Windows) from the trusted operator-provisioned
@@ -147,7 +226,7 @@ export async function resolveNodeRuntime({
     // decide which executable runs, so they are never candidates.
     if (entry === '' || !isAbsolute(entry)) continue;
     if (samePath(entry, cwd, platform)) continue;
-    const identity = await fileIdentity(join(entry, name));
+    const identity = await executableIdentity(join(entry, name), platform);
     if (identity !== null) return identity;
   }
   throw channelError('NODE_UNAVAILABLE');
@@ -296,7 +375,7 @@ export async function runHelperExchange({
   assertActive();
   // Recheck both identities before spawn: a replacement in the resolution window
   // is a different executable, not the one that was admitted.
-  if (!sameIdentity(runtime, await fileIdentity(runtime.path))) {
+  if (!sameIdentity(runtime, await executableIdentity(runtime.path, platform))) {
     throw channelError('NODE_UNAVAILABLE');
   }
   if (!sameIdentity(helper, await fileIdentity(helper.path))) {
@@ -449,9 +528,11 @@ export async function runHelperExchange({
     spawnFailure,
   });
   if (!cleaned) {
-    // Unconfirmed owned cleanup is uncertainty, never an accepted approval.
+    // Unconfirmed owned cleanup is uncertainty, never an accepted approval. The
+    // handoff already observed is retained so a caller refreshes retained broker
+    // status instead of reporting a local pre-submission failure or replaying.
     onUnconfirmedCleanup();
-    throw channelError('HELPER_PROTOCOL_INVALID');
+    throw channelError('HELPER_PROTOCOL_INVALID', submitted);
   }
   if (failure !== null) {
     failure.submitted = submitted;
