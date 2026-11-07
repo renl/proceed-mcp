@@ -18,6 +18,7 @@ import {
   spawnDetachedBroker,
   startupConflict,
 } from '../broker/availability.js';
+import { lifecycleEnvelopeProblem } from '../broker/lifecycle-envelope.js';
 import {
   createSecureLocalClient,
   secureExchange,
@@ -154,48 +155,71 @@ async function secureRecordOrThrow(lockFile) {
   return record;
 }
 
-const LIFECYCLE_KEYS = [
-  'instance',
-  'lifecycle_version',
-  'local_ready',
-  'paired',
-  'pid',
-  'port',
-  'schema_version',
-  'service',
-  'telegram',
-];
+// Broker-dependent work waits for the one shared availability attempt; a failed
+// attempt becomes the documented tool-level prerequisite rather than an approval
+// or a fabricated outcome. Only fixed classifications and actionable command
+// templates are published: raw exception, child, TLS or path text is never
+// forwarded, so a legacy or unsupported listener still names the safe restart.
+const AVAILABILITY_TOOL_FAILURES = new Map([
+  [
+    'BROKER_INSTANCE_CONFLICT',
+    {
+      code: 'BROKER_UNAVAILABLE',
+      message:
+        'the local broker uses an unsupported local channel; stop it through its own Ctrl+C or operator interface, then restart it with "proceed-mcp serve --secure-local" or provision the automatic-startup token file',
+    },
+  ],
+  [
+    'TELEGRAM_CREDENTIAL_UNAVAILABLE',
+    {
+      code: 'BROKER_UNAVAILABLE',
+      message:
+        'the automatic-startup Telegram credential is missing or unusable; run "proceed-mcp telegram provision --token-stdin" or select the correct safe file',
+    },
+  ],
+  [
+    'PROTECTION_UNVERIFIED',
+    {
+      code: 'STORAGE_FAILURE',
+      message:
+        'protected broker storage could not be verified; select dedicated protected storage or repair it explicitly outside startup',
+    },
+  ],
+  [
+    'STATE_NOT_OWNED',
+    {
+      code: 'BROKER_UNAVAILABLE',
+      message:
+        'broker state ownership is uncertain; preserve the state directory and investigate ownership before a new attempt',
+    },
+  ],
+  [
+    'BROKER_STARTUP_TIMEOUT',
+    {
+      code: 'BROKER_UNAVAILABLE',
+      message:
+        'the broker did not become ready within the startup deadline; inspect "proceed-mcp status" before a new attempt',
+    },
+  ],
+]);
+const AVAILABILITY_TOOL_FALLBACK = {
+  code: 'BROKER_UNAVAILABLE',
+  message:
+    'the local broker could not be provided automatically; inspect "proceed-mcp status" and the setup instructions',
+};
 
-function lifecycleMismatch(body, record) {
-  if (body === null || typeof body !== 'object' || Array.isArray(body)) return true;
-  const keys = Object.keys(body).sort();
-  if (keys.length !== LIFECYCLE_KEYS.length) return true;
-  if (keys.some((key, index) => key !== LIFECYCLE_KEYS[index])) return true;
-  return (
-    body.schema_version !== 1 ||
-    body.service !== 'proceed-mcp' ||
-    body.lifecycle_version !== 1 ||
-    body.local_ready !== true ||
-    body.instance !== record.instance ||
-    body.port !== record.port ||
-    !Number.isInteger(body.pid) ||
-    body.pid <= 0
-  );
+function availabilityToolFailure(error) {
+  return AVAILABILITY_TOOL_FAILURES.get(error?.code) ?? AVAILABILITY_TOOL_FALLBACK;
 }
 
-// Broker-dependent work waits for the one shared availability attempt; a failed
-// attempt becomes the documented tool-level unavailable prerequisite rather than
-// an approval or a fabricated outcome.
 function gateClient(client, availability) {
   return {
     async request(...args) {
       try {
         await availability;
-      } catch {
-        throw new LocalRequestError(
-          'BROKER_UNAVAILABLE',
-          'the local broker could not be started automatically',
-        );
+      } catch (error) {
+        const failure = availabilityToolFailure(error);
+        throw new LocalRequestError(failure.code, failure.message);
       }
       return client.request(...args);
     },
@@ -457,17 +481,43 @@ async function runTelegramCommand(argv, context) {
   return runProvision(rest, context);
 }
 
+// Launch the installed broker entry point from this same package using the
+// current runtime executable and the selected nonsecret credential path. The
+// child is the only process that reads that file; automatic startup never selects
+// it from an inherited environment token.
+function launchAutomaticBroker({ paths, credentialFile }) {
+  spawnDetachedBroker({
+    executable: packageEntryPoint(),
+    args: ['serve', '--telegram-token-file', credentialFile, '--state-dir', paths.stateDir],
+    cwd: PACKAGE_ROOT,
+  });
+}
+
 async function runPair(argv, { stdout, env }) {
   const { positionals, options } = parseArguments(argv, {
     valueOptions: ['state-dir', TOKEN_FILE_OPTION],
   });
   noPositionals(positionals, 'pair');
 
-  tokenFileFrom(options, env);
+  const { file } = tokenFileFrom(options, env);
   const paths = commandStatePaths(options, env);
   const config = await loadPortableConfiguration(paths);
   const control = await readLocalCredential(paths.controlCredentialFile, 'the control credential');
-  const record = await secureRecordOrThrow(paths.brokerLockFile);
+
+  // Design sections 1 and 3: pairing ensures the same shared broker availability
+  // before the control-authenticated challenge, so an initial pairing needs no
+  // manual broker terminal. A secure foreground broker is reused without a token
+  // file, and a launch candidate still races on the exclusive ownership record.
+  const record = await awaitSecureAvailability({
+    lockFile: paths.brokerLockFile,
+    port: config.broker.port,
+    token: control,
+    launch: () =>
+      launchAutomaticBroker({
+        paths,
+        credentialFile: file ?? defaultCredentialFile({ stateDir: paths.stateDir }),
+      }),
+  });
 
   let response;
   try {
@@ -531,12 +581,7 @@ async function runMcp(argv, { env }) {
     port: config.broker.port,
     token: credential,
     signal: controller.signal,
-    launch: () =>
-      spawnDetachedBroker({
-        executable: packageEntryPoint(),
-        args: ['serve', '--telegram-token-file', credentialFile, '--state-dir', paths.stateDir],
-        cwd: PACKAGE_ROOT,
-      }),
+    launch: () => launchAutomaticBroker({ paths, credentialFile }),
   });
   // A failed attempt is reported through broker-dependent calls, never as a
   // process crash during initialization.
@@ -782,7 +827,7 @@ async function runStop(argv, { stdout, env }) {
   } catch (error) {
     throw channelCliFailure(error);
   }
-  if (readiness.status !== 200 || lifecycleMismatch(readiness.body, record)) {
+  if (readiness.status !== 200 || lifecycleEnvelopeProblem(readiness.body, record) !== null) {
     throw startupConflict(
       'the broker did not confirm matching readiness (BROKER_INSTANCE_CONFLICT)',
     );

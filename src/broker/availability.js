@@ -13,21 +13,11 @@ import { blockedPrerequisite } from '../errors.js';
 import { SecureChannelError, secureExchange } from '../http/local-client.js';
 import { readSecureOwnership } from '../state/ownership.js';
 import { TELEGRAM_TOKEN_ENV } from '../config/portable-config.js';
+import { lifecycleEnvelopeProblem } from './lifecycle-envelope.js';
 
 export const STARTUP_BUDGET_MS = 150_000;
 export const PROBE_TIMEOUT_MS = 1_000;
 export const PROBE_SPACING_MS = 100;
-const LIFECYCLE_FIELDS = [
-  'instance',
-  'lifecycle_version',
-  'local_ready',
-  'paired',
-  'pid',
-  'port',
-  'schema_version',
-  'service',
-  'telegram',
-];
 
 export function startupConflict(message) {
   return blockedPrerequisite(`${message} (BROKER_INSTANCE_CONFLICT)`, 'BROKER_INSTANCE_CONFLICT');
@@ -70,23 +60,7 @@ export function probeOccupancy(port, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
 
 function envelopeProblem(response, record) {
   if (response.status !== 200) return null;
-  const body = response.body;
-  if (body === null || typeof body !== 'object' || Array.isArray(body)) return 'malformed';
-  const keys = Object.keys(body).sort();
-  if (
-    keys.length !== LIFECYCLE_FIELDS.length ||
-    keys.some((key, i) => key !== LIFECYCLE_FIELDS[i])
-  ) {
-    return 'malformed';
-  }
-  if (body.schema_version !== 1 || body.service !== 'proceed-mcp' || body.lifecycle_version !== 1) {
-    return 'malformed';
-  }
-  if (body.local_ready !== true) return 'malformed';
-  if (body.instance !== record.instance || body.port !== record.port) return 'mismatch';
-  if (!Number.isInteger(body.pid) || body.pid <= 0) return 'mismatch';
-  if (body.telegram === null || typeof body.telegram !== 'object') return 'malformed';
-  return null;
+  return lifecycleEnvelopeProblem(response.body, record);
 }
 
 // One readiness exchange against a stable schema-2 record. A refused connection
