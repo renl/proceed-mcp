@@ -11,9 +11,15 @@ import {
   compositionCurrentFrame,
   compositionActivation,
   compositionAdmission,
+  compositionSnapshot,
+  compositionCanRequestFresh,
+  awaitCompositionKeyAdmission,
+  compositionGuardJournal,
   observeCompositionSelectors,
   openTitle,
 } from './support/harness-composition-readiness.mjs';
+import { scanRequiredCaptures } from './support/harness-transport-fixtures.mjs';
+import { assertDetailedTransportExport } from './support/harness-runtime-transport.mjs';
 
 const readyFrame = `2.2.5\nAsk anything\n┃  ${productReadyText}  ┃`;
 
@@ -47,8 +53,13 @@ test('composition stages its maintained runner and uses the actual public produc
   assert.match(inner, /exact-product-PluginCleanup/);
   assert.match(inner, /selected session has no pending question/);
   assert.ok(
-    inner.indexOf('await awaitCompositionRender(') < inner.indexOf("child.stdin.write('\\x07')"),
+    inner.indexOf('await awaitCompositionKeyAdmission(') <
+      inner.indexOf("child.stdin.write('\\x07')"),
   );
+  assert.match(inner, /deadline: readinessEnd/);
+  assert.match(inner, /compositionCanRequestFresh\(state, snapshot\)/);
+  assert.match(inner, /onAdmit: \(state\) =>/);
+  assert.equal((inner.match(/child\.stdin\.write\('\\x07'\)/g) ?? []).length, 1);
   assert.match(fixture, /observeCompositionSelectors\(context, session.id\)/);
   assert.match(fixture, /live = false;[\s\S]*publish\(\);[\s\S]*await cleanup\(\)/);
   assert.doesNotMatch(fixture, /keymap\.dispatch|command\.run/);
@@ -58,6 +69,14 @@ test('composition stages its maintained runner and uses the actual public produc
       failureCapture.indexOf("'transcript.ansi'"),
   );
   assert.match(failureCapture, /closed && !overflow/);
+  assert.ok(
+    failureCapture.indexOf('JSON.stringify(guardJournal.value())') <
+      failureCapture.indexOf('scanRequiredCaptures(captures'),
+  );
+  assert.ok(
+    failureCapture.indexOf('scanRequiredCaptures(captures') <
+      failureCapture.indexOf('guardJournal: guardJournal.value()'),
+  );
   assert.match(failureCapture, /currentScreen: 'UNPROVEN'/);
   const runner = await readFile(
     new URL('support/harness-linux-runner.mjs', import.meta.url),
@@ -200,6 +219,7 @@ const frame = compositionCurrentFrame(
 const binding = {
   run: 'attempt3',
   hostRun: 'live',
+  hostSetup: '21',
   generation: 'generation1',
   session: 'exact-session',
 };
@@ -213,6 +233,7 @@ function admission() {
     response: { ...binding, request: 1, live: true, commandEligible: true },
     live: { ...binding, live: true },
     exited: false,
+    overflow: false,
     now: 5,
     deadline: 10,
   };
@@ -306,6 +327,268 @@ test('actual public selector projection refuses missing, disabled, inactive comm
   ])
     assert.equal(observe(option).commandEligible, false);
   for (const session of [null, { id: 'other' }]) assert.equal(observe({ session }).session, null);
+});
+
+test('full final operand projection reports every refusal without raw values or accessor reads', () => {
+  const secret = 'synthetic-private-authority';
+  let reads = 0;
+  const trap = Object.defineProperty({}, 'run', {
+    get() {
+      reads++;
+      throw Error(secret);
+    },
+  });
+  const state = admission();
+  state.binding = {
+    run: secret,
+    generation: secret,
+    hostRun: secret,
+    hostSetup: secret,
+    session: secret,
+  };
+  state.activation = trap;
+  state.request = { run: { deep: { secret } }, frame: secret, frameToken: Infinity };
+  state.response = { commandEligible: secret, session: { deep: secret } };
+  state.live = trap;
+  state.frame = '';
+  state.exited = true;
+  state.overflow = true;
+  state.now = state.deadline;
+  const result = compositionSnapshot(state);
+  assert.equal(reads, 0);
+  assert.equal(result.admitted, false);
+  assert.equal(result.failed.length, Object.values(result.checks).filter((v) => !v).length);
+  for (const name of [
+    'hostRunning',
+    'captureWithinLimit',
+    'hostRunMatch',
+    'setupMatch',
+    'originalDeadlineOpen',
+    'frameEquality',
+    'exactPositionMatch',
+    'sessionMatch',
+    'commandEligible',
+  ])
+    assert.ok(result.failed.includes(name), name);
+  assert.equal(JSON.stringify(result).includes(secret), false);
+  for (const value of [null, undefined, secret, 5, { binding: trap }, { binding: { run: {} } }]) {
+    const projected = compositionSnapshot(value);
+    assert.equal(projected.admitted, false);
+    assert.equal(JSON.stringify(projected).includes(secret), false);
+  }
+  const timed = compositionSnapshot({ ...admission(), requestWrittenAt: 1, responseReadAt: 4 });
+  assert.equal(timed.localRequestAgeMs, 4);
+  assert.equal(timed.localResponseAgeMs, 1);
+  assert.equal(timed.originalRemainingMs, 5);
+  assert.match(timed.clockProvenance, /NOT_SELECTOR_SAMPLE/);
+  assert.equal(compositionSnapshot({ ...admission(), responseReadAt: 6 }).localResponseAgeMs, null);
+});
+
+test('operand history is bounded and full raw scan remains the export floor', () => {
+  const journal = compositionGuardJournal();
+  for (let i = 0; i < 140; i++) journal.record('loopadmit', compositionSnapshot(admission()));
+  journal.record('finalrefuse', compositionSnapshot({ ...admission(), frameToken: 101 }));
+  journal.record('CleanupENTRY', compositionSnapshot({ ...admission(), exited: true }));
+  const value = journal.value();
+  assert.equal(value.records.length, 128);
+  assert.equal(value.dropped, 14);
+  assert.equal(value.records[0].sequence, 15);
+  assert.equal(value.records.at(-2).stage, 'finalrefuse');
+  assert.equal(value.records.at(-1).stage, 'CleanupENTRY');
+  assert.equal(value.records.at(-1).sequence, 142);
+  assert.equal(value.lastFinalRefusal.sequence, 141);
+  assert.throws(() => journal.record('arbitrary-private-path', {}));
+  for (const raw of [
+    'synthetic-private-authority',
+    { checks: { deep: { secret: 'private' } } },
+    Object.defineProperty({}, 'checks', {
+      get() {
+        throw Error('never read accessor');
+      },
+    }),
+  ])
+    assert.throws(() => journal.record('finalrefuse', raw), /unsafe guard projection/);
+  const injected = {
+    ...compositionSnapshot(admission()),
+    error: new Error('private'),
+    frame: 'private',
+    clockProvenance: 'private',
+  };
+  journal.record('finaladmit', injected);
+  assert.equal(JSON.stringify(journal.value()).includes('private'), false);
+  for (let i = 0; i < 150; i++) journal.record('loopadmit', compositionSnapshot(admission()));
+  assert.equal(journal.value().lastFinalRefusal.sequence, 141);
+  assert.equal(
+    journal.value().records.some((r) => r.stage === 'finalrefuse'),
+    false,
+  );
+  const secret = 'synthetic-private-authority';
+  const captures = {
+    evidence: Buffer.from(JSON.stringify(value)),
+    tui: Buffer.from('complete-raw'),
+  };
+  const scan = scanRequiredCaptures(captures, [secret], ['evidence', 'tui']);
+  assert.doesNotThrow(() => assertDetailedTransportExport(scan));
+  assert.throws(() =>
+    scanRequiredCaptures({ ...captures, tui: Buffer.from(secret) }, [secret], ['evidence', 'tui']),
+  );
+  assert.throws(() => scanRequiredCaptures(captures, [secret], ['evidence', 'tui', 'missing']));
+  assert.throws(() => assertDetailedTransportExport(null));
+});
+
+// Scripted async loader reads, selector responses and monotonic test clock.
+// No real host, wall-clock wait, process, product, broker or helper is involved.
+async function scriptedAdmission({
+  mutateFinal = (s) => {
+    s.frameToken = 101;
+  },
+  continuing = false,
+  finalTick,
+} = {}) {
+  let tick = 0,
+    observations = 0,
+    keys = 0,
+    fresh = 0;
+  let current = structuredClone(admission());
+  const records = [],
+    events = [];
+  const deadline = 8;
+  try {
+    await awaitCompositionKeyAdmission({
+      now: () => tick,
+      deadline,
+      observe: async () => {
+        await Promise.resolve(); // Models output arriving during async log read.
+        observations++;
+        if (observations === 2 || (continuing && observations % 2 === 0)) {
+          mutateFinal(current);
+          if (finalTick !== undefined) tick = finalTick;
+        }
+        events.push('observe:' + current.frameToken);
+        return structuredClone(current);
+      },
+      requestFresh: (state, snapshot) => {
+        assert.equal(keys, 0);
+        if (!compositionCanRequestFresh(state, snapshot)) return;
+        fresh++;
+        events.push('requestfresh:' + state.frameToken);
+        current.request = {
+          ...state.binding,
+          frame: state.frame,
+          frameToken: state.frameToken,
+          request: state.request.request + 1,
+        };
+        current.response = { ...current.response, request: current.request.request };
+      },
+      pause: async () => {
+        tick++;
+      },
+      record: (phase, snapshot) => {
+        records.push({ phase, snapshot });
+        events.push(phase);
+      },
+      onAdmit: (state) => {
+        assert.equal(compositionAdmission({ ...state, now: tick, deadline }), true);
+        keys++;
+        events.push('key');
+      },
+    });
+    return { keys, fresh, records, events, tick };
+  } catch (error) {
+    return { keys, fresh, records, events, tick, code: compositionErrorCode(error) };
+  }
+}
+
+test('async identical repaint 100->101 refuses final, requests fresh and admits before exactly one key', async () => {
+  const result = await scriptedAdmission();
+  assert.equal(result.keys, 1);
+  assert.equal(result.fresh, 1);
+  assert.deepEqual(result.events, [
+    'observe:100',
+    'loopadmit',
+    'observe:101',
+    'finalrefuse',
+    'requestfresh:101',
+    'observe:101',
+    'loopadmit',
+    'observe:101',
+    'finaladmit',
+    'key',
+  ]);
+  const refused = result.records[1].snapshot;
+  assert.deepEqual(refused.failed, ['exactPositionMatch']);
+  assert.equal(refused.checks.frameEquality, true);
+  assert.equal(refused.currentOffset, 101);
+  assert.equal(refused.requestedOffset, 100);
+  assert.equal(result.tick, 1);
+});
+
+test('final invalidations never key and continuing output expires under the original budget', async () => {
+  for (const mutateFinal of [
+    (s) => {
+      s.activation = null;
+    }, // Cleanup ENTRY as interpreted by loader.
+    (s) => {
+      s.activation.setup = 'replacement';
+    },
+    (s) => {
+      s.live.generation = 'replacement';
+    },
+    (s) => {
+      s.live.live = false;
+    },
+    (s) => {
+      s.response.commandEligible = false;
+    },
+    (s) => {
+      s.response.session = 'wrong-session';
+    },
+    (s) => {
+      s.response.request = 0;
+    },
+    (s) => {
+      s.exited = true;
+    },
+    (s) => {
+      s.overflow = true;
+    },
+    ...['\x1b[?2026h', '\x1b[?2026h\x1b[2J\x1b[?2026l', '\x1b[1A'].map((update) => (s) => {
+      s.frame = compositionCurrentFrame(
+        '\x1b[?2026h\x1b[1;1HAsk anything\x1b[5;1H2.2.5\x1b[?2026l' + update,
+      );
+    }),
+  ]) {
+    const result = await scriptedAdmission({ mutateFinal });
+    assert.equal(result.keys, 0);
+    assert.ok(['READINESS_DEADLINE', 'HOST_EXITED', 'CAPTURE_LIMIT'].includes(result.code));
+    assert.ok(result.tick <= 8);
+    assert.equal(result.records[1].phase, 'finalrefuse');
+  }
+  const noisy = await scriptedAdmission({
+    continuing: true,
+    mutateFinal: (s) => {
+      s.frameToken++;
+    },
+  });
+  assert.equal(noisy.keys, 0);
+  assert.equal(noisy.code, 'READINESS_DEADLINE');
+  assert.equal(noisy.tick, 8);
+  assert.equal(noisy.fresh, 8);
+  assert.ok(noisy.records.every((r) => r.snapshot.originalRemainingMs <= 8));
+  const expired = await scriptedAdmission({ finalTick: 8 });
+  assert.equal(expired.keys, 0);
+  assert.equal(expired.fresh, 0);
+  assert.equal(expired.code, 'READINESS_DEADLINE');
+  assert.ok(expired.records[1].snapshot.failed.includes('originalDeadlineOpen'));
+  const changedFrame = await scriptedAdmission({
+    mutateFinal: (s) => {
+      s.frame = s.frame + '\nOther toast';
+      s.frameToken = 102;
+    },
+  });
+  assert.equal(changedFrame.keys, 1);
+  assert.equal(changedFrame.fresh, 1);
+  assert.ok(changedFrame.records[1].snapshot.failed.includes('frameEquality'));
 });
 
 test('host activation requires exact run/entry/setup then reconcile and invalidates at cleanup start or replacement', () => {

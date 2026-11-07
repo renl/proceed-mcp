@@ -170,41 +170,183 @@ export function compositionActivation(text, { target, entry }) {
   return origin && active && completed && !invalid ? { run, setup } : null;
 }
 
-export function compositionAdmission({
-  binding,
-  activation,
-  frame,
-  frameToken,
-  request,
-  response,
-  live,
-  exited,
+// Read only named own data properties. Unknown values, accessors and nested
+// objects never become diagnostic text or identity matches. No recursive walk.
+const own = (object, name) => {
+  try {
+    return Object.getOwnPropertyDescriptor(object, name)?.value;
+  } catch {
+    return undefined;
+  }
+};
+const text = (value) => typeof value === 'string' && value.length > 0;
+const integer = (value) => Number.isSafeInteger(value) && value >= 0;
+const sameText = (a, b) => text(a) && text(b) && a === b;
+const present = (value) => value !== null && typeof value === 'object';
+
+export function compositionSnapshot(input) {
+  const get = (name) => own(input, name);
+  const binding = get('binding'),
+    activation = get('activation'),
+    request = get('request'),
+    response = get('response'),
+    live = get('live');
+  const frame = get('frame'),
+    frameToken = get('frameToken');
+  const now = get('now'),
+    deadline = get('deadline');
+  const equal = (a, ak, b, bk = ak) => sameText(own(a, ak), own(b, bk));
+  const checks = {
+    hostRunning: get('exited') === false,
+    captureWithinLimit: get('overflow') === false,
+    originalDeadlineOpen: integer(now) && integer(deadline) && now < deadline,
+    bindingPresent: present(binding),
+    activationPresent: present(activation),
+    requestParsePresent: present(request),
+    responseParsePresent: present(response),
+    liveParsePresent: present(live),
+    hostRunMatch: equal(activation, 'run', binding, 'hostRun'),
+    setupPresent: text(own(activation, 'setup')),
+    setupMatch: equal(activation, 'setup', binding, 'hostSetup'),
+    completedSupportedFrame: text(frame),
+    hostFrameSeen: text(frame) && compositionRenderEvidence(frame).hostFrameSeen,
+    responseRunMatch: equal(response, 'run', binding),
+    responseGenerationMatch: equal(response, 'generation', binding),
+    liveRunMatch: equal(live, 'run', binding),
+    liveGenerationMatch: equal(live, 'generation', binding),
+    liveTrue: own(live, 'live') === true,
+    requestGenerationMatch: equal(request, 'generation', binding),
+    requestRunMatch: equal(request, 'run', binding),
+    requestSequenceMatch:
+      integer(own(request, 'request')) &&
+      own(request, 'request') > 0 &&
+      own(response, 'request') === own(request, 'request'),
+    frameEquality: sameText(own(request, 'frame'), frame),
+    currentOffsetValid: integer(frameToken) && frameToken > 0,
+    exactPositionMatch:
+      integer(frameToken) && frameToken > 0 && own(request, 'frameToken') === frameToken,
+    responseLiveTrue: own(response, 'live') === true,
+    commandEligible: own(response, 'commandEligible') === true,
+    sessionMatch: equal(response, 'session', binding),
+  };
+  const age = (value) => (integer(now) && integer(value) && value <= now ? now - value : null);
+  return {
+    admitted: Object.values(checks).every((value) => value === true),
+    checks,
+    failed: Object.keys(checks).filter((name) => checks[name] !== true),
+    currentOffset: integer(frameToken) ? frameToken : null,
+    requestedOffset: integer(own(request, 'frameToken')) ? own(request, 'frameToken') : null,
+    originalRemainingMs: integer(now) && integer(deadline) ? Math.max(0, deadline - now) : null,
+    localRequestAgeMs: age(get('requestWrittenAt')),
+    localResponseAgeMs: age(get('responseReadAt')),
+    clockProvenance: 'DRIVER_DATE_NOW_FILE_WRITE_AND_READ_NOT_SELECTOR_SAMPLE',
+  };
+}
+
+export function compositionAdmission(input) {
+  return compositionSnapshot(input).admitted;
+}
+
+export function compositionCanRequestFresh(state, snapshot) {
+  const c = snapshot.checks;
+  return (
+    c.originalDeadlineOpen &&
+    c.hostRunning &&
+    c.captureWithinLimit &&
+    c.hostRunMatch &&
+    c.setupMatch &&
+    c.hostFrameSeen &&
+    c.liveRunMatch &&
+    c.liveGenerationMatch &&
+    c.liveTrue &&
+    (!state.request ||
+      state.request.frameToken !== state.frameToken ||
+      state.request.frame !== state.frame ||
+      state.response?.request === state.request.request)
+  );
+}
+
+// Keep a bounded tail with monotonic sequence and explicit truncation. Callers
+// provide only compositionSnapshot output, never raw observations or errors.
+export function compositionGuardJournal() {
+  const records = [];
+  let sequence = 0,
+    dropped = 0,
+    lastFinalRefusal = null;
+  return {
+    record(stage, snapshot) {
+      if (!['loopadmit', 'finaladmit', 'finalrefuse', 'CleanupENTRY'].includes(stage))
+        throw Error('unknown guard stage');
+      // Rebuild the closed scalar projection, never spread caller metadata.
+      const schema = compositionSnapshot(null);
+      const checks = {};
+      for (const name of Object.keys(schema.checks)) {
+        const value = own(own(snapshot, 'checks'), name);
+        if (typeof value !== 'boolean') throw Error('unsafe guard projection');
+        checks[name] = value;
+      }
+      const safe = {
+        admitted: Object.values(checks).every((v) => v),
+        checks,
+        failed: Object.keys(checks).filter((name) => !checks[name]),
+      };
+      for (const name of [
+        'currentOffset',
+        'requestedOffset',
+        'originalRemainingMs',
+        'localRequestAgeMs',
+        'localResponseAgeMs',
+      ]) {
+        const value = own(snapshot, name);
+        if (value !== null && !integer(value)) throw Error('unsafe guard projection');
+        safe[name] = value;
+      }
+      safe.clockProvenance = schema.clockProvenance;
+      if (records.length === 128) {
+        records.shift();
+        dropped++;
+      }
+      records.push({ sequence: ++sequence, stage, ...safe });
+      if (stage === 'finalrefuse') lastFinalRefusal = records.at(-1);
+    },
+    value: () => ({ records: records.slice(), dropped, lastFinalRefusal }),
+  };
+}
+
+// Same original deadline throughout. observe performs the async loader read,
+// then synchronously samples frame/files. onAdmit MUST be synchronous: no await
+// may separate final evaluated snapshot from the single normal input write.
+export async function awaitCompositionKeyAdmission({
+  observe,
+  requestFresh,
+  pause,
   now,
   deadline,
+  record,
+  onAdmit,
 }) {
-  return (
-    !exited &&
-    now < deadline &&
-    !!activation &&
-    activation.run === binding.hostRun &&
-    !!frame &&
-    compositionRenderEvidence(frame).hostFrameSeen &&
-    response?.run === binding.run &&
-    response?.generation === binding.generation &&
-    live?.run === binding.run &&
-    live?.generation === binding.generation &&
-    live?.live === true &&
-    request?.generation === binding.generation &&
-    request?.run === binding.run &&
-    response?.request === request?.request &&
-    request?.frame === frame &&
-    Number.isSafeInteger(frameToken) &&
-    frameToken > 0 &&
-    request?.frameToken === frameToken &&
-    response?.live === true &&
-    response?.commandEligible === true &&
-    response?.session === binding.session
-  );
+  while (now() < deadline) {
+    const loop = await observe();
+    const snapshot = compositionSnapshot({ ...loop, now: now(), deadline });
+    record('loopadmit', snapshot);
+    if (loop.exited) throw Object.assign(new Error('host exited'), { code: 'HOST_EXITED' });
+    if (loop.overflow) throw Object.assign(new Error('capture limit'), { code: 'CAPTURE_LIMIT' });
+    if (snapshot.admitted) {
+      const final = await observe();
+      const evaluated = compositionSnapshot({ ...final, now: now(), deadline });
+      record(evaluated.admitted ? 'finaladmit' : 'finalrefuse', evaluated);
+      if (evaluated.admitted) {
+        onAdmit(final, evaluated);
+        return;
+      }
+      if (final.exited) throw Object.assign(new Error('host exited'), { code: 'HOST_EXITED' });
+      if (final.overflow)
+        throw Object.assign(new Error('capture limit'), { code: 'CAPTURE_LIMIT' });
+      requestFresh(final, evaluated);
+    } else requestFresh(loop, snapshot);
+    await pause();
+  }
+  throw Object.assign(new Error('render readiness deadline'), { code: 'READINESS_DEADLINE' });
 }
 
 // Pinned public Context.keymap.commands lists reachable commands. The fixture

@@ -13,12 +13,14 @@ import {
 } from './harness-qualification-setup.mjs';
 import { transportFixtures, scanRequiredCaptures } from './harness-transport-fixtures.mjs';
 import {
-  awaitCompositionRender,
+  awaitCompositionKeyAdmission,
   compositionRenderEvidence,
   compositionErrorCode,
   compositionCurrentFrame,
   compositionActivation,
-  compositionAdmission,
+  compositionSnapshot,
+  compositionCanRequestFresh,
+  compositionGuardJournal,
 } from './harness-composition-readiness.mjs';
 import { assertPluginInventory } from './harness-plugin-inventory.mjs';
 import {
@@ -46,6 +48,9 @@ let commandEligibility = 'UNRUN';
 const keys = { ctrlG: 0, enter: 0, exit: 0 };
 let readinessFrame = '';
 let readinessObservation;
+const guardJournal = compositionGuardJournal();
+const recordGuard = (stage, snapshot) => guardJournal.record(stage, snapshot);
+let lastGuardState, readGuardFiles, readinessEnd;
 await mkdir(evidence, { recursive: true });
 const progress = async (next) => {
   phase = next;
@@ -204,7 +209,7 @@ try {
           pending = last >= 0 && tail.length - last < 32 ? tail.slice(last) : '';
         });
         child.stderr.on('data', capture);
-        const readinessEnd = Math.min(end, Date.now() + 60000);
+        readinessEnd = Math.min(end, Date.now() + 60000);
         await wait(
           'public-session-and-product-ready',
           async () => {
@@ -243,21 +248,34 @@ try {
             return null;
           }
         };
+        readGuardFiles = () => ({
+          // Cleanup entry does not repeat the asynchronous loader read. Do not
+          // present its earlier activation snapshot as current activation.
+          activation: null,
+          response: readObservation('composition-selector-response.json'),
+          responseReadAt: Date.now(),
+          live: readObservation('composition-live.json'),
+        });
         let request,
+          requestWrittenAt,
           sequence = 0;
         await progress('rendered-host-and-product-registration');
-        await awaitCompositionRender({
+        await awaitCompositionKeyAdmission({
           observe: async () => {
             const activation = compositionActivation(
               (await logs('/run/proceed/host-state')).toString(),
               origin,
             );
-            if (activation && !binding.hostRun) binding.hostRun = activation.run;
+            if (activation && !binding.hostRun) {
+              binding.hostRun = activation.run;
+              binding.hostSetup = activation.setup;
+            }
             const frame = compositionCurrentFrame(transcript.toString());
             const frameToken = transcript.length;
             const response = readObservation('composition-selector-response.json');
+            const responseReadAt = response ? Date.now() : undefined;
             const live = readObservation('composition-live.json');
-            const admitted = compositionAdmission({
+            lastGuardState = {
               binding,
               activation,
               frame,
@@ -266,63 +284,48 @@ try {
               response,
               live,
               exited,
-              now: Date.now(),
-              deadline: readinessEnd,
-            });
-            if (admitted) readinessObservation = { binding, activation, request, response, live };
-            else if (
-              activation &&
-              compositionRenderEvidence(frame).hostFrameSeen &&
-              (!request ||
-                request.frameToken !== frameToken ||
-                response?.request === request.request)
-            ) {
-              request = { ...binding, request: ++sequence, frame, frameToken };
+              overflow,
+              requestWrittenAt,
+              responseReadAt,
+            };
+            renderEvidence = compositionRenderEvidence(frame);
+            return lastGuardState;
+          },
+          requestFresh: (state, snapshot) => {
+            // Never reuse historical eligibility. Re-observe only under the
+            // existing current-frame rule and pinned activation/generation.
+            if (compositionCanRequestFresh(state, snapshot)) {
+              request = {
+                ...binding,
+                request: ++sequence,
+                frame: state.frame,
+                frameToken: state.frameToken,
+              };
               writeFileSync(
                 join(evidence, 'composition-selector-request.json'),
                 JSON.stringify(request),
               );
+              requestWrittenAt = Date.now();
             }
-            return {
-              exited,
-              overflow,
-              admitted,
-              commandEligible: response?.commandEligible === true,
-              rendered: compositionRenderEvidence(frame),
-            };
           },
           pause: () => delay(20),
           now: Date.now,
           deadline: readinessEnd,
-          record: (observed) => {
-            renderEvidence = observed;
+          record: recordGuard,
+          onAdmit: (state) => {
+            readinessFrame = state.frame;
+            readinessObservation = {
+              binding,
+              activation: state.activation,
+              request: state.request,
+              response: state.response,
+              live: state.live,
+            };
+            commandEligibility = 'FRESH_SAME_GENERATION';
+            keys.ctrlG++;
+            child.stdin.write('\x07');
           },
         });
-        // Re-observe invalidation after the async exchange. No await between the
-        // final current-frame/live-generation check and this one normal key.
-        const activation = compositionActivation(
-          (await logs('/run/proceed/host-state')).toString(),
-          origin,
-        );
-        readinessFrame = compositionCurrentFrame(transcript.toString());
-        assert.equal(
-          compositionAdmission({
-            binding,
-            activation,
-            frame: readinessFrame,
-            frameToken: transcript.length,
-            request,
-            response: readObservation('composition-selector-response.json'),
-            live: readObservation('composition-live.json'),
-            exited,
-            now: Date.now(),
-            deadline: readinessEnd,
-          }),
-          true,
-        );
-        commandEligibility = 'FRESH_SAME_GENERATION';
-        keys.ctrlG++;
-        child.stdin.write('\x07');
         await wait(
           'rendered-product-session-picker',
           () =>
@@ -412,6 +415,20 @@ try {
         errorCode = compositionErrorCode(error);
         throw error;
       } finally {
+        // Driver cleanup entry, not a claim that product Cleanup has run.
+        recordGuard(
+          'CleanupENTRY',
+          compositionSnapshot({
+            ...lastGuardState,
+            ...readGuardFiles?.(),
+            frame: compositionCurrentFrame(transcript.toString()),
+            frameToken: transcript.length,
+            exited,
+            overflow,
+            now: Date.now(),
+            deadline: readinessEnd,
+          }),
+        );
         // One exit key only, never a dialog answer or repeated open-command key.
         // A kill below is not evidence of the returned product Cleanup.
         if (child && !closed) {
@@ -438,13 +455,14 @@ try {
               telegram: Buffer.from(JSON.stringify(h.fixture.calls)),
               journal: await readFile(join(h.state, 'journal.log')),
               diagnostics: diagnosticBytes,
-              evidence: Buffer.concat(
-                await Promise.all(
+              evidence: Buffer.concat([
+                Buffer.from(JSON.stringify(guardJournal.value())),
+                ...(await Promise.all(
                   (await readdir(evidence))
                     .filter((f) => f !== 'scan-pass.json')
                     .map((f) => readFile(join(evidence, f))),
-                ),
-              ),
+                )),
+              ]),
               // An absent observer file before the first response means zero
               // observed responses, not a successful exchange or helper absence.
               api: (await exists(wirePath)) ? await readFile(wirePath) : Buffer.alloc(0),
@@ -481,6 +499,7 @@ try {
                 productCleanup,
                 hostExit,
                 inventory,
+                guardJournal: guardJournal.value(),
               }),
             );
             await writeFile(join(evidence, 'transcript.ansi'), transcript);
