@@ -17,6 +17,51 @@ record({ event: 'start', pid: process.pid, parent: process.ppid, command: proces
 process.once('exit', () => record({ event: 'exit', pid: process.pid }));
 const credentialIndex = process.argv.indexOf('--telegram-token-file');
 const credential = credentialIndex < 0 ? undefined : process.argv[credentialIndex + 1];
+// Deterministic filesystem-failure scheduling at the real handle boundary.
+// Only an explicitly selected synthetic file inside this run can be affected.
+// These hooks never manufacture successful protection or change product results.
+const fault = process.env.PROCEED_TEST_CREDENTIAL_FAULT;
+const faultFile = process.env.PROCEED_TEST_CREDENTIAL_FAULT_FILE;
+if (fault) {
+  if (!faultFile || !resolve(faultFile).startsWith(`${resolve(root)}/`))
+    throw Error('fault target must belong to this isolated run');
+  const open = fsp.open.bind(fsp);
+  fsp.open = async (path, ...args) => {
+    if (String(path) !== faultFile) return open(path, ...args);
+    if (fault === 'load-substitute') {
+      await fsp.rename(faultFile, `${faultFile}.original`);
+      await fsp.writeFile(faultFile, 'SYNTHETIC_REPLACEMENT\n', { mode: 0o600 });
+      record({ event: 'credential-fault', fault, pid: process.pid });
+    }
+    const handle = await open(path, ...args);
+    if (fault === 'load-unsafe-handle') {
+      await handle.chmod(0o644);
+      record({ event: 'credential-fault', fault, pid: process.pid });
+    }
+    const read = handle.readFile.bind(handle);
+    handle.readFile = async (...parameters) => {
+      record({ event: 'credential-content-read', pid: process.pid });
+      if (fault === 'load-read-failure') {
+        record({ event: 'credential-fault', fault, pid: process.pid });
+        throw Object.assign(Error('synthetic read failure'), { code: 'EIO' });
+      }
+      return read(...parameters);
+    };
+    const write = handle.writeFile.bind(handle);
+    handle.writeFile = async (...parameters) => {
+      if (fault === 'write-failure' || fault === 'write-replacement') {
+        if (fault === 'write-replacement') {
+          await fsp.rename(faultFile, `${faultFile}.original`);
+          await fsp.writeFile(faultFile, 'SYNTHETIC_REPLACEMENT\n', { mode: 0o600 });
+        }
+        record({ event: 'credential-fault', fault, pid: process.pid });
+        throw Object.assign(Error('synthetic write failure'), { code: 'EIO' });
+      }
+      return write(...parameters);
+    };
+    return handle;
+  };
+}
 for (const [owner, names] of [
   [fs, ['open', 'openSync', 'readFile', 'readFileSync']],
   [fsp, ['open', 'readFile']],

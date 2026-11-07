@@ -247,6 +247,136 @@ async function removeSynthetic(lock) {
   await rm(lock.path);
 }
 
+async function credentialFailureCases() {
+  const setup = await setupState('credential-failure-state');
+  const eventsSince = async (offset) =>
+    (await readFile(c.manifest, 'utf8'))
+      .slice(offset)
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map(JSON.parse);
+  // A system-owned directory is allowed only if its permissions protect the
+  // chain. Without a sticky bit, 0777 permits any account to replace the child.
+  await check(
+    'AUTO-CREDENTIAL-UNSAFE-SYSTEM-ANCESTOR',
+    async () => {
+      const ancestor = join(c.directory, 'unprotected-system-ancestor');
+      const parent = join(ancestor, 'dedicated');
+      await mkdir(parent, { recursive: true, mode: 0o700 });
+      await chmod(ancestor, 0o777);
+      assert.equal((await stat(ancestor)).uid, 0, 'qualified container system-owned control');
+      const destination = join(parent, 'telegram.token');
+      try {
+        const result = await c.cli(
+          ['telegram', 'provision', '--token-stdin', '--telegram-token-file', destination],
+          { state: setup.path, input: token },
+        );
+        assert.equal(result.code, 4, 'replaceable system-owned ancestor must be refused');
+        assert.ok(result.output.includes('PROTECTION_UNVERIFIED'));
+        assert.equal(await absent(destination), true, 'no secret written beneath unsafe ancestor');
+      } finally {
+        await chmod(ancestor, 0o700);
+      }
+    },
+    { independent: true },
+  );
+
+  for (const fault of ['write-failure', 'write-replacement']) {
+    await check(
+      `AUTO-CREDENTIAL-${fault.toUpperCase()}`,
+      async () => {
+        const parent = join(c.directory, fault);
+        await mkdir(parent, { mode: 0o700 });
+        const destination = join(parent, 'telegram.token');
+        const offset = (await readFile(c.manifest, 'utf8')).length;
+        const result = await c.cli(
+          ['telegram', 'provision', '--token-stdin', '--telegram-token-file', destination],
+          {
+            state: setup.path,
+            input: token,
+            moreEnv: {
+              PROCEED_TEST_CREDENTIAL_FAULT: fault,
+              PROCEED_TEST_CREDENTIAL_FAULT_FILE: destination,
+            },
+          },
+        );
+        assert.ok(
+          (await eventsSince(offset)).some(
+            (event) => event.event === 'credential-fault' && event.fault === fault,
+          ),
+          'real handle failure must be witnessed',
+        );
+        assert.equal(result.code, 4, 'failed write is not successful setup');
+        if (fault === 'write-failure') {
+          assert.equal(await absent(destination), true, 'exact incomplete object is rolled back');
+        } else {
+          assert.equal(
+            await absent(destination),
+            false,
+            'rollback must preserve a substituted object',
+          );
+          assert.equal(await readFile(destination, 'utf8'), 'SYNTHETIC_REPLACEMENT\n');
+          assert.equal(
+            await readFile(`${destination}.original`, 'utf8'),
+            '',
+            'failed write never stores token',
+          );
+        }
+      },
+      { independent: true },
+    );
+  }
+
+  for (const fault of ['load-substitute', 'load-unsafe-handle', 'load-read-failure']) {
+    await check(
+      `AUTO-CREDENTIAL-${fault.toUpperCase()}`,
+      async () => {
+        const parent = join(c.directory, fault);
+        await mkdir(parent, { mode: 0o700 });
+        const destination = join(parent, 'telegram.token');
+        await writeFile(destination, `${token}\n`, { mode: 0o600 });
+        const offset = (await readFile(c.manifest, 'utf8')).length;
+        const result = await c.cli(['serve', '--telegram-token-file', destination], {
+          state: setup.path,
+          moreEnv: {
+            PROCEED_TEST_CREDENTIAL_FAULT: fault,
+            PROCEED_TEST_CREDENTIAL_FAULT_FILE: destination,
+          },
+        });
+        const events = await eventsSince(offset);
+        assert.ok(
+          events.some((event) => event.event === 'credential-fault' && event.fault === fault),
+          'actual open/read boundary must be reached',
+        );
+        assert.equal(result.code, 4, 'unsafe identity/protection or failed read is refused');
+        assert.equal(
+          await absent(join(setup.path, 'broker.lock')),
+          true,
+          'failure precedes ownership',
+        );
+        if (fault !== 'load-read-failure') {
+          assert.ok(
+            !events.some((event) => event.event === 'credential-content-read'),
+            'actual opened handle must be validated before secret content is read',
+          );
+        }
+        if (fault === 'load-substitute') {
+          assert.equal(await readFile(destination, 'utf8'), 'SYNTHETIC_REPLACEMENT\n');
+          assert.equal(await readFile(`${destination}.original`, 'utf8'), `${token}\n`);
+        } else {
+          assert.equal(
+            await readFile(destination, 'utf8'),
+            `${token}\n`,
+            'read refusal never edits credentials',
+          );
+        }
+      },
+      { independent: true },
+    );
+  }
+}
+
 try {
   await check('AUTO-TLS-PLATFORM', async () => {
     // Library qualification only. This does not exercise or pass application admission.
@@ -341,7 +471,11 @@ try {
     assert.equal((await c.finish(foreground, 30000)).code, 0);
     await closed(setup.path, setup.config.broker.port);
   });
-  if (process.argv.includes('--tls-platform-only')) {
+  if (process.argv.includes('--file-safety-only')) {
+    await credentialFailureCases();
+    c.cleanOutput();
+    assertions = results.every((result) => result.status === 'PASS');
+  } else if (process.argv.includes('--tls-platform-only')) {
     assertions = true;
   } else {
     const setup = await setupState('state');
@@ -455,6 +589,8 @@ try {
       assert.equal(await absent(destination), true);
       assert.equal((await stat(unsafeParent)).mode & 0o777, 0o755, 'no implicit repair');
     });
+
+    await credentialFailureCases();
 
     // Existing synthetic Telegram protocol fixture is reused unchanged. Only
     // process inheritance/token handling needed a different preload.
