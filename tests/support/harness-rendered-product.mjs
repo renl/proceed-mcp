@@ -1,6 +1,7 @@
 // TEST ONLY. Fixed product-boundary scenario for the maintained PTY lifecycle.
 // Driver I/O below is internal test plumbing, never a product endpoint/context.
 import assert from 'node:assert/strict';
+import { confirmRenderedNavigation } from './harness-navigation-observation.mjs';
 import {
   assertAttackNonEffect,
   assertBoundRetainedOutcome,
@@ -31,17 +32,12 @@ export async function exerciseRenderedProduct(driver, presentation, choice, sess
   assert.equal(before.presentation.session_id, presentation.session_id);
   assertAttackNonEffect(before, before);
 
-  // First select the exact documented host session. The caller-supplied request
-  // label is not the host title or identity. Equal titles must remain selectable
-  // by full ID. Selection Enter is navigation, NOT the later default Reject.
+  // Provisional highlighted ordinal -> complete current identity -> question.
+  // The driver moves/searches by ordinal, never by the no-longer-visible full ID.
   driver.stdin.write('\x07'); // Product ctrl+g, not a fixture control.
-  await driver.waitSessionPicker({
-    title: 'Select the Proceed session whose pending question to open',
-    option: `${session.title} (${session.id})`,
-    sessionID: session.id,
-  });
   assertAttackNonEffect(before, await driver.observe(presentation));
-  driver.stdin.write(`${session.id}\r`);
+  await confirmRenderedNavigation(driver, session);
+  assertAttackNonEffect(before, await driver.observe(presentation));
   await driver.waitRendered([
     presentation.request_id,
     presentation.session_label,

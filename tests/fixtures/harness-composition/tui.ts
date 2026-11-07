@@ -14,10 +14,28 @@ export default Plugin.define({
     const root = '/run/proceed/evidence/';
     const { run } = JSON.parse(readFileSync(root + 'composition-binding.json', 'utf8'));
     const generation = randomUUID();
+    let resizeSequence = 0;
     let live = true,
       timer;
     const publish = () =>
-      writeFileSync(root + 'composition-live.json', JSON.stringify({ run, generation, live }));
+      writeFileSync(
+        root + 'composition-live.json',
+        JSON.stringify({
+          run,
+          generation,
+          live,
+          geometry: {
+            width: context.renderer?.width,
+            height: context.renderer?.height,
+            resizeSequence,
+          },
+        }),
+      );
+    const resized = () => {
+      resizeSequence++;
+      publish();
+    };
+    context.renderer?.on('resize', resized);
     publish();
     try {
       const cleanup = await product.setup(context);
@@ -72,6 +90,7 @@ export default Plugin.define({
       return async () => {
         // Fence at Cleanup ENTRY before any asynchronous product cleanup.
         live = false;
+        context.renderer?.off('resize', resized);
         clearInterval(timer);
         publish();
         await cleanup();
@@ -84,6 +103,7 @@ export default Plugin.define({
       };
     } catch {
       live = false;
+      context.renderer?.off('resize', resized);
       clearInterval(timer);
       publish();
       await writeFile(

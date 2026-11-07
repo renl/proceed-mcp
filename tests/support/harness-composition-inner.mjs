@@ -40,6 +40,11 @@ import {
 } from './harness-composition-readiness.mjs';
 import { assertPluginInventory } from './harness-plugin-inventory.mjs';
 import {
+  confirmRenderedNavigation,
+  highlightedOrdinal,
+  assertCurrentIdentityFrame,
+} from './harness-navigation-observation.mjs';
+import {
   stageQualification,
   isolatedLinuxEnvironment,
   linuxScriptArguments,
@@ -361,15 +366,53 @@ try {
             child.stdin.write('\x07');
           },
         });
-        await wait(
-          'rendered-product-session-picker',
-          () =>
-            compositionCurrentFrame(transcript.toString()).includes('Select the Proceed session') &&
-            compositionCurrentFrame(transcript.toString()).includes('Composition empty exchange') &&
-            compositionCurrentFrame(transcript.toString()).includes(runtime.session),
+        const navigationEnd = Math.min(end, Date.now() + 15000);
+        const navigationFrame = () => {
+          const live = readObservation('composition-live.json');
+          assert.equal(live?.live, true);
+          assert.equal(live?.generation, binding.generation);
+          assert.ok(!exited && !overflow && Date.now() < navigationEnd);
+          return {
+            frame: compositionCurrentFrame(transcript.toString()),
+            token: transcript.length,
+            geometry: live.geometry,
+          };
+        };
+        const waitNavigation = async (label, check) => {
+          let observed;
+          await wait(
+            label,
+            () => {
+              observed = navigationFrame();
+              try {
+                check(observed);
+                return true;
+              } catch {
+                return false;
+              }
+            },
+            Math.max(0, navigationEnd - Date.now()),
+          );
+          return observed;
+        };
+        await confirmRenderedNavigation(
+          {
+            stdin: {
+              write(key) {
+                keys.enter++;
+                child.stdin.write(key);
+              },
+            },
+            currentNavigationFrame: navigationFrame,
+            waitHighlightedSession: () =>
+              waitNavigation('rendered-product-session-picker', (s) => highlightedOrdinal(s.frame)),
+            waitIdentityConfirmation: (session) =>
+              waitNavigation('rendered-product-session-picker', (s) =>
+                assertCurrentIdentityFrame(s.frame, session, s.geometry),
+              ),
+          },
+          { id: runtime.session, title: 'Composition empty exchange' },
         );
-        keys.enter++;
-        child.stdin.write('\r');
         await wait('rendered-product-empty-result', () =>
           compositionCurrentFrame(transcript.toString()).includes(
             'selected session has no pending question',

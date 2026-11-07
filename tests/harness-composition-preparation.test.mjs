@@ -27,6 +27,7 @@ test('composition stages its maintained runner and uses the actual public produc
   const payload = qualificationPayload(['src/harness/tui-entry.js', 'bin/proceed-mcp.js']);
   for (const path of [
     'tests/support/harness-composition-inner.mjs',
+    'tests/support/harness-navigation-observation.mjs',
     'tests/fixtures/harness-composition/tui.ts',
     'tests/fixtures/harness-composition/broker-observer.mjs',
   ])
@@ -48,6 +49,9 @@ test('composition stages its maintained runner and uses the actual public produc
   );
   assert.ok(/scanFrozenComposition\(\{\s*captures/.test(inner));
   assert.match(inner, /physical-helper-absence/);
+  assert.match(inner, /confirmRenderedNavigation\(/);
+  assert.match(inner, /geometry: live.geometry/);
+  assert.doesNotMatch(inner, /includes\(runtime.session\)/);
   assert.match(inner, /exact-product-PluginCleanup/);
   assert.match(inner, /selected session has no pending question/);
   assert.ok(

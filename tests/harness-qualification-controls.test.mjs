@@ -147,6 +147,38 @@ const winner = {
   response_text: 'approved',
 };
 
+// Scripted frames exercise orchestration only. Never an actual-host operand.
+function syntheticNavigation(writes, session) {
+  const picker = { frame: 'Select the Proceed session\n\u2503    Session 1 preview', token: 1 };
+  const confirmation = {
+    frame: [
+      'Open Proceed question?',
+      'Session 1',
+      'Navigation only - no decision',
+      'Title:',
+      session.title,
+      'Session ID:',
+      session.id,
+      '',
+      'Open question   Cancel',
+    ].join('\n'),
+    token: 2,
+    geometry: { width: 100, height: 50, resizeSequence: 0 },
+  };
+  let current;
+  return {
+    waitHighlightedSession: async () => {
+      assert.deepEqual(writes, ['\x07']);
+      return (current = picker);
+    },
+    waitIdentityConfirmation: async () => {
+      assert.deepEqual(writes, ['\x07', '\r']);
+      return (current = confirmation);
+    },
+    currentNavigationFrame: async () => current,
+  };
+}
+
 test('QUAL-RENDERED driver control cannot substitute missing attacks, callback results or approval-like Respond', async () => {
   // Deliberately synthetic I/O to validate the test, not rendered/product proof.
   const question = {
@@ -161,11 +193,7 @@ test('QUAL-RENDERED driver control cannot substitute missing attacks, callback r
   let terminal = false;
   const driver = {
     stdin: { write: (bytes) => writes.push(bytes) },
-    waitSessionPicker: async (expected) => {
-      assert.deepEqual(writes, ['\x07']);
-      assert.equal(expected.option, `${session.title} (${session.id})`);
-      assert.equal(expected.sessionID, question.session_id);
-    },
+    ...syntheticNavigation(writes, session),
     observe: async () => ({
       presentation: question,
       status: terminal ? { ...pending.status, ...winner } : pending.status,
@@ -186,7 +214,7 @@ test('QUAL-RENDERED driver control cannot substitute missing attacks, callback r
     },
   };
   await exerciseRenderedProduct(driver, question, 'respond', session);
-  assert.deepEqual(writes, ['\x07', `${session.id}\r`, 'Respond\r', 'approved\r']);
+  assert.deepEqual(writes, ['\x07', '\r', '\r', 'Respond\r', 'approved\r']);
   writes.length = 0;
   terminal = false;
   await assert.rejects(
@@ -224,9 +252,7 @@ test('QUAL-PICKER: missing/currently lost UI stops keys before a choice, never r
     const driver = {
       stdin: { write: (bytes) => writes.push(bytes) },
       observe: async () => ({ ...pending, presentation: question }),
-      waitSessionPicker: async () => {
-        if (stage === 'picker') throw new Error('exact ID/title not currently visible');
-      },
+      ...syntheticNavigation(writes, session),
       waitRendered: async (fields) => {
         assert.deepEqual(fields, [
           question.request_id,
@@ -248,8 +274,12 @@ test('QUAL-PICKER: missing/currently lost UI stops keys before a choice, never r
         await afterEach(ordinaryAttackCases[0]);
       },
     };
+    if (stage === 'picker')
+      driver.waitHighlightedSession = async () => {
+        throw new Error('live highlight not established');
+      };
     await assert.rejects(exerciseRenderedProduct(driver, question, 'reject', session));
-    assert.deepEqual(writes, stage === 'picker' ? ['\x07'] : ['\x07', `${session.id}\r`]);
+    assert.deepEqual(writes, stage === 'picker' ? ['\x07'] : ['\x07', '\r', '\r']);
   }
   await assert.rejects(
     exerciseRenderedProduct({}, question, 'approve', { ...session, id: 'foreign-session' }),
