@@ -4,6 +4,165 @@ import assert from 'node:assert/strict';
 import { readFile, lstat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+const diagnosticCases = [
+  'unknown',
+  'enrolled',
+  'unenrolled',
+  'owner',
+  'control',
+  'foreign',
+  'plaintext',
+  'wrong-psk',
+  'product-controls',
+  'limit-exact',
+  'limit-over',
+  'redirect',
+  'handshake-stall',
+  'original-budget',
+  'abort',
+  'reconnect',
+  'record-next',
+  'relay',
+  'record-during',
+  'product-loader-unsafe-files',
+];
+const diagnosticPhases = [
+  'setup',
+  'key-protection',
+  'key-load',
+  'client-create',
+  'exchange',
+  'response-assertion',
+  'product-controls',
+];
+const safeCodes = [
+  'BROKER_UNAVAILABLE',
+  'BROKER_INSTANCE_CONFLICT',
+  'CREDENTIAL_UNAVAILABLE',
+  'INVALID_REQUEST',
+  'PROTECTION_UNVERIFIED',
+  'STORAGE_FAILURE',
+  'ENOENT',
+  'EACCES',
+  'EPERM',
+  'ELOOP',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ETIMEDOUT',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE',
+  'ERR_SSL_NO_CIPHERS_AVAILABLE',
+  'ERR_SSL_NO_SHARED_CIPHER',
+  'ERR_SSL_WRONG_VERSION_NUMBER',
+  'ERR_SSL_UNSUPPORTED_PROTOCOL',
+  'ERR_TLS_HANDSHAKE_TIMEOUT',
+  'ERR_INVALID_ARG_TYPE',
+  'ERR_NOT_IMPLEMENTED',
+  'ERR_ASSERTION',
+  'ABORT_ERR',
+];
+const safeNames = [
+  'Error',
+  'TypeError',
+  'AssertionError',
+  'AbortError',
+  'LocalRequestError',
+  'SecureChannelError',
+  'CliError',
+  'BrokerError',
+];
+const pick = (value, allowed) => (allowed.includes(value) ? value : 'REDACTED');
+// Read only explicitly named own data properties. Never invoke error getters,
+// stringify errors or inspect arbitrary object fields, messages, stacks or paths.
+function own(value, key) {
+  try {
+    return Object.getOwnPropertyDescriptor(value, key)?.value;
+  } catch {
+    return undefined;
+  }
+}
+export function transportDiagnostic(error, state = {}, versions = process.versions) {
+  const chain = [];
+  const seen = new Set();
+  for (
+    let current = error;
+    current && chain.length < 4 && !seen.has(current);
+    current = own(current, 'cause')
+  ) {
+    seen.add(current);
+    chain.push({
+      name: pick(own(current, 'name'), safeNames),
+      code: pick(own(current, 'code'), safeCodes),
+    });
+  }
+  const runtime = {};
+  for (const key of ['bun', 'node', 'openssl']) {
+    const value = own(versions, key);
+    runtime[key] =
+      typeof value === 'string' && /^\d{1,3}\.\d{1,3}\.\d{1,3}(?:[a-z]{1,2})?$/.test(value)
+        ? value
+        : null;
+  }
+  return {
+    schema_version: 1,
+    case: pick(state.case, diagnosticCases),
+    phase: pick(state.phase, diagnosticPhases),
+    classification: error ? 'CONTROL_FAILURE' : 'FIRST_EXCHANGE_PASS',
+    elapsed_ms: Number.isFinite(state.elapsed_ms)
+      ? Math.min(100000, Math.max(0, Math.round(state.elapsed_ms)))
+      : 0,
+    chain,
+    runtime,
+  };
+}
+export function assertTransportDiagnostic(value) {
+  assert.deepEqual(Object.keys(value).sort(), [
+    'case',
+    'chain',
+    'classification',
+    'elapsed_ms',
+    'phase',
+    'runtime',
+    'schema_version',
+  ]);
+  assert.equal(value.schema_version, 1);
+  assert.ok([...diagnosticCases, 'REDACTED'].includes(value.case));
+  assert.ok([...diagnosticPhases, 'REDACTED'].includes(value.phase));
+  assert.ok(['CONTROL_FAILURE', 'FIRST_EXCHANGE_PASS'].includes(value.classification));
+  assert.ok(
+    Number.isInteger(value.elapsed_ms) && value.elapsed_ms >= 0 && value.elapsed_ms <= 100000,
+  );
+  assert.ok(Array.isArray(value.chain) && value.chain.length <= 4);
+  for (const entry of value.chain) {
+    assert.deepEqual(Object.keys(entry).sort(), ['code', 'name']);
+    assert.ok([...safeCodes, 'REDACTED'].includes(entry.code));
+    assert.ok([...safeNames, 'REDACTED'].includes(entry.name));
+  }
+  assert.deepEqual(Object.keys(value.runtime).sort(), ['bun', 'node', 'openssl']);
+  for (const version of Object.values(value.runtime))
+    assert.ok(
+      version === null ||
+        (typeof version === 'string' && /^\d{1,3}\.\d{1,3}\.\d{1,3}(?:[a-z]{1,2})?$/.test(version)),
+    );
+  return value;
+}
+// Separate safety floor, NOT the full raw-capture scan or permission to export it.
+export function diagnosticExport(value, secrets) {
+  assertTransportDiagnostic(value);
+  assert.ok(Array.isArray(secrets) && secrets.length > 0);
+  const bytes = JSON.stringify(value);
+  for (const secret of secrets) {
+    assert.ok(typeof secret === 'string' && secret.length > 0);
+    assert.equal(bytes.includes(secret), false, 'diagnostic authority exclusion failed');
+  }
+  return bytes;
+}
+export function assertDetailedTransportExport(scan) {
+  assert.equal(scan?.status, 'PASS', 'required complete raw-capture scan marker missing or failed');
+}
+
 export const transportExpectations = Object.freeze({
   enrolled: [200, null],
   unenrolled: [401, 'AUTH_REQUIRED'],
@@ -13,6 +172,21 @@ export const transportExpectations = Object.freeze({
   plaintext: [null, 'BROKER_INSTANCE_CONFLICT'],
   'wrong-psk': [null, 'BROKER_INSTANCE_CONFLICT'],
 });
+
+export function assertRuntimeRoleOutcome(id, response, failure, elapsed_ms, observe) {
+  const [status, code] = transportExpectations[id];
+  // Retain the typed exchange error BEFORE assert.equal can replace it.
+  observe({ case: id, phase: failure ? 'exchange' : 'response-assertion', elapsed_ms }, failure);
+  if (status === null) {
+    assert.equal(response, undefined, `${id} listener must never admit HTTP authority`);
+    assert.equal(failure?.code, code, `${id} must fail secure admission`);
+  } else {
+    assert.equal(failure, undefined, `${id} secure runtime exchange failed`);
+    assert.equal(response.status, status, `${id} public broker role refusal`);
+    if (code) assert.equal(response.body.error.code, code);
+    else assert.deepEqual(response.body, { schema_version: 1, presentation: null });
+  }
+}
 
 export function assertTransportPlan(plan) {
   assert.equal(plan.schema_version, 1);
@@ -32,14 +206,21 @@ export function assertTransportPlan(plan) {
   }
 }
 
-export async function exerciseRuntimeTransport(plan, signal) {
+export async function exerciseRuntimeTransport(
+  plan,
+  signal,
+  observe = () => {},
+  firstOnly = false,
+) {
   assert.equal(process.platform, 'linux', 'requires the controlled actual Linux TUI');
   assertTransportPlan(plan);
   const { createOperatorLocalClient, createSecureLocalClient } =
     await import('../../src/http/local-client.js');
   const { loadOperatorKeyFile } = await import('../../src/harness/operator-key.js');
   const observations = [];
-  for (const c of plan.cases) {
+  for (const c of firstOnly ? plan.cases.filter((c) => c.id === 'enrolled') : plan.cases) {
+    const state = { case: c.id, phase: 'key-protection', elapsed_ms: 0 };
+    observe(state);
     signal.throwIfAborted();
     // Synthetic files stay outside payload/package/state/config. This test read
     // proves runtime file capability only. Production must independently verify
@@ -53,6 +234,8 @@ export async function exerciseRuntimeTransport(plan, signal) {
     assert.equal(file.mode & 0o777, 0o600);
     assert.equal(file.uid, process.geteuid());
     assert.equal(file.nlink, 1);
+    state.phase = 'key-load';
+    observe(state);
     const token = ['owner', 'control'].includes(c.id)
       ? (await readFile(c.key_file, 'utf8')).trim()
       : (await loadOperatorKeyFile({ file: c.key_file, stateDir: '/run/proceed/host-state' }))
@@ -63,6 +246,8 @@ export async function exerciseRuntimeTransport(plan, signal) {
         true,
         'invalid synthetic operator credential shape',
       );
+    state.phase = 'client-create';
+    observe(state);
     const client = (
       ['owner', 'control'].includes(c.id) ? createSecureLocalClient : createOperatorLocalClient
     )({
@@ -75,20 +260,14 @@ export async function exerciseRuntimeTransport(plan, signal) {
     let response;
     let failure;
     const start = performance.now();
+    state.phase = 'exchange';
+    observe(state);
     try {
       response = await client.request('POST', '/v1/harness/pending', c.body, {}, { signal });
     } catch (error) {
       failure = error;
     }
-    if (status === null) {
-      assert.equal(response, undefined, `${c.id} listener must never admit HTTP authority`);
-      assert.equal(failure?.code, code, `${c.id} must fail secure admission`);
-    } else {
-      assert.equal(failure, undefined, `${c.id} secure runtime exchange failed`);
-      assert.equal(response.status, status, `${c.id} public broker role refusal`);
-      if (code) assert.equal(response.body.error.code, code);
-      else assert.deepEqual(response.body, { schema_version: 1, presentation: null });
-    }
+    assertRuntimeRoleOutcome(c.id, response, failure, performance.now() - start, observe);
     observations.push({ id: c.id, status, code, elapsed: performance.now() - start });
   }
   return observations;
@@ -96,7 +275,8 @@ export async function exerciseRuntimeTransport(plan, signal) {
 
 // Real fixture endpoints, product implementation. This is capability proof, not
 // evidence of a human choice or the lifecycle of the production TUI generation.
-export async function exerciseProductTransport(plan, signal) {
+export async function exerciseProductTransport(plan, signal, observe = () => {}) {
+  observe({ case: 'product-controls', phase: 'key-load', elapsed_ms: 0 });
   const { createOperatorLocalClient } = await import('../../src/http/local-client.js');
   const { loadOperatorKeyFile } = await import('../../src/harness/operator-key.js');
   const { credential } = await loadOperatorKeyFile({
@@ -105,6 +285,7 @@ export async function exerciseProductTransport(plan, signal) {
   });
   const observations = [];
   for (const c of plan.controls) {
+    observe({ case: c.id, phase: 'client-create', elapsed_ms: 0 });
     signal.throwIfAborted();
     const client = createOperatorLocalClient({
       port: c.port,
@@ -112,6 +293,7 @@ export async function exerciseProductTransport(plan, signal) {
       token: credential,
     });
     const start = performance.now();
+    observe({ case: c.id, phase: 'exchange', elapsed_ms: 0 });
     let value, error;
     const controller = new AbortController();
     const timer = c.id === 'abort' ? setTimeout(() => controller.abort(), 250) : undefined;
@@ -129,6 +311,10 @@ export async function exerciseProductTransport(plan, signal) {
       clearTimeout(timer);
     }
     const elapsed = performance.now() - start;
+    observe(
+      { case: c.id, phase: error ? 'exchange' : 'response-assertion', elapsed_ms: elapsed },
+      error,
+    );
     if (c.error) {
       assert.equal(value, undefined, `${c.id}: unexpected admission`);
       assert.equal(error?.code, c.error, `${c.id}: wrong refusal`);
@@ -138,6 +324,7 @@ export async function exerciseProductTransport(plan, signal) {
       if (c.id === 'limit-exact')
         assert.equal(Buffer.byteLength(JSON.stringify(value.body)), 65536);
     }
+    observe({ case: c.id, phase: 'response-assertion', elapsed_ms: elapsed });
     if (c.id === 'original-budget')
       assert.ok(
         elapsed >= 9500 && elapsed < 10500,
@@ -147,6 +334,7 @@ export async function exerciseProductTransport(plan, signal) {
       assert.ok(elapsed >= 900 && elapsed < 1500, '1000 ms handshake ceiling');
     if (c.id === 'abort') assert.ok(elapsed < 1500, 'abort must destroy owned socket');
     if (c.id === 'reconnect') {
+      observe({ case: c.id, phase: 'exchange', elapsed_ms: elapsed });
       const next = await client.request('POST', '/v1/harness/pending', {}, {}, { signal });
       assert.equal(next.status, 200, 'explicit observation reconnect succeeds on a fresh channel');
     }
@@ -173,6 +361,7 @@ export async function exerciseProductTransport(plan, signal) {
     });
   }
   // Production loader rejection tests are separate from fixture lstat capability.
+  observe({ case: 'product-loader-unsafe-files', phase: 'key-load', elapsed_ms: 0 });
   for (const file of plan.rejected_keys) {
     await assert.rejects(loadOperatorKeyFile({ file, stateDir: plan.state_dir }));
   }

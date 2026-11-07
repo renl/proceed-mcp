@@ -8,6 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { hostBudgets } from './harness-host-plan.mjs';
 import {
+  assertTransportDiagnostic,
+  assertDetailedTransportExport,
+} from './harness-runtime-transport.mjs';
+import {
   linuxImage,
   linuxPayload,
   qualificationPayload,
@@ -18,9 +22,10 @@ const execute = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
 export async function runLinuxHost(preflight, mode = 'platform') {
-  assert.ok(['platform', 'broker-setup', 'transport'].includes(mode));
+  assert.ok(['platform', 'broker-setup', 'transport', 'transport-first-exchange'].includes(mode));
   const setupOnly = mode === 'broker-setup';
-  const transport = mode === 'transport';
+  const firstOnly = mode === 'transport-first-exchange';
+  const transport = mode === 'transport' || firstOnly;
   const payload =
     setupOnly || transport
       ? qualificationPayload(
@@ -124,7 +129,7 @@ export async function runLinuxHost(preflight, mode = 'platform') {
           candidate,
           image: linuxImage,
           payload,
-          command: `node tests/run-harness-host.mjs ${transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
+          command: `node tests/run-harness-host.mjs ${firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
         },
         null,
         2,
@@ -153,6 +158,7 @@ export async function runLinuxHost(preflight, mode = 'platform') {
         : setupOnly
           ? '/payload/tests/support/harness-setup-inner.mjs'
           : '/payload/tests/support/harness-linux-inner.mjs',
+      ...(firstOnly ? ['--first-exchange-only'] : []),
     ]);
     created = true;
     const policy = JSON.parse((await command(['inspect', name])).stdout)[0];
@@ -186,23 +192,41 @@ export async function runLinuxHost(preflight, mode = 'platform') {
     const waited = await command(['wait', name], executionEnd - Date.now());
     await progress('evidence', { containerExit: waited.stdout.trim() });
     if (transport) {
-      // Mandatory scan marker must exist and pass BEFORE any detailed export.
+      // This one allowlisted diagnostic has its own in-container secret floor.
+      // Nothing from the raw capture set is copied in diagnostic-only mode.
       await command([
         'cp',
-        `${name}:/run/proceed/evidence/scan-pass.json`,
-        join(run, 'scan-pass.json'),
+        `${name}:/run/proceed/evidence/diagnostic-export.json`,
+        join(run, 'diagnostic-export.json'),
       ]);
-      assert.equal(JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')).status, 'PASS');
-      for (const file of [
-        'result.json',
-        'progress.jsonl',
-        'transport-summary.json',
-        'transport-cleanup.json',
-      ])
-        await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)]);
-      const result = JSON.parse(await readFile(join(run, 'result.json'), 'utf8'));
-      assert.equal(waited.stdout.trim(), '0', result.failure ?? 'embedded transport failed');
-      assert.equal(result.status, 'PASS', result.failure);
+      const diagnostic = assertTransportDiagnostic(
+        JSON.parse(await readFile(join(run, 'diagnostic-export.json'), 'utf8')),
+      );
+      if (firstOnly) {
+        assert.equal(waited.stdout.trim(), '0', 'first enrolled exchange failed');
+        assert.equal(diagnostic.classification, 'FIRST_EXCHANGE_PASS');
+        assert.equal(diagnostic.case, 'enrolled');
+      } else {
+        // Mandatory scan marker must exist and pass BEFORE any detailed export.
+        await command([
+          'cp',
+          `${name}:/run/proceed/evidence/scan-pass.json`,
+          join(run, 'scan-pass.json'),
+        ]);
+        assertDetailedTransportExport(
+          JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')),
+        );
+        for (const file of [
+          'result.json',
+          'progress.jsonl',
+          'transport-summary.json',
+          'transport-cleanup.json',
+        ])
+          await command(['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)]);
+        const result = JSON.parse(await readFile(join(run, 'result.json'), 'utf8'));
+        assert.equal(waited.stdout.trim(), '0', result.failure ?? 'embedded transport failed');
+        assert.equal(result.status, 'PASS', result.failure);
+      }
     } else {
       // Only these synthetic/sanitized files may cross the container boundary.
       for (const file of [
@@ -227,7 +251,7 @@ export async function runLinuxHost(preflight, mode = 'platform') {
       assert.equal(result.status, 'PASS', result.failure);
     }
   } catch (error) {
-    failure = error.message;
+    failure = transport ? 'W3_EXPORT_OR_CONTROL_FAILURE' : error.message;
     // Failure evidence is copied before owned namespace destruction, never raw host logs.
     if (created && !transport)
       for (const file of [
@@ -252,15 +276,16 @@ export async function runLinuxHost(preflight, mode = 'platform') {
         }
       }
     if (created && transport) {
-      // Only fixed summary/progress can leave after an absent/failed raw scan.
-      // Do not export runtime assertions, logs, transcript or fixture payloads.
-      for (const file of ['result.json', 'progress.jsonl']) {
+      // No result/error strings or detailed capture may bypass the full scan.
+      // Only the separately scanned allowlisted diagnostic can leave on failure.
+      for (const file of ['diagnostic-export.json']) {
         try {
           await command(
             ['cp', `${name}:/run/proceed/evidence/${file}`, join(run, file)],
             3000,
             true,
           );
+          assertTransportDiagnostic(JSON.parse(await readFile(join(run, file), 'utf8')));
         } catch {
           /* no detailed capture export on failure */
         }
@@ -284,7 +309,7 @@ export async function runLinuxHost(preflight, mode = 'platform') {
         }
         cleanup = 'PASS - exact container absent, private PID namespace destroyed';
       } catch (error) {
-        cleanup = `FAIL - ${error.message}`;
+        cleanup = transport ? 'FAIL - exact owned container cleanup' : `FAIL - ${error.message}`;
         failure ??= cleanup;
       }
     } else cleanup = 'NOT APPLICABLE - container not created';

@@ -10,6 +10,7 @@ import {
   confirmQualificationEnrollment,
 } from './harness-qualification-setup.mjs';
 import { transportFixtures, scanRequiredCaptures } from './harness-transport-fixtures.mjs';
+import { diagnosticExport } from './harness-runtime-transport.mjs';
 import {
   stageQualification,
   isolatedLinuxEnvironment,
@@ -17,6 +18,7 @@ import {
 } from './harness-linux-plan.mjs';
 
 const evidence = '/run/proceed/evidence';
+const firstOnly = process.argv[2] === '--first-exchange-only';
 const end = Date.now() + 210000;
 await mkdir(evidence, { recursive: true });
 const progress = (phase) =>
@@ -100,6 +102,7 @@ try {
             options: {
               cases_file: '/run/proceed/qualification-private/cases.json',
               evidence_directory: evidence,
+              first_exchange_only: firstOnly,
             },
           },
         ],
@@ -173,8 +176,27 @@ try {
         60000,
       );
       const runtime = JSON.parse(await readFile(join(evidence, 'runtime-transport.json'), 'utf8'));
-      assert.notEqual(runtime.status, 'FAIL', runtime.failure);
-      assert.equal(runtime.observations.length, 18);
+      // Strict allowlist plus actual run-secret exclusion before a separate export.
+      // Full raw evidence remains private and still requires scan-pass.json.
+      const diagnostic = diagnosticExport(runtime.diagnostic, fixture.secrets);
+      await writeFile(join(evidence, 'diagnostic-export.json'), diagnostic, { mode: 0o600 });
+      assert.notEqual(runtime.status, 'FAIL', 'W3 embedded control failed - see safe diagnostic');
+      assert.equal(runtime.observations.length, firstOnly ? 1 : 18);
+      if (firstOnly) {
+        await h.noWork();
+        await progress('graceful-transport-fixture-cleanup');
+        child.stdin.write('\x03');
+        await wait('observed-fixture-Cleanup', () =>
+          exists(join(evidence, 'transport-cleanup.json')),
+        );
+        assert.deepEqual(
+          JSON.parse(await readFile(join(evidence, 'transport-cleanup.json'), 'utf8')),
+          { aborted: true, timerCleared: true },
+        );
+        await wait('actual-tui-exit', () => exited);
+        controls = { diagnostic, scope: 'first enrolled exchange only - later W3 controls UNRUN' };
+        return;
+      }
       const wire = await fixture.assertObserved();
       await h.noWork();
       await progress('graceful-transport-fixture-cleanup');
@@ -217,17 +239,27 @@ try {
       await writeFile(join(evidence, 'transport-summary.json'), JSON.stringify(controls));
       await writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(scan));
     } finally {
-      if (child && !exited) {
-        child.stdin.end();
-        child.kill('SIGTERM');
+      // Complete bounded failed PTY bytes stay container-owned until destruction.
+      // No export path for this file exists, including on diagnostic-only success.
+      try {
+        await writeFile(
+          '/run/proceed/qualification-private/transport-pty-capture.raw',
+          transcript,
+          { mode: 0o600 },
+        );
+      } finally {
+        if (child && !exited) {
+          child.stdin.end();
+          child.kill('SIGTERM');
+        }
+        if (child) for (const stream of [child.stdin, child.stdout, child.stderr]) stream.destroy();
+        await fixture.close();
       }
-      if (child) for (const stream of [child.stdin, child.stdout, child.stderr]) stream.destroy();
-      await fixture.close();
     }
   });
 } catch (error) {
   // Fixed diagnostic prefix only. Raw assertions and fixture state never export.
-  failure = String(error.message).split('\n')[0];
+  failure = 'W3_CONTROL_FAILURE';
 }
 await writeFile(
   join(evidence, 'result.json'),
