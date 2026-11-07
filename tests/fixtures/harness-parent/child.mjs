@@ -30,6 +30,7 @@ const finish = (bytes, code = 0) => {
 input.on('data', (bytes) => {
   for (const value of reader.push(bytes)) {
     if (value.type === 'hello') {
+      if (mode === 'stalled-ready') return;
       if (mode === 'malformed-child') return finish(Buffer.from([0, 0, 0, 1, 0x7b]));
       if (mode === 'oversized-child') return finish(Buffer.from([0, 1, 0x40, 1]));
       if (mode === 'partial-child') return finish(Buffer.from([0, 0, 0, 5, 0x7b]));

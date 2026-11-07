@@ -154,7 +154,10 @@ test('PARENT-LIFETIME: EOF/cancel/reload/deadline/hung-child fencing requires ex
   for (const patch of [
     { terminateAt: 9501 },
     { forceAt: 9501 },
+    { forceAt: 9510.808594 },
+    { forceAt: 9500.000001 },
     { exitAt: 10001 },
+    { closedAt: 10000.000001 },
     { closedAt: 10001 },
     { deadlineAt: 10001 },
     { nextPhaseAfterFence: 1 },

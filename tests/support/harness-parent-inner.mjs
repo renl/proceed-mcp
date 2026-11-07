@@ -68,7 +68,7 @@ async function exercise(
   const controller = new AbortController();
   const entryAt = performance.now(),
     budget = 2500;
-  let child, identityPromise, optionsObserved, proc, failure, result;
+  let child, identityPromise, optionsObserved, proc, failure, result, returnedAt;
   let helloAt,
     readyAt,
     authorityAt,
@@ -160,6 +160,7 @@ async function exercise(
     } catch (error) {
       failure = error;
     }
+    returnedAt = performance.now();
     if (child) {
       proc = await identityPromise;
       physical.push({
@@ -169,6 +170,9 @@ async function exercise(
         fd3: proc[3],
         fd4: proc[4],
         authorityFrames,
+        entryAt,
+        deadlineAt: entryAt + budget,
+        returnedAt,
         helloAt,
         readyAt,
         authorityAt,
@@ -189,7 +193,7 @@ async function exercise(
       assert.ok(Number.isFinite(closedAt), 'real close must precede return');
       assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
       assert.ok(child.stdio.filter(Boolean).every((s) => s.destroyed));
-      assert.ok(performance.now() <= entryAt + budget + 100, 'one original budget');
+      assert.ok(returnedAt <= entryAt + budget, 'one original budget, no allowance');
       assertParentPrivacy(
         {
           argv: proc[1],
@@ -252,8 +256,17 @@ async function exercise(
       };
       // Peer fixtures create no sockets or retained timers outside their child.
       assertParentRefusal(refusal, { beforeAuthority });
-      if (mode === 'hung-child-force') {
-        assert.equal(child.signalCode, 'SIGKILL');
+      if (mode === 'hung-child-force') assert.equal(child.signalCode, 'SIGKILL');
+      if (['stalled-ready', 'exchange-deadline', 'response-with-open-pipes'].includes(mode))
+        assert.ok(terminateAt <= entryAt + budget - 1000, 'reserve final 1000 ms for cleanup');
+      if (
+        [
+          'hung-child-force',
+          'stalled-ready',
+          'exchange-deadline',
+          'response-with-open-pipes',
+        ].includes(mode)
+      ) {
         assertParentLifetime({
           ...refusal,
           entryAt,
@@ -319,6 +332,7 @@ try {
     await exercise(mode, ['HELPER_PROTOCOL_INVALID']);
   await exercise('invocation-cancel', ['EXCHANGE_CANCELLED']);
   await exercise('hung-child-force', ['EXCHANGE_CANCELLED']);
+  await exercise('stalled-ready', ['EXCHANGE_DEADLINE'], { beforeAuthority: true });
   await exercise('exchange-deadline', ['EXCHANGE_DEADLINE']);
   await exercise('response-with-open-pipes', ['EXCHANGE_DEADLINE']);
   await exercise('extra-child-frame', ['HELPER_PROTOCOL_INVALID']);

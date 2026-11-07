@@ -129,6 +129,7 @@ export const parentCases = Object.freeze({
     'cleanup',
     'request-deadline',
     'exchange-deadline',
+    'stalled-ready',
     'hung-child-force',
     'late-resolution',
     'late-spawn',

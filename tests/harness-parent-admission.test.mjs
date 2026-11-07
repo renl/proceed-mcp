@@ -5,6 +5,7 @@ import test from 'node:test';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { EventEmitter } from 'node:events';
+import { performance } from 'node:perf_hooks';
 import { PassThrough, Writable } from 'node:stream';
 import { mkdir, mkdtemp, writeFile, rm, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -83,25 +84,40 @@ test('actual resolver rejects a shell wrapper instead of selecting it as Node', 
 // TEST ONLY: script the imported ChildProcess boundary, not a production hook or
 // an observation comparator. Real parent framing, admission, catch and cleanup
 // execute against owned streams. No process, helper, broker or authority exists.
-function submittedChild(confirmClose) {
+function submittedChild(confirmClose, { stall = null, closeDelay = 0, terminationDelay = 0 } = {}) {
   const child = new EventEmitter();
   const frames = [];
   const kills = [];
+  const signalCalls = [];
+  const timers = [];
+  let closedAt;
   const outbound = new PassThrough();
   const inbound = new Writable({
     write(bytes, encoding, done) {
       const value = JSON.parse(bytes.subarray(4).toString('utf8'));
       frames.push(value);
       if (value.type === 'hello') {
-        outbound.write(frame({ ...ready(), exchange_id: value.exchange_id }));
+        if (stall !== 'ready')
+          outbound.write(frame({ ...ready(), exchange_id: value.exchange_id }));
       } else if (value.type === 'exchange') {
+        if (stall === 'reply') return done();
         outbound.write(
-          frame({
-            schema_version: 1,
-            type: 'error',
-            exchange_id: value.exchange_id,
-            code: 'BROKER_UNAVAILABLE',
-          }),
+          frame(
+            stall === 'close'
+              ? {
+                  schema_version: 1,
+                  type: 'response',
+                  exchange_id: value.exchange_id,
+                  status: 200,
+                  body: { schema_version: 1, presentation: null },
+                }
+              : {
+                  schema_version: 1,
+                  type: 'error',
+                  exchange_id: value.exchange_id,
+                  code: 'BROKER_UNAVAILABLE',
+                },
+          ),
         );
       }
       done();
@@ -112,10 +128,33 @@ function submittedChild(confirmClose) {
   child.stdio = [null, child.stdout, child.stderr, inbound, outbound];
   child.kill = (signal) => {
     kills.push(signal ?? 'SIGTERM');
-    if (confirmClose) queueMicrotask(() => child.emit('close', null, 'SIGTERM'));
+    signalCalls.push({ signal: signal ?? 'SIGTERM', at: performance.now() });
+    if (signal !== 'SIGKILL') {
+      const until = performance.now() + terminationDelay;
+      while (performance.now() < until) {
+        /* finite synthetic termination-call delay */
+      }
+    }
+    const close = () => {
+      closedAt = performance.now();
+      child.emit('close', null, signal ?? 'SIGTERM');
+    };
+    if (confirmClose) queueMicrotask(close);
+    else if (stall !== null && signal === 'SIGKILL') timers.push(setTimeout(close, closeDelay));
     return true;
   };
-  return { child, frames, kills };
+  return {
+    child,
+    frames,
+    kills,
+    signalCalls,
+    get closedAt() {
+      return closedAt;
+    },
+    dispose() {
+      for (const timer of timers) clearTimeout(timer);
+    },
+  };
 }
 
 for (const confirmClose of [true, false]) {
@@ -173,6 +212,126 @@ for (const confirmClose of [true, false]) {
       } finally {
         childProcess.spawn = original;
         syncBuiltinESMExports();
+        for (const stream of fixture.child.stdio.filter(Boolean)) stream.destroy();
+      }
+    },
+  );
+}
+
+test(
+  'actual parent cleanup uses actual remaining time after delayed termination',
+  { timeout: 5000 },
+  async () => {
+    const fixture = submittedChild(false, { terminationDelay: 150 });
+    const original = childProcess.spawn;
+    let fenced = 0;
+    childProcess.spawn = () => fixture.child;
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(
+        runHelperExchange({
+          ...valid,
+          env: { PATH: dirname(process.execPath) },
+          cwd: root,
+          budgetMs: 3000,
+          onUnconfirmedCleanup: () => {
+            fenced++;
+          },
+        }),
+        (error) => {
+          assert.equal(error.code, 'HELPER_PROTOCOL_INVALID');
+          assert.equal(error.submitted, true);
+          return true;
+        },
+      );
+      const returnedAt = performance.now();
+      assert.equal(fenced, 1);
+      assert.deepEqual(fixture.kills, ['SIGTERM', 'SIGKILL']);
+      assert.ok(fixture.child.stdio.filter(Boolean).every((stream) => stream.destroyed));
+      const [term, force] = fixture.signalCalls.map((call) => call.at);
+      const violations = [];
+      if (!(force <= term + 500)) violations.push('force request exceeded 500 ms');
+      if (!(returnedAt <= term + 1000))
+        violations.push('cleanup renewed time after delayed termination');
+      assert.deepEqual(
+        violations,
+        [],
+        'actual remaining cleanup time, not nominal wait subtraction',
+      );
+    } finally {
+      childProcess.spawn = original;
+      syncBuiltinESMExports();
+      fixture.dispose();
+      for (const stream of fixture.child.stdio.filter(Boolean)) stream.destroy();
+    }
+  },
+);
+
+// Native scripted-stream regressions, not real-child timing qualification.
+// Each stalled phase ignores SIGTERM and closes only after SIGKILL plus a known
+// delay. Charge delayed spawn and all later phases to the same entry deadline.
+for (const stall of ['ready', 'reply', 'close']) {
+  test(
+    `actual parent reserves cleanup inside original budget for stalled ${stall}`,
+    { timeout: 5000 },
+    async () => {
+      const fixture = submittedChild(false, { stall, closeDelay: 100 });
+      const original = childProcess.spawn;
+      const budget = 1800;
+      let attempts = 0,
+        fenced = 0;
+      childProcess.spawn = () => {
+        attempts++;
+        const until = performance.now() + 150;
+        while (performance.now() < until) {
+          /* finite synthetic spawn delay */
+        }
+        return fixture.child;
+      };
+      syncBuiltinESMExports();
+      const entryAt = performance.now();
+      try {
+        let failure;
+        try {
+          await runHelperExchange({
+            ...valid,
+            env: { PATH: dirname(process.execPath) },
+            cwd: root,
+            budgetMs: budget,
+            onUnconfirmedCleanup: () => {
+              fenced++;
+            },
+          });
+        } catch (error) {
+          failure = error;
+        }
+        const returnedAt = performance.now();
+        assert.equal(attempts, 1, 'no renewed exchange or replay');
+        assert.equal(failure?.submitted, stall !== 'ready');
+        assert.deepEqual(
+          fixture.frames.map((value) => value.type),
+          stall === 'ready' ? ['hello'] : ['hello', 'exchange'],
+        );
+        assert.equal(JSON.stringify(failure).includes(syntheticOperator), false);
+        assert.ok(fixture.child.stdio.filter(Boolean).every((stream) => stream.destroyed));
+        const term = fixture.signalCalls.find((call) => call.signal === 'SIGTERM')?.at;
+        const force = fixture.signalCalls.find((call) => call.signal === 'SIGKILL')?.at;
+        const violations = [];
+        if (!(term <= entryAt + budget - 1000))
+          violations.push('active work consumed cleanup reserve');
+        if (!(force >= term && force <= term + 500))
+          violations.push('force request exceeded 500 ms');
+        if (!(fixture.closedAt >= force && fixture.closedAt <= term + 1000))
+          violations.push('close exceeded cleanup deadline or was unconfirmed');
+        if (!(fixture.closedAt <= entryAt + budget && returnedAt <= entryAt + budget))
+          violations.push('original budget renewed or exceeded');
+        if (fenced !== 0 || failure?.code !== 'EXCHANGE_DEADLINE')
+          violations.push('confirmed cleanup/deadline outcome missing');
+        assert.deepEqual(violations, [], 'exact bounds, no timing allowance');
+      } finally {
+        childProcess.spawn = original;
+        syncBuiltinESMExports();
+        fixture.dispose();
         for (const stream of fixture.child.stdio.filter(Boolean)) stream.destroy();
       }
     },
