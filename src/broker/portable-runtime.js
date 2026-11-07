@@ -14,6 +14,7 @@ import { readLocalCredential } from '../state/credentials.js';
 import { readOwnerCredential } from '../state/owner-credentials.js';
 import { acquireStateOwnership } from '../state/ownership.js';
 import { verifyOwnerOnly } from '../state/protection.js';
+import { startupTimeout } from './availability.js';
 import { startExpirySchedule } from './expiry-schedule.js';
 import { createPortableBroker } from './portable.js';
 import { createPortableServer } from './portable-server.js';
@@ -58,24 +59,24 @@ export async function startPortableRuntime({
   logger = () => {},
   telegram = null,
   secure = false,
+  startupDeadlineAt = null,
 } = {}) {
+  // The automatic child receives the caller's original absolute budget, not a
+  // fresh one, so entry and startup-phase latency are charged to the same attempt.
+  // Expiry while ownership, recovery or final readiness is pending drains only this
+  // candidate's own runtime and forbids any late readiness publication.
+  const expired = () => startupDeadlineAt !== null && Date.now() >= startupDeadlineAt;
+  const assertNotExpired = () => {
+    if (expired()) throw startupTimeout();
+  };
+
+  assertNotExpired();
   const protectedTargets = [paths.stateDir, paths.credentialsDir, paths.configFile];
   if ((await stat(paths.journalFile).catch(() => null)) !== null) {
     protectedTargets.push(paths.journalFile);
   }
   await verifyOwnerOnly(protectedTargets);
-
-  // Secure local mode publishes an independent random channel key inside the
-  // exclusively created schema-2 record. The key exists only in this process's
-  // memory and that protected record; no endpoint or key is learned from the
-  // network, and legacy serving publishes nothing.
-  const channelKey = secure ? randomBytes(32) : null;
-  const ownership = await acquireStateOwnership({
-    lockFile: paths.brokerLockFile,
-    port: config.broker.port,
-    channel:
-      channelKey === null ? undefined : { protocol: 'tls-psk-v1', psk: channelKey.toString('hex') },
-  });
+  assertNotExpired();
 
   // Observed local transport state, distinct from local readiness. Only the
   // poller's own poll results are reflected, so readiness never implies Telegram
@@ -86,6 +87,12 @@ export async function startPortableRuntime({
   };
   const observedTelegram = telegram === null ? null : observeTelegramState(telegram, telegramState);
 
+  // Secure local mode publishes an independent random channel key inside the
+  // exclusively created schema-2 record. The key exists only in this process's
+  // memory and that protected record; no endpoint or key is learned from the
+  // network, and legacy serving publishes nothing.
+  const channelKey = secure ? randomBytes(32) : null;
+  let ownership = null;
   let journal = null;
   let broker = null;
   let server = null;
@@ -95,6 +102,18 @@ export async function startPortableRuntime({
   let prompt = null;
   let requestStop = () => {};
   try {
+    ownership = await acquireStateOwnership({
+      lockFile: paths.brokerLockFile,
+      port: config.broker.port,
+      channel:
+        channelKey === null
+          ? undefined
+          : { protocol: 'tls-psk-v1', psk: channelKey.toString('hex') },
+    });
+    // Expiry while ownership was pending releases only this candidate's exact
+    // record, before any journal or listener exists.
+    assertNotExpired();
+
     const control = await readLocalCredential(
       paths.controlCredentialFile,
       'the control credential',
@@ -110,6 +129,7 @@ export async function startPortableRuntime({
     // A journal declaring another format is refused by its own reader; nothing
     // in this path migrates, truncates or resets it.
     journal = await Journal.open(paths.journalFile);
+    assertNotExpired();
     broker = createPortableBroker({
       journal,
       owners: config.owners,
@@ -121,6 +141,7 @@ export async function startPortableRuntime({
     // The serialized startup expiry flushes before the port binds, so overdue work
     // never waits for an observation call.
     await broker.sweepExpired();
+    assertNotExpired();
 
     server = createPortableServer({
       broker,
@@ -153,7 +174,11 @@ export async function startPortableRuntime({
       }
       throw storageFailure('the broker could not bind its loopback port', 'STORAGE_FAILURE', cause);
     }
+    // Final readiness is forbidden after the original budget expires: the check
+    // runs before readiness can be observed, and before any publication line.
+    assertNotExpired();
     await verifyOwnerOnly([paths.stateDir, paths.credentialsDir, paths.journalFile]);
+    assertNotExpired();
     server.markReady();
     schedule = startExpirySchedule({ broker, logger });
     // Exactly one update consumer starts after recovery, startup expiry,
@@ -211,7 +236,7 @@ export async function startPortableRuntime({
     await server?.close().catch(() => {});
     await broker?.close().catch(() => {});
     await journal?.close().catch(() => {});
-    await ownership.release().catch(() => {});
+    await ownership?.release().catch(() => {});
     throw error;
   }
 
@@ -237,6 +262,10 @@ export async function startPortableRuntime({
       if (stopPromise !== null) return stopPromise;
       stopping = true;
       telegramState.state = 'stopped';
+      // Local readiness is withdrawn and new business admission fenced
+      // synchronously, while the listener itself stays available to authenticated
+      // control for the whole unresolved drain (design section 6).
+      server.beginDrain();
       // All three owned Telegram consumers are fenced synchronously, before either
       // drain is awaited: a held poll turn cannot admit a later scan or send, and a
       // held receipt write cannot admit a later poll, reply, prompt or acknowledgement.
@@ -256,10 +285,12 @@ export async function startPortableRuntime({
         await promptDrain?.catch(() => {});
         // Scheduling stops next, so a queued attempt settles before any close.
         await schedule.stop();
-        await server.close().catch(() => {});
         // The authority drains accepted commits before its journal and record close.
         await broker.close().catch(() => {});
         await journal.close().catch(() => {});
+        // Sockets close only after the journal drain and before the exact-owned
+        // record is released, so an unresolved drain never frees ownership early.
+        await server.close().catch(() => {});
         await ownership.release().catch((error) => {
           logger(
             `the ownership record was not released: ${error?.message ?? 'unknown error'}; remove it only after verifying this broker has stopped`,

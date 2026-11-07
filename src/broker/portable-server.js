@@ -153,6 +153,7 @@ export function createPortableServer({
 } = {}) {
   let ready = false;
   let closing = false;
+  let draining = false;
   let stoppingInstance = null;
   let server = null;
   let parser = null;
@@ -705,6 +706,18 @@ export function createPortableServer({
     },
     markReady() {
       ready = true;
+    },
+    // Withdraw local readiness and fence new business admission while the listener
+    // stays up, so authenticated control can still observe the draining instance
+    // and idempotently match an accepted stop (design section 6). Only the final
+    // close releases the listener itself.
+    beginDrain() {
+      if (draining) return;
+      draining = true;
+      ready = false;
+      closing = true;
+      registrations.close();
+      for (const exchange of [...waitExchanges]) exchange.controller.abort();
     },
     async close() {
       ready = false;

@@ -17,6 +17,9 @@ import {
   probeOccupancy,
   spawnDetachedBroker,
   startupConflict,
+  startupTimeout,
+  STARTUP_BUDGET_MS,
+  STARTUP_DEADLINE_ENV,
 } from '../broker/availability.js';
 import { lifecycleEnvelopeProblem } from '../broker/lifecycle-envelope.js';
 import { startupToolFailure } from '../broker/startup-failure.js';
@@ -94,6 +97,22 @@ const USAGE = [
 
 function commandStatePaths(options, env) {
   return statePaths(resolveStateDir({ option: options.get('state-dir'), env }));
+}
+
+// The automatic launcher hands its child one absolute instant (design section 5).
+// A foreground invocation carries none and keeps its open-ended lifetime, so this
+// is a private propagation input rather than a public option.
+function startupDeadlineFrom(env) {
+  const raw = env[STARTUP_DEADLINE_ENV];
+  if (typeof raw !== 'string' || raw === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+// One budget: every prerequisite awaited after this point is charged to the same
+// original attempt, never to a fresh child or probe.
+function remainingStartupBudget(startedAt) {
+  return STARTUP_BUDGET_MS - (performance.now() - startedAt);
 }
 
 function noPositionals(positionals, command) {
@@ -366,7 +385,10 @@ async function runServe(argv, { stdout, stderr, env }) {
 
   // Secure file mode loads the credential here, before ownership, so an unsafe
   // file refuses without creating any ownership record. Secure foreground mode
-  // needs no token file and keeps its own environment input.
+  // needs no token file and keeps its own environment input. An automatic child
+  // also refuses to begin when its caller's original budget has already expired.
+  const startupDeadlineAt = startupDeadlineFrom(env);
+  if (startupDeadlineAt !== null && Date.now() >= startupDeadlineAt) throw startupTimeout();
   const token =
     file === undefined
       ? env[TELEGRAM_TOKEN_ENV] === undefined || env[TELEGRAM_TOKEN_ENV] === ''
@@ -380,6 +402,7 @@ async function runServe(argv, { stdout, stderr, env }) {
     telegram,
     logger,
     secure: true,
+    startupDeadlineAt,
   });
 
   stdout.write(`proceed-mcp: broker ready on https://127.0.0.1:${runtime.port}\n`);
@@ -435,12 +458,14 @@ async function runTelegramCommand(argv, context) {
 // Launch the installed broker entry point from this same package using the
 // current runtime executable and the selected nonsecret credential path. The
 // child is the only process that reads that file; automatic startup never selects
-// it from an inherited environment token.
-function launchAutomaticBroker({ paths, credentialFile }) {
+// it from an inherited environment token, and it receives the caller's remaining
+// absolute startup budget instead of starting a fresh one.
+function launchAutomaticBroker({ paths, credentialFile, deadlineAt }) {
   spawnDetachedBroker({
     executable: packageEntryPoint(),
     args: ['serve', '--telegram-token-file', credentialFile, '--state-dir', paths.stateDir],
     cwd: PACKAGE_ROOT,
+    deadlineAt,
   });
 }
 
@@ -450,6 +475,7 @@ async function runPair(argv, { stdout, env }) {
   });
   noPositionals(positionals, 'pair');
 
+  const attemptStart = performance.now();
   const { file } = tokenFileFrom(options, env);
   const paths = commandStatePaths(options, env);
   const config = await loadPortableConfiguration(paths);
@@ -463,10 +489,12 @@ async function runPair(argv, { stdout, env }) {
     lockFile: paths.brokerLockFile,
     port: config.broker.port,
     token: control,
-    launch: () =>
+    budgetMs: remainingStartupBudget(attemptStart),
+    launch: ({ deadlineAt }) =>
       launchAutomaticBroker({
         paths,
         credentialFile: file ?? defaultCredentialFile({ stateDir: paths.stateDir }),
+        deadlineAt,
       }),
   });
 
@@ -507,6 +535,9 @@ async function runMcp(argv, { env }) {
   noPositionals(positionals, 'mcp');
   requireOptions(options, ['owner']);
 
+  // The one availability attempt starts at adapter launch: prerequisites, launch
+  // and adoption all share this original budget.
+  const attemptStart = performance.now();
   const { file } = tokenFileFrom(options, env);
   const paths = commandStatePaths(options, env);
   const config = await loadPortableConfiguration(paths);
@@ -531,8 +562,9 @@ async function runMcp(argv, { env }) {
     lockFile: paths.brokerLockFile,
     port: config.broker.port,
     token: credential,
+    budgetMs: remainingStartupBudget(attemptStart),
     signal: controller.signal,
-    launch: () => launchAutomaticBroker({ paths, credentialFile }),
+    launch: ({ deadlineAt }) => launchAutomaticBroker({ paths, credentialFile, deadlineAt }),
   });
   // A failed attempt is reported through broker-dependent calls, never as a
   // process crash during initialization.

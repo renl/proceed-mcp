@@ -31,6 +31,14 @@ const FAILURES = new Map([
     },
   ],
   [
+    'STORAGE_FAILURE',
+    {
+      code: 'STORAGE_FAILURE',
+      message:
+        'protected broker storage or journal state failed; preserve the state directory and investigate storage before a new attempt',
+    },
+  ],
+  [
     'STATE_NOT_OWNED',
     {
       code: 'BROKER_UNAVAILABLE',

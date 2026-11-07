@@ -9,7 +9,7 @@
 import { spawn } from 'node:child_process';
 import { connect } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
-import { blockedPrerequisite } from '../errors.js';
+import { blockedPrerequisite, storageFailure } from '../errors.js';
 import { SecureChannelError, secureExchange } from '../http/local-client.js';
 import { readSecureOwnership } from '../state/ownership.js';
 import { TELEGRAM_TOKEN_ENV } from '../config/portable-config.js';
@@ -18,6 +18,11 @@ import { lifecycleEnvelopeProblem } from './lifecycle-envelope.js';
 export const STARTUP_BUDGET_MS = 150_000;
 export const PROBE_TIMEOUT_MS = 1_000;
 export const PROBE_SPACING_MS = 100;
+// Private child propagation only: the absolute instant (epoch milliseconds) when
+// the caller's original startup budget expires. Both processes read the same
+// system clock, so a delayed child entry is charged to the same attempt instead
+// of starting a fresh budget. Nonsecret and never a public CLI input.
+export const STARTUP_DEADLINE_ENV = 'PROCEED_STARTUP_DEADLINE_AT';
 
 export function startupConflict(message) {
   return blockedPrerequisite(`${message} (BROKER_INSTANCE_CONFLICT)`, 'BROKER_INSTANCE_CONFLICT');
@@ -25,7 +30,7 @@ export function startupConflict(message) {
 
 export function startupTimeout() {
   return blockedPrerequisite(
-    'the broker did not become ready within the startup deadline; inspect safe status before a new attempt',
+    'the broker did not become ready within the startup deadline; inspect safe status before a new attempt (BROKER_STARTUP_TIMEOUT)',
     'BROKER_STARTUP_TIMEOUT',
   );
 }
@@ -86,8 +91,18 @@ async function attemptReadiness(record, token, timeoutMs) {
     }
     throw error;
   }
-  if (response.status === 503 && response.body?.error?.code === 'BROKER_NOT_READY') {
-    return { state: 'starting' };
+  if (response.status === 503) {
+    const code = response.body?.error?.code;
+    if (code === 'BROKER_NOT_READY') return { state: 'starting' };
+    // The broker itself reported failed storage health over the authenticated
+    // channel. That is the fixed nonretryable storage classification, not an
+    // unrelated-service conflict, and no peer message is forwarded.
+    if (code === 'STORAGE_FAILURE') {
+      throw storageFailure(
+        'the broker cannot confirm local readiness (STORAGE_FAILURE)',
+        'STORAGE_FAILURE',
+      );
+    }
   }
   const problem = envelopeProblem(response, record);
   if (problem === 'malformed' || response.status !== 200) {
@@ -111,11 +126,23 @@ function launchEnvironment(environment) {
 // Launches the installed broker entry point from this same package using the
 // current runtime executable: no shell, no package download, no inferred path.
 // The child is detached with independent stdio, and an inherited Telegram token
-// is excluded from its environment rather than used as a credential source.
-export function spawnDetachedBroker({ executable, args, environment = process.env, cwd }) {
+// is excluded from its environment rather than used as a credential source. The
+// remaining startup budget travels as one absolute instant so the child cannot
+// reset it by restarting its own clock origin.
+export function spawnDetachedBroker({
+  executable,
+  args,
+  environment = process.env,
+  cwd,
+  deadlineAt = null,
+}) {
+  const childEnvironment = launchEnvironment(environment);
+  if (typeof deadlineAt === 'number' && Number.isFinite(deadlineAt)) {
+    childEnvironment[STARTUP_DEADLINE_ENV] = String(Math.round(deadlineAt));
+  }
   const child = spawn(process.execPath, [executable, ...args], {
     cwd,
-    env: launchEnvironment(environment),
+    env: childEnvironment,
     detached: true,
     shell: false,
     stdio: 'ignore',
@@ -127,7 +154,9 @@ export function spawnDetachedBroker({ executable, args, environment = process.en
 
 // Resolves with the adopted stable record once readiness is authenticated, or
 // rejects with a classified prerequisite failure. Launch happens at most once per
-// attempt; a losing candidate is never respawned in a loop.
+// attempt; a losing candidate is never respawned in a loop. The attempt budget is
+// absolute: no phase, helper, probe or launch is admitted after it expires, and a
+// child receives the same remaining budget rather than a fresh one.
 export async function awaitSecureAvailability({
   lockFile,
   port,
@@ -138,14 +167,21 @@ export async function awaitSecureAvailability({
   logger = () => {},
 } = {}) {
   const deadline = performance.now() + budgetMs;
+  const remaining = () => deadline - performance.now();
   let launched = false;
   for (;;) {
     if (signal?.aborted === true) {
       throw blockedPrerequisite('the startup attempt was cancelled', 'BROKER_UNAVAILABLE');
     }
+    // Check remaining time before every phase, including the first record read:
+    // an expired attempt may not start occupancy or launch work.
+    if (remaining() <= 0) throw startupTimeout();
     const record = await readSecureOwnership(lockFile);
     if (record.absent === true) {
-      const probe = await probeOccupancy(port);
+      if (remaining() <= 0) throw startupTimeout();
+      const probe = await probeOccupancy(port, {
+        timeoutMs: Math.min(PROBE_TIMEOUT_MS, Math.max(1, remaining())),
+      });
       if (probe === 'occupied') {
         throw startupConflict(
           'the configured port is occupied by a listener without a matching ownership record',
@@ -155,21 +191,25 @@ export async function awaitSecureAvailability({
         // Recheck absence after the probe and before launching; a race after these
         // observations is expected and the exclusive ownership record still decides.
         const again = await readSecureOwnership(lockFile);
+        const left = remaining();
+        if (left <= 0) throw startupTimeout();
         if (again.absent === true && !launched && typeof launch === 'function') {
           launched = true;
           logger('starting the broker for this state directory');
-          launch();
+          // The absolute instant travels to the child: process-entry and startup
+          // latency are charged to this attempt, never to a fresh child budget.
+          launch({ deadlineAt: Date.now() + left });
         }
       }
     } else if (record.schemaVersion === 1) {
       throw upgradeGuidance('the running broker uses the legacy local channel');
     } else {
-      const remaining = deadline - performance.now();
-      if (remaining <= 0) throw startupTimeout();
-      const result = await attemptReadiness(record, token, Math.min(1000, remaining));
+      const left = remaining();
+      if (left <= 0) throw startupTimeout();
+      const result = await attemptReadiness(record, token, Math.min(1_000, left));
       if (result.state === 'ready') return result.record;
     }
-    const left = deadline - performance.now();
+    const left = remaining();
     if (left <= 0) throw startupTimeout();
     try {
       await delay(Math.min(PROBE_SPACING_MS, left), { signal });

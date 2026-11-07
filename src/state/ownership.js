@@ -11,8 +11,10 @@
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, readFile, unlink } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { blockedPrerequisite, storageFailure } from '../errors.js';
 import { utcTimestamp } from '../util/values.js';
+import { assertProtectedAncestors, removeExactCreated } from './path-trust.js';
 
 const POSIX_FILE_MODE = 0o600;
 const CHANNEL_PROTOCOL = 'tls-psk-v1';
@@ -60,6 +62,22 @@ function assertOwnerOnlyRecord(info) {
   }
 }
 
+function recordPathFailure(message, cause) {
+  return storageFailure(message, 'PROTECTION_UNVERIFIED', cause);
+}
+
+// Design section 4 applies section 2's non-redirection and ancestor-protection
+// conditions to the protected trust publication and its reads. An unsafe state
+// ancestry is refused before any key byte is written or read, and the existing
+// ancestors are never repaired or re-permissioned here.
+async function assertRecordPath(lockFile, fail) {
+  await assertProtectedAncestors(lockFile, {
+    allowMissingTail: false,
+    label: 'the broker state directory',
+    fail,
+  });
+}
+
 // Creates the ownership record with an exclusive create, so concurrent starts
 // against the same directory cannot both acquire it even when they are
 // configured with different ports. The record is flushed before the caller
@@ -67,6 +85,10 @@ function assertOwnerOnlyRecord(info) {
 export async function acquireStateOwnership({ lockFile, port, channel }) {
   const problem = channelProblem(channel);
   if (problem !== null) throw storageFailure(problem, 'PROTECTION_UNVERIFIED');
+  // The secure record carries a secret, so its whole path is trusted before the
+  // exclusive create: a redirected or replaceable ancestry refuses first and no
+  // record is created at all.
+  if (channel !== undefined) await assertRecordPath(lockFile, recordPathFailure);
   const instance = randomBytes(16).toString('hex');
   const contents = formatOwnershipRecord({
     pid: process.pid,
@@ -95,25 +117,32 @@ export async function acquireStateOwnership({ lockFile, port, channel }) {
     );
   }
 
+  let created = null;
   try {
+    created = await handle.stat();
     if (channel !== undefined) {
       // The secret key is written only after the record and its directory are
       // verified owner-only, and the complete record is flushed before return.
       if (process.platform !== 'win32') await handle.chmod(POSIX_FILE_MODE);
-      assertOwnerOnlyRecord(await handle.stat());
+      created = await handle.stat();
+      assertOwnerOnlyRecord(created);
     }
     await handle.writeFile(contents, 'utf8');
     await handle.sync();
     if (channel !== undefined) assertOwnerOnlyRecord(await handle.stat());
   } catch (cause) {
     await handle.close().catch(() => {});
-    // The exclusive create succeeded, so this incomplete file is this
-    // invocation's own; removing it takes ownership from nobody else.
-    await unlink(lockFile).catch(() => {});
+    // The exclusive create proved this attempt owned the object it opened, but
+    // the destination may have been renamed away and replaced since. Remove only
+    // the exact object still proven to be this attempt's; preserve a replacement
+    // or an uncertain entry and report the incomplete cleanup.
+    const removed = await removeExactCreated(lockFile, created);
     if (cause?.name === 'CliError') throw cause;
     throw storageFailure(
-      `could not write the ownership record at ${lockFile}`,
-      'STORAGE_FAILURE',
+      removed
+        ? `could not write the ownership record at ${lockFile}`
+        : `could not write the ownership record at ${lockFile}; an object created during acquisition could not be proven safe to remove`,
+      removed ? 'STORAGE_FAILURE' : 'PROTECTION_UNVERIFIED',
       cause,
     );
   }
@@ -158,11 +187,43 @@ function conflictRecord(message) {
   return blockedPrerequisite(message, 'BROKER_INSTANCE_CONFLICT');
 }
 
+// The opened trust record must be the protected single-link regular file owned by
+// the current account. This runs before the key bytes are read and again through
+// the pathname checks before the record is returned.
+function assertOpenedRecord(info) {
+  if (info.nlink !== 1 || !info.isFile()) {
+    throw conflictRecord('the broker ownership record is not one protected regular file');
+  }
+  if (process.platform === 'win32') return;
+  if ((info.mode & 0o777) !== POSIX_FILE_MODE) {
+    throw conflictRecord('the broker ownership record is not owner-only');
+  }
+  if (typeof process.geteuid === 'function' && info.uid !== process.geteuid()) {
+    throw conflictRecord('the broker ownership record is not owned by the current account');
+  }
+}
+
+async function inspectRecordParent(lockFile) {
+  try {
+    return await lstat(dirname(lockFile));
+  } catch (cause) {
+    if (cause?.code === 'ENOENT') return null;
+    throw conflictRecord('the broker ownership record cannot be inspected');
+  }
+}
+
 // Reads the protected ownership record without sending any credential anywhere.
 // A schema-1 record is reported as legacy so the caller can refuse with upgrade
 // guidance before any connection; a schema-2 record returns its stable bytes so
 // a client can compare them again around a handshake and a readiness exchange.
 export async function readSecureOwnership(lockFile) {
+  // A missing state directory stays "no record" rather than a conflict; an
+  // existing but redirected or replaceable ancestry is refused before any record
+  // bytes are read (design section 4 applying section 2).
+  const parent = await inspectRecordParent(lockFile);
+  if (parent === null) return { absent: true };
+  await assertRecordPath(lockFile, conflictRecord);
+
   let info;
   try {
     info = await lstat(lockFile);
@@ -185,6 +246,10 @@ export async function readSecureOwnership(lockFile) {
       if (opened.dev !== info.dev || opened.ino !== info.ino || opened.size > MAX_RECORD_BYTES) {
         throw conflictRecord('the broker ownership record changed identity or is too large');
       }
+      // The opened handle itself must be the protected single-link regular file
+      // before any key content is read: a pathname check cannot prove the object
+      // that will be read. A later refusal never stands in for this check.
+      assertOpenedRecord(opened);
       bytes = await handle.readFile();
     } finally {
       await handle.close().catch(() => {});

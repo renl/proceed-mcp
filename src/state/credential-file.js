@@ -12,11 +12,18 @@
 // cannot be established fail closed.
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, open, realpath, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { blockedPrerequisite, invalidArgument, storageFailure } from '../errors.js';
+import {
+  assertProtectedAncestors,
+  effectiveUid,
+  posix,
+  removeExactCreated,
+  splitPath,
+} from './path-trust.js';
 
 export const CREDENTIAL_DIRECTORY_NAME = '.proceed-mcp-credentials';
 export const CREDENTIAL_FILE_NAME = 'telegram.token';
@@ -40,21 +47,8 @@ const CONFIGURATION_FILE_NAMES = new Set([
 ]);
 const PACKAGE_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
-const posix = () => process.platform !== 'win32';
-
-function effectiveUid() {
-  return typeof process.geteuid === 'function' ? process.geteuid() : null;
-}
-
-function splitPath(file) {
-  const { root } = parse(file);
-  return {
-    root,
-    rest: file
-      .slice(root.length)
-      .split(/[\\/]/)
-      .filter((name) => name !== ''),
-  };
+function credentialPathFailure(message, cause) {
+  return storageFailure(message, 'PROTECTION_UNVERIFIED', cause);
 }
 
 function canonicalStatePath(stateDir) {
@@ -123,63 +117,14 @@ async function inspect(path) {
 // Ancestors are inspected without following them: no symbolic link, junction or
 // other reparse component may redirect the credential, and an uninspectable
 // component is a refusal rather than a guess. A missing tail is allowed only
-// when the caller is about to create it.
+// when the caller is about to create it. The shared owner-only path rule is the
+// same one design section 4 applies to the trust publication.
 async function assertAncestors(file, { allowMissingTail }) {
-  const { root, rest } = splitPath(file);
-  let prefix = root;
-  let missingFrom = null;
-  for (const part of rest.slice(0, -1)) {
-    prefix = join(prefix, part);
-    const info = await inspect(prefix);
-    if (info === null) {
-      if (!allowMissingTail) {
-        throw storageFailure(
-          'the credential path does not resolve to one existing directory chain',
-          'PROTECTION_UNVERIFIED',
-        );
-      }
-      missingFrom ??= prefix;
-      continue;
-    }
-    if (missingFrom !== null) {
-      // An existing entry below a missing parent is not this attempt's object.
-      throw storageFailure(
-        'the credential path does not resolve to one contiguous directory chain',
-        'PROTECTION_UNVERIFIED',
-      );
-    }
-    if (info.isSymbolicLink()) {
-      throw storageFailure(
-        'the credential path contains a symbolic link or reparse point',
-        'PROTECTION_UNVERIFIED',
-      );
-    }
-    if (!info.isDirectory()) {
-      throw storageFailure(
-        'the credential path has a non-directory ancestor',
-        'PROTECTION_UNVERIFIED',
-      );
-    }
-    if (!ancestorProtects(info)) {
-      throw storageFailure(
-        `the credential ancestor ${prefix} could be replaced by another account`,
-        'PROTECTION_UNVERIFIED',
-      );
-    }
-  }
-}
-
-// An ancestor must not let an untrusted account replace the protected directory.
-// A directory without group/other write permission protects its children. A
-// writable system ancestor such as a temporary or shared root protects them only
-// with the sticky bit, which reserves rename/removal for the entry owner, the
-// directory owner and root. A system root is never required to belong to the
-// operator and its permissions are never altered.
-function ancestorProtects(info) {
-  if (!posix()) return true;
-  if ((info.mode & 0o022) === 0) return true;
-  if ((info.mode & 0o1000) === 0) return false;
-  return info.uid === 0 || info.uid === effectiveUid();
+  await assertProtectedAncestors(file, {
+    allowMissingTail,
+    label: 'the credential path',
+    fail: credentialPathFailure,
+  });
 }
 
 async function canonicalExisting(path) {
@@ -379,26 +324,6 @@ function withCode(error) {
     error.message = `${error.message} (${error.code})`;
   }
   return error;
-}
-
-// `true` only when the destination still resolves to the exact object this
-// attempt created. A missing or uninspectable destination, or a different
-// device/inode, is not proof of ownership over the current entry.
-async function removeExactCreated(file, created) {
-  if (created === null) return false;
-  let current;
-  try {
-    current = await lstat(file);
-  } catch {
-    return false;
-  }
-  if (current.dev !== created.dev || current.ino !== created.ino) return false;
-  try {
-    await unlink(file);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // Creates only missing dedicated credential directories and the new credential
