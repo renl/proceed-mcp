@@ -8,7 +8,10 @@ import {
   compositionRenderEvidence,
   compositionErrorCode,
   productReadyText,
+  compositionCurrentFrame,
 } from './support/harness-composition-readiness.mjs';
+
+const readyFrame = `2.2.5\n┃  ${productReadyText}  ┃`;
 
 test('composition stages its maintained runner and uses the actual public product entry/context', async () => {
   const payload = qualificationPayload(['src/harness/tui-entry.js', 'bin/proceed-mcp.js']);
@@ -76,9 +79,7 @@ test('render gate waits for delayed first frame, product rendering and public co
       exited: false,
       overflow: false,
       commandEligible: tick >= 4,
-      rendered: compositionRenderEvidence(
-        tick < 2 ? '' : tick < 3 ? '2.2.5' : `2.2.5 ${productReadyText}`,
-      ),
+      rendered: compositionRenderEvidence(tick < 2 ? '' : tick < 3 ? '2.2.5' : readyFrame),
     }),
     record: (value) => seen.push(value),
   });
@@ -106,7 +107,7 @@ test('failure paths refuse readiness and retain fixed nonsecret codes', async ()
         },
         record: () => {},
         observe: async () => ({
-          rendered: compositionRenderEvidence(`2.2.5 ${productReadyText}`),
+          rendered: compositionRenderEvidence(readyFrame),
           commandEligible: true,
           exited: false,
           overflow: false,
@@ -117,4 +118,54 @@ test('failure paths refuse readiness and retain fixed nonsecret codes', async ()
     );
   }
   assert.equal(compositionErrorCode(new Error('synthetic-secret')), 'CONTROL_ASSERTION_OR_IO');
+});
+
+test('ready toast reconstructs only exact adjacent aligned current rows', () => {
+  const row = (s) => `┃  ${s.padEnd(54)}┃`;
+  const wrapped = [
+    row('Proceed harness ready for qualification (owner'),
+    row('shared). Operator key fingerprint'),
+  ].join('\n');
+  assert.equal(compositionRenderEvidence(wrapped).productReadySeen, true);
+  assert.equal(compositionRenderEvidence(row(productReadyText)).productReadySeen, true);
+  const narrow = ['Proceed harness ready', 'for qualification (owner', 'shared).']
+    .map((s) => `┃  ${s.padEnd(25)}┃`)
+    .join('\n');
+  assert.equal(compositionRenderEvidence(narrow).productReadySeen, true);
+  for (const text of [
+    '',
+    productReadyText,
+    wrapped.replace('shared).', 'Shared).'),
+    wrapped.replace('shared).', ''),
+    wrapped.replace('\n', '\n\n'),
+    wrapped.replace('\n', '\n '),
+    wrapped.split('\n').reverse().join('\n'),
+    wrapped.replace('owner', 'own er'),
+    wrapped.replace('┃  shared', '|  shared'),
+  ])
+    assert.equal(compositionRenderEvidence(text).productReadySeen, false, text);
+  const paint = `\x1b[?2026h\x1b[2J\x1b[1;1H2.2.5\x1b[3;1H\x1b[32m${row('Proceed harness ready for qualification (owner')}\x1b[0m\x1b[4;1H${row('shared). Operator key fingerprint')}\x1b[?2026l`;
+  assert.equal(compositionRenderEvidence(compositionCurrentFrame(paint)).productReadySeen, true);
+  for (const update of [
+    '\x1b[?2026h\x1b[3;1H\x1b[2K\x1b[?2026l',
+    '\x1b[?2026h\x1b[4;4Hmissing\x1b[?2026l',
+    '\x1b[?2026h\x1b[2J\x1b[?2026l',
+    '\x1b[?2026h\x1b[3;1H' + row('Other toast') + '\x1b[?2026l',
+  ])
+    assert.equal(
+      compositionRenderEvidence(compositionCurrentFrame(paint + update)).productReadySeen,
+      false,
+    );
+  assert.equal(compositionCurrentFrame(paint.slice(0, -8)), '');
+  assert.equal(compositionCurrentFrame(paint + '\x1b[?2026h'), '');
+  // The retained run rendered the ready toast before the host footer, then
+  // overwrote it with a different toast. Never union readiness across frames.
+  const noFooter = paint.replace('2.2.5', '     ');
+  const laterFooter = '\x1b[?2026h\x1b[1;1H2.2.5\x1b[3;1H' + row('Other toast') + '\x1b[?2026l';
+  const first = compositionRenderEvidence(compositionCurrentFrame(noFooter));
+  const second = compositionRenderEvidence(compositionCurrentFrame(noFooter + laterFooter));
+  assert.equal(first.productReadySeen, true);
+  assert.equal(first.hostFrameSeen, false);
+  assert.equal(second.productReadySeen, false);
+  assert.equal(second.hostFrameSeen, true);
 });

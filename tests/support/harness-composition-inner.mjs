@@ -14,6 +14,7 @@ import {
   awaitCompositionRender,
   compositionRenderEvidence,
   compositionErrorCode,
+  compositionCurrentFrame,
 } from './harness-composition-readiness.mjs';
 import { assertPluginInventory } from './harness-plugin-inventory.mjs';
 import {
@@ -38,6 +39,8 @@ let errorCode,
 let productCleanup = 'UNRUN',
   hostExit = 'UNRUN';
 let commandEligibility = 'UNRUN';
+const keys = { ctrlG: 0, enter: 0, exit: 0 };
+let readinessFrame = '';
 await mkdir(evidence, { recursive: true });
 const progress = async (next) => {
   phase = next;
@@ -229,7 +232,7 @@ try {
             exited,
             overflow,
             commandEligible: runtime.commandEligible,
-            rendered: compositionRenderEvidence(plain(transcript)),
+            rendered: compositionRenderEvidence(compositionCurrentFrame(transcript.toString())),
           }),
           pause: () => delay(20),
           now: Date.now,
@@ -238,6 +241,8 @@ try {
             renderEvidence = observed;
           },
         });
+        readinessFrame = compositionCurrentFrame(transcript.toString());
+        keys.ctrlG++;
         child.stdin.write('\x07');
         await wait(
           'rendered-product-session-picker',
@@ -245,6 +250,7 @@ try {
             plain(transcript).includes('Select the Proceed session') &&
             plain(transcript).includes(runtime.session),
         );
+        keys.enter++;
         child.stdin.write('\r');
         await wait('rendered-product-empty-result', () =>
           plain(transcript).includes('selected session has no pending question'),
@@ -280,6 +286,7 @@ try {
         for (const fd of [helper.fd3, helper.fd4]) assert.match(fd, /^(socket|pipe):\[\d+\]$/);
         await wait('physical-helper-absence', async () => !(await exists('/proc/' + helper.pid)));
         await h.noWork();
+        keys.exit++;
         child.stdin.write('\x03');
         await wait('exact-product-PluginCleanup', () =>
           exists(join(evidence, 'composition-cleanup.json')),
@@ -326,7 +333,10 @@ try {
         // One exit key only, never a dialog answer or repeated open-command key.
         // A kill below is not evidence of the returned product Cleanup.
         if (child && !closed) {
-          if (!exited) child.stdin.write('\x03');
+          if (!exited) {
+            keys.exit++;
+            child.stdin.write('\x03');
+          }
           const cleanupEnd = Math.min(end, Date.now() + 15000);
           while (!closed && Date.now() < cleanupEnd) await delay(20);
         }
@@ -334,7 +344,7 @@ try {
         productCleanup = (await exists(join(evidence, 'composition-cleanup.json')))
           ? 'OBSERVED'
           : 'UNRUN';
-        renderEvidence = compositionRenderEvidence(plain(transcript));
+        renderEvidence = compositionRenderEvidence(compositionCurrentFrame(transcript.toString()));
         // Failure captures stay private unless the SAME complete raw scan passes.
         // Require host exit so exported bytes cannot race later terminal writes.
         if (closed && !overflow) {
@@ -383,6 +393,8 @@ try {
                 renderedEvidenceSeen: renderEvidence,
                 currentScreen: 'UNPROVEN',
                 commandEligibility,
+                keys,
+                readinessFrame,
                 productCleanup,
                 hostExit,
                 inventory,
@@ -422,6 +434,7 @@ await writeFile(
     renderedEvidenceSeen: renderEvidence,
     currentScreen: 'UNPROVEN',
     commandEligibility,
+    keys,
     hostLoadingInventory: 'UNRUN_WITHOUT_SCANNED_OBSERVATIONS',
     productCleanup,
     hostExit,
