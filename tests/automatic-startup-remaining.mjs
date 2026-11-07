@@ -479,6 +479,16 @@ export async function remainingCases(h) {
         } catch (error) {
           assert.equal(error.code, 'BROKER_STARTUP_TIMEOUT');
         }
+        await writeFile(
+          '/evidence/shared-probe-deadline.json',
+          JSON.stringify({
+            adopted,
+            elapsedMs: Math.round(performance.now() - start),
+            authenticatedReadyReceived: received.some(
+              (request) => request.path === '/v1/ready' && request.authenticated,
+            ),
+          }),
+        );
         assert.equal(adopted, false, 'expired TLS plus HTTP attempt must not adopt readiness');
         assert.ok(performance.now() - start <= 1100, 'one absolute budget includes TLS and HTTP');
       } finally {
