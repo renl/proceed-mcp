@@ -1,6 +1,10 @@
 // Public CLI dispatch (design section 2). One command group per checkpoint;
 // `doctor` remains a documented target that this build does not implement, so
 // it fails as an invalid command rather than pretending to check anything.
+import { join, resolve } from 'node:path';
+import { writeSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { TELEGRAM_TOKEN_ENV } from '../config/portable-config.js';
 import {
   CliError,
@@ -9,14 +13,39 @@ import {
   invalidArgument,
   storageFailure,
 } from '../errors.js';
-import { createLocalClient, LocalRequestError } from '../http/local-client.js';
-import { LOCAL_WAIT_TIMEOUT_MS } from '../http/local-client.js';
+import {
+  awaitSecureAvailability,
+  probeOccupancy,
+  spawnDetachedBroker,
+  startupConflict,
+  startupTimeout,
+  PROBE_TIMEOUT_MS,
+  STARTUP_BUDGET_MS,
+  STARTUP_DEADLINE_ENV,
+} from '../broker/availability.js';
+import { lifecycleEnvelopeProblem } from '../broker/lifecycle-envelope.js';
+import { startupToolFailure } from '../broker/startup-failure.js';
+import {
+  createSecureLocalClient,
+  secureExchange,
+  LocalRequestError,
+  SecureChannelError,
+} from '../http/local-client.js';
+import { LOCAL_WAIT_TIMEOUT_MS, LOCAL_REQUEST_TIMEOUT_MS } from '../http/local-client.js';
 import { createToolExecutor } from '../mcp/execution.js';
 import { createRegistrationBinding } from '../mcp/registration.js';
 import { runMcpServer } from '../mcp/server.js';
 import { startPortableRuntime } from '../broker/portable-runtime.js';
+import {
+  defaultCredentialFile,
+  loadCredentialFile,
+  provisionCredentialFile,
+  readTokenFromStdin,
+  validateCredentialFileOption,
+} from '../state/credential-file.js';
 import { readLocalCredential } from '../state/credentials.js';
 import { readOwnerCredential } from '../state/owner-credentials.js';
+import { readSecureOwnership } from '../state/ownership.js';
 import { resolveStateDir, statePaths } from '../state/paths.js';
 import { addOrigin, addOwner, initializeState, loadPortableConfiguration } from '../state/store.js';
 import { createTelegramClient } from '../telegram/client.js';
@@ -24,15 +53,21 @@ import { renderPortableHumanOutcome } from '../telegram/portable-render.js';
 import { PAIRING_CODE_PATTERN, isPlainObject, isUtcTimestamp } from '../util/values.js';
 import { parseArguments, requireOptions } from './args.js';
 
+const PACKAGE_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const TOKEN_FILE_OPTION = 'telegram-token-file';
+const STOP_BUDGET_MS = 30_000;
+
 const USAGE = [
   'proceed-mcp - Telegram approval broker for OpenCode V2 sessions',
   '',
   'Usage:',
   '  proceed-mcp init [--state-dir <directory>]',
   '  proceed-mcp owner add <owner_id> --label <label> [--state-dir <directory>]',
-  '  proceed-mcp serve [--state-dir <directory>]',
-  '  proceed-mcp pair [--state-dir <directory>]',
-  '  proceed-mcp mcp --owner <owner_id> [--state-dir <directory>]',
+  '  proceed-mcp telegram provision --token-stdin [--telegram-token-file <absolute-file>] [--state-dir <directory>]',
+  '  proceed-mcp serve [--state-dir <directory>] [--secure-local] [--telegram-token-file <absolute-file>]',
+  '  proceed-mcp pair [--state-dir <directory>] [--telegram-token-file <absolute-file>]',
+  '  proceed-mcp mcp --owner <owner_id> [--state-dir <directory>] [--telegram-token-file <absolute-file>]',
+  '  proceed-mcp stop [--state-dir <directory>]',
   '  proceed-mcp status [--request <request_id>] [--json] [--state-dir <directory>]',
   '  proceed-mcp retry <request_id> [--state-dir <directory>]',
   '  proceed-mcp origin add <origin_id> --url <url> --password-env <name> [--state-dir <directory>]',
@@ -43,16 +78,18 @@ const USAGE = [
   'with no path, query, fragment or credentials.',
   '',
   'The Telegram token is read from the environment, never from state or arguments.',
+  'For automatic startup, "telegram provision --token-stdin" writes the token once to a separate',
+  'owner-only credential file outside this repository and the state directory; only the broker reads it.',
+  'That file is not encrypted and other processes running as the same account can read it.',
+  '`mcp`, `pair`, `status` and `stop` require the secure local channel; a legacy HTTP broker must be',
+  'stopped through its own interface and restarted with `serve --secure-local` or provisioned automatic startup.',
   'This checkpoint runs portable schema 2 setup: init, owner add, pair, serve, mcp and status.',
   'Local waiting, Telegram question display and paired-human Approve, Reject and Respond are available. Respond text is instructions, not approval.',
   'Client and transport timeouts limit how long a waiting call can wait, and a timeout does not cancel the durable request.',
   'A lost waiting call does not cancel the durable request.',
   'MCP Events are unsupported in this build, and automatic resumption after a timeout is unavailable.',
-  '`mcp` prepares real request authority through the running broker; request_approval creates',
-  'or replays one request and waits for its resolution. When the token is set, `serve` consumes',
-  'private-chat pairing updates and sends each approval question to the paired chat.',
-  '`pair` obtains a one-use five-minute pairing code from the running broker; `retry`',
-  'reports its operation as unavailable; `origin add` refuses schema 2 state.',
+  '`mcp` starts or reuses one shared local broker when the state is safely unowned; closing the',
+  'adapter never stops that broker. `stop` authenticates and matches the instance before a graceful stop.',
   '`doctor` is a documented target that this build does not implement.',
   '',
   'Exit codes: 0 completed, 2 invalid arguments or configuration, 3 unavailable prerequisite,',
@@ -64,6 +101,46 @@ function commandStatePaths(options, env) {
   return statePaths(resolveStateDir({ option: options.get('state-dir'), env }));
 }
 
+// The automatic launcher hands its child one absolute instant (design section 5).
+// A foreground invocation carries none and keeps its open-ended lifetime, so this
+// is a private propagation input rather than a public option.
+function startupDeadlineFrom(env) {
+  const raw = env[STARTUP_DEADLINE_ENV];
+  if (typeof raw !== 'string' || raw === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+// One budget: every prerequisite awaited after this point is charged to the same
+// original attempt, never to a fresh child or probe.
+function remainingStartupBudget(startedAt) {
+  return STARTUP_BUDGET_MS - (performance.now() - startedAt);
+}
+
+// Design section 5 requires a startup-dependent call to return by its deadline.
+// A local prerequisite read cannot be cancelled, so the standalone command ends at
+// the deadline instead of waiting past it; nothing has been launched, owned or
+// written at that point.
+function abandonedStartupTimeout() {
+  const error = startupTimeout();
+  error.expiredWhilePending = true;
+  return error;
+}
+
+async function withinStartupBudget(startedAt, work) {
+  const remaining = remainingStartupBudget(startedAt);
+  if (remaining <= 0) throw startupTimeout();
+  let timer;
+  const expiry = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(abandonedStartupTimeout()), remaining);
+  });
+  try {
+    return await Promise.race([work(), expiry]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function noPositionals(positionals, command) {
   if (positionals.length > 0) {
     throw invalidArgument(
@@ -72,18 +149,87 @@ function noPositionals(positionals, command) {
   }
 }
 
-// A missing or unreachable broker is an unavailable prerequisite, not a crash.
-function asCliFailure(error) {
-  if (error instanceof CliError) return error;
-  if (error instanceof LocalRequestError) {
-    return blockedPrerequisite(
-      'the broker is not reachable; start "proceed-mcp serve" and try again',
-      'BROKER_UNAVAILABLE',
+// Options carry paths, never token values. A relative or ambiguous source is
+// invalid input before any state is read, so a missing state directory and a
+// malformed option stay distinguishable classifications. Foreground serving is
+// the only mode where a file option plus a nonempty environment token is
+// ambiguous; automatic startup ignores an inherited token entirely.
+function tokenFileFrom(options, env, { conflict = false } = {}) {
+  const requested = options.get(TOKEN_FILE_OPTION);
+  if (requested === undefined) return { file: undefined };
+  const file = validateCredentialFileOption(requested);
+  const envToken = env[TELEGRAM_TOKEN_ENV];
+  if (conflict && envToken !== undefined && envToken !== '') {
+    throw invalidArgument(
+      `--${TOKEN_FILE_OPTION} cannot be combined with ${TELEGRAM_TOKEN_ENV}; choose one credential source`,
     );
+  }
+  return { file };
+}
+
+// A secure-admission failure is never reported as an ordinary transport error: an
+// established listener that cannot prove the expected channel is a conflict.
+function channelCliFailure(error) {
+  if (error instanceof SecureChannelError) {
+    if (error.code === 'BROKER_INSTANCE_CONFLICT') {
+      return blockedPrerequisite(
+        'the configured listener could not prove the expected secure local channel (BROKER_INSTANCE_CONFLICT)',
+        'BROKER_INSTANCE_CONFLICT',
+      );
+    }
+    return blockedPrerequisite('the secure broker is not reachable', 'BROKER_UNAVAILABLE');
   }
   return error;
 }
 
+function legacyUpgrade() {
+  return blockedPrerequisite(
+    'the running broker uses the legacy local channel; stop it through its own Ctrl+C or operator interface, then restart with "serve --secure-local" or provision the token file for automatic startup (BROKER_INSTANCE_CONFLICT)',
+    'BROKER_INSTANCE_CONFLICT',
+  );
+}
+
+async function secureRecordOrThrow(lockFile) {
+  const record = await readSecureOwnership(lockFile);
+  if (record.absent === true) {
+    throw blockedPrerequisite(
+      'no broker is running for this state directory; start "proceed-mcp serve" or use automatically started startup',
+      'BROKER_UNAVAILABLE',
+    );
+  }
+  if (record.schemaVersion === 1) throw legacyUpgrade();
+  return record;
+}
+
+// Broker-dependent work waits for the one shared availability attempt; a failed
+// attempt becomes the documented tool-level prerequisite rather than an approval
+// or a fabricated outcome. The CLI classification is kept on the local error so
+// the adapter's fixed mapping still publishes the safe command template; the
+// underlying exception, child or TLS text is never forwarded.
+function gateClient(client, availability) {
+  return {
+    async request(...args) {
+      try {
+        await availability;
+      } catch (error) {
+        throw new LocalRequestError(
+          error?.code ?? 'BROKER_UNAVAILABLE',
+          startupToolFailure(error).message,
+        );
+      }
+      return client.request(...args);
+    },
+  };
+}
+
+function packageEntryPoint() {
+  const entry = process.argv[1];
+  if (typeof entry === 'string' && entry !== '') return resolve(entry);
+  return join(PACKAGE_ROOT, 'bin', 'proceed-mcp.js');
+}
+
+// A missing or unreachable broker stays an unavailable prerequisite; a secure
+// admission failure is classified by the caller that knows the channel context.
 function failureFromResponse(response) {
   const code = response.body?.error?.code ?? 'BROKER_REJECTED';
   const message = response.body?.error?.message ?? 'the broker rejected the request';
@@ -107,12 +253,6 @@ function unavailableResponse(response) {
     throw blockedPrerequisite(error.message, error.code);
   }
   throw failureFromResponse(response);
-}
-
-function controlClient(paths, config) {
-  return readLocalCredential(paths.controlCredentialFile, 'the control credential').then((token) =>
-    createLocalClient({ port: config.broker.port, token }),
-  );
 }
 
 // A 201 is the only pairing success a consumer may act on, and its two fields are
@@ -237,49 +377,171 @@ function waitForSignal() {
 }
 
 async function runServe(argv, { stdout, stderr, env }) {
-  const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir'] });
+  const { positionals, options, flags } = parseArguments(argv, {
+    valueOptions: ['state-dir', TOKEN_FILE_OPTION],
+    flagOptions: ['secure-local'],
+  });
   noPositionals(positionals, 'serve');
 
+  const { file } = tokenFileFrom(options, env, { conflict: true });
   const paths = commandStatePaths(options, env);
   const config = await loadPortableConfiguration(paths);
-  // The environmental token selects the fixed-origin client; no token means no
-  // Telegram traffic at all and keeps local-only readiness.
-  const token = env[TELEGRAM_TOKEN_ENV];
-  const telegram = token === undefined || token === '' ? null : createTelegramClient({ token });
+  const logger = (message) => stderr.write(`proceed-mcp: ${message}\n`);
+
+  // Without either new option this remains the legacy foreground HTTP listener
+  // with schema-1 ownership and environment-only token input. It gains neither a
+  // secure channel nor a lifecycle route.
+  if (file === undefined && !flags.has('secure-local')) {
+    const token = env[TELEGRAM_TOKEN_ENV];
+    const telegram = token === undefined || token === '' ? null : createTelegramClient({ token });
+    const runtime = await startPortableRuntime({ paths, config, telegram, logger });
+    stdout.write(`proceed-mcp: broker ready on http://127.0.0.1:${runtime.port}\n`);
+    stdout.write(`proceed-mcp: state directory ${paths.stateDir}\n`);
+    // Local readiness does not depend on the token: one diagnostic after success only.
+    if (telegram === null) {
+      stderr.write(
+        `proceed-mcp: Telegram unavailable: set ${TELEGRAM_TOKEN_ENV} and restart serve; local broker only\n`,
+      );
+    }
+    await Promise.race([waitForSignal(), runtime.stopped]);
+    await runtime.stop();
+    stdout.write('proceed-mcp: stopped\n');
+    return EXIT_CODE.OK;
+  }
+
+  // Secure file mode loads the credential here, before ownership, so an unsafe
+  // file refuses without creating any ownership record. Secure foreground mode
+  // needs no token file and keeps its own environment input. An automatic child
+  // also refuses to begin when its caller's original budget has already expired.
+  const startupDeadlineAt = startupDeadlineFrom(env);
+  if (startupDeadlineAt !== null && Date.now() >= startupDeadlineAt) throw startupTimeout();
+  const token =
+    file === undefined
+      ? env[TELEGRAM_TOKEN_ENV] === undefined || env[TELEGRAM_TOKEN_ENV] === ''
+        ? null
+        : env[TELEGRAM_TOKEN_ENV]
+      : await loadCredentialFile({ file, stateDir: paths.stateDir });
+  const telegram = token === null ? null : createTelegramClient({ token });
   const runtime = await startPortableRuntime({
     paths,
     config,
     telegram,
-    logger: (message) => stderr.write(`proceed-mcp: ${message}\n`),
+    logger,
+    secure: true,
+    startupDeadlineAt,
   });
 
-  stdout.write(`proceed-mcp: broker ready on http://127.0.0.1:${runtime.port}\n`);
+  stdout.write(`proceed-mcp: broker ready on https://127.0.0.1:${runtime.port}\n`);
   stdout.write(`proceed-mcp: state directory ${paths.stateDir}\n`);
-  // Local readiness does not depend on the token: one diagnostic after success only.
   if (telegram === null) {
-    stderr.write(
-      `proceed-mcp: Telegram unavailable: set ${TELEGRAM_TOKEN_ENV} and restart serve; local broker only\n`,
-    );
+    stderr.write(`proceed-mcp: Telegram unavailable: no token was supplied; local broker only\n`);
   }
-  await waitForSignal();
+  // An authenticated stop drains the same runtime as Ctrl+C, so either ending
+  // completes the same graceful stop.
+  await Promise.race([waitForSignal(), runtime.stopped]);
   await runtime.stop();
   stdout.write('proceed-mcp: broker stopped\n');
   return EXIT_CODE.OK;
 }
 
-async function runPair(argv, { stdout, env }) {
-  const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir'] });
-  noPositionals(positionals, 'pair');
+// Explicit, create-only provisioning (design sections 1-2). The token arrives
+// only through non-TTY stdin, no broker is started, and the destination is never
+// overwritten, truncated, deleted or read for comparison.
+async function runProvision(argv, { stdout, stdin, env }) {
+  const { positionals, options, flags } = parseArguments(argv, {
+    valueOptions: ['state-dir', TOKEN_FILE_OPTION],
+    flagOptions: ['token-stdin'],
+  });
+  noPositionals(positionals, 'telegram provision');
+  if (!flags.has('token-stdin')) {
+    throw invalidArgument('telegram provision requires --token-stdin');
+  }
+  const requested = options.get(TOKEN_FILE_OPTION);
+  if (requested !== undefined) validateCredentialFileOption(requested);
 
   const paths = commandStatePaths(options, env);
-  const config = await loadPortableConfiguration(paths);
-  const client = await controlClient(paths, config);
+  await loadPortableConfiguration(paths);
+  const file =
+    requested === undefined ? defaultCredentialFile({ stateDir: paths.stateDir }) : requested;
+  const token = await readTokenFromStdin(stdin);
+  await provisionCredentialFile({ file, stateDir: paths.stateDir, token });
+  stdout.write(
+    `Provisioned the automatic-startup Telegram credential at ${file} (value not shown).\n` +
+      'This file is owner-only, not encrypted, and readable by other processes using the same account.\n' +
+      'The broker alone loads it; do not pass the token to the MCP adapter environment.\n',
+  );
+  return EXIT_CODE.OK;
+}
+
+async function runTelegramCommand(argv, context) {
+  const [subcommand, ...rest] = argv;
+  if (subcommand !== 'provision') {
+    throw invalidArgument('telegram supports only "provision"');
+  }
+  return runProvision(rest, context);
+}
+
+// Launch the installed broker entry point from this same package using the
+// current runtime executable and the selected nonsecret credential path. The
+// child is the only process that reads that file; automatic startup never selects
+// it from an inherited environment token, and it receives the caller's remaining
+// absolute startup budget instead of starting a fresh one.
+function launchAutomaticBroker({ paths, credentialFile, deadlineAt }) {
+  spawnDetachedBroker({
+    executable: packageEntryPoint(),
+    args: ['serve', '--telegram-token-file', credentialFile, '--state-dir', paths.stateDir],
+    cwd: PACKAGE_ROOT,
+    deadlineAt,
+  });
+}
+
+async function runPair(argv, { stdout, env }) {
+  const { positionals, options } = parseArguments(argv, {
+    valueOptions: ['state-dir', TOKEN_FILE_OPTION],
+  });
+  noPositionals(positionals, 'pair');
+
+  const attemptStart = performance.now();
+  const { file, paths, config, control } = await withinStartupBudget(attemptStart, async () => {
+    const { file } = tokenFileFrom(options, env);
+    const paths = commandStatePaths(options, env);
+    const config = await loadPortableConfiguration(paths);
+    const control = await readLocalCredential(
+      paths.controlCredentialFile,
+      'the control credential',
+    );
+    return { file, paths, config, control };
+  });
+
+  // Design sections 1 and 3: pairing ensures the same shared broker availability
+  // before the control-authenticated challenge, so an initial pairing needs no
+  // manual broker terminal. A secure foreground broker is reused without a token
+  // file, and a launch candidate still races on the exclusive ownership record.
+  const record = await awaitSecureAvailability({
+    lockFile: paths.brokerLockFile,
+    port: config.broker.port,
+    token: control,
+    budgetMs: remainingStartupBudget(attemptStart),
+    launch: ({ deadlineAt }) =>
+      launchAutomaticBroker({
+        paths,
+        credentialFile: file ?? defaultCredentialFile({ stateDir: paths.stateDir }),
+        deadlineAt,
+      }),
+  });
 
   let response;
   try {
-    response = await client.request('POST', '/v1/pairing', {});
+    response = await secureExchange({
+      lock: record,
+      token: control,
+      method: 'POST',
+      path: '/v1/pairing',
+      body: {},
+      timeoutMs: LOCAL_REQUEST_TIMEOUT_MS,
+    });
   } catch (error) {
-    throw asCliFailure(error);
+    throw channelCliFailure(error);
   }
   // The challenge is the operator's own new setup material, written only after the
   // broker's committed response: no partial code and no paired-success claim.
@@ -288,42 +550,79 @@ async function runPair(argv, { stdout, env }) {
   return EXIT_CODE.OK;
 }
 
-// Design section 2: one stdio MCP server for the operator-selected transport
+// Design section 3: one stdio MCP server for the operator-selected transport
 // principal. Only schema-2 owner state is read, and only that owner's protected
 // credential; no harness URL, password, host admission or proprietary metadata is
 // needed to serve the catalog, and stdout is left to protocol messages alone. Tool
 // execution uses that credential against the configured loopback broker port, so
-// preparation reserves real authority and the waiting call waits on a longer deadline.
+// preparation reserves real authority and the waiting call waits on a longer
+// deadline. One availability attempt starts at adapter launch: it never blocks
+// initialization or catalog traffic, and broker-dependent calls await its shared
+// result. The adapter passes only the nonsecret credential path to a detached
+// broker child; it never opens that file.
 async function runMcp(argv, { env }) {
-  const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir', 'owner'] });
+  const { positionals, options } = parseArguments(argv, {
+    valueOptions: ['state-dir', 'owner', TOKEN_FILE_OPTION],
+  });
   noPositionals(positionals, 'mcp');
   requireOptions(options, ['owner']);
 
-  const paths = commandStatePaths(options, env);
-  const config = await loadPortableConfiguration(paths);
-  const ownerId = options.get('owner');
-  const owner = config.owners.find((entry) => entry.owner_id === ownerId);
-  if (owner === undefined) {
-    throw invalidArgument(
-      `owner ${ownerId} is not configured; run "proceed-mcp owner add ${ownerId} --label <label>"`,
+  // The one availability attempt starts at adapter launch: prerequisites, launch
+  // and adoption all share this original budget.
+  const attemptStart = performance.now();
+  const { file, paths, config, credential } = await withinStartupBudget(attemptStart, async () => {
+    const { file } = tokenFileFrom(options, env);
+    const paths = commandStatePaths(options, env);
+    const config = await loadPortableConfiguration(paths);
+    const ownerId = options.get('owner');
+    const owner = config.owners.find((entry) => entry.owner_id === ownerId);
+    if (owner === undefined) {
+      throw invalidArgument(
+        `owner ${ownerId} is not configured; run "proceed-mcp owner add ${ownerId} --label <label>"`,
+      );
+    }
+    // Fail closed when the principal has no usable authority: a missing or
+    // damaged owner credential is a startup blocker. The value authorizes broker
+    // calls only, so it is never logged, returned or written anywhere.
+    const credential = await readOwnerCredential(
+      paths.ownerCredentialFile(owner.owner_id),
+      owner.owner_id,
     );
-  }
-
-  // Fail closed when the principal has no usable authority: a missing or damaged
-  // owner credential is a startup blocker. The value authorizes broker calls only,
-  // so it is never logged, returned or written anywhere.
-  const credential = await readOwnerCredential(
-    paths.ownerCredentialFile(owner.owner_id),
-    owner.owner_id,
-  );
-  const client = createLocalClient({ port: config.broker.port, token: credential });
-  // The waiting call keeps its own longer deadline, because one broker poll
-  // turnover is slower than an ordinary management exchange.
-  const waitClient = createLocalClient({
+    return { file, paths, config, credential };
+  });
+  const credentialFile = file ?? defaultCredentialFile({ stateDir: paths.stateDir });
+  const controller = new AbortController();
+  const availability = awaitSecureAvailability({
+    lockFile: paths.brokerLockFile,
     port: config.broker.port,
     token: credential,
-    timeoutMs: LOCAL_WAIT_TIMEOUT_MS,
+    budgetMs: remainingStartupBudget(attemptStart),
+    signal: controller.signal,
+    launch: ({ deadlineAt }) => launchAutomaticBroker({ paths, credentialFile, deadlineAt }),
   });
+  // A failed attempt is reported through broker-dependent calls, never as a
+  // process crash during initialization.
+  availability.catch(() => {});
+
+  const client = gateClient(
+    createSecureLocalClient({
+      port: config.broker.port,
+      lockFile: paths.brokerLockFile,
+      token: credential,
+    }),
+    availability,
+  );
+  // The waiting call keeps its own longer deadline, because one broker poll
+  // turnover is slower than an ordinary management exchange.
+  const waitClient = gateClient(
+    createSecureLocalClient({
+      port: config.broker.port,
+      lockFile: paths.brokerLockFile,
+      token: credential,
+      timeoutMs: LOCAL_WAIT_TIMEOUT_MS,
+    }),
+    availability,
+  );
 
   // The executor owns this adapter's private registration: it is created lazily by
   // the first implemented call, renewed while the adapter lives, and released here.
@@ -341,10 +640,14 @@ async function runMcp(argv, { env }) {
       // executor selects eligibility, and the report never delays or repeats this result.
       onResultWritten: (message, response) => executor.reportWritten(response.result),
       onInputClosed: () => {
+        // EOF abandons discovery immediately; a launched detached candidate keeps
+        // its own finite startup responsibility.
+        controller.abort();
         void executor.close();
       },
     });
   } finally {
+    controller.abort();
     await executor.close();
   }
   return EXIT_CODE.OK;
@@ -431,13 +734,20 @@ async function runStatus(argv, { stdout, env }) {
 
   const paths = commandStatePaths(options, env);
   const config = await loadPortableConfiguration(paths);
-  const client = await controlClient(paths, config);
+  const control = await readLocalCredential(paths.controlCredentialFile, 'the control credential');
+  const record = await secureRecordOrThrow(paths.brokerLockFile);
 
   let response;
   try {
-    response = await client.request('GET', '/v1/status');
+    response = await secureExchange({
+      lock: record,
+      token: control,
+      method: 'GET',
+      path: '/v1/status',
+      timeoutMs: LOCAL_REQUEST_TIMEOUT_MS,
+    });
   } catch (error) {
-    throw asCliFailure(error);
+    throw channelCliFailure(error);
   }
   if (response.status !== 200) throw failureFromResponse(response);
 
@@ -472,21 +782,153 @@ async function runRetry(argv, { env }) {
   }
 
   const paths = commandStatePaths(options, env);
-  const config = await loadPortableConfiguration(paths);
-  const client = await controlClient(paths, config);
+  await loadPortableConfiguration(paths);
+  const control = await readLocalCredential(paths.controlCredentialFile, 'the control credential');
+  const record = await secureRecordOrThrow(paths.brokerLockFile);
 
   let response;
   try {
-    response = await client.request(
-      'POST',
-      `/v1/requests/${encodeURIComponent(positionals[0])}/retry`,
-      {},
-    );
+    response = await secureExchange({
+      lock: record,
+      token: control,
+      method: 'POST',
+      path: `/v1/requests/${encodeURIComponent(positionals[0])}/retry`,
+      body: {},
+      timeoutMs: LOCAL_REQUEST_TIMEOUT_MS,
+    });
   } catch (error) {
-    throw asCliFailure(error);
+    throw channelCliFailure(error);
   }
   unavailableResponse(response);
   return EXIT_CODE.OK;
+}
+
+// Explicit operator stop (design section 6): authenticate and match the instance,
+// then request graceful stop. It never signals a recorded PID, never sends a
+// control Bearer to establish listener identity, and treats only a definitely
+// absent record plus an explicit connection refusal as an idempotent success.
+async function runStop(argv, { stdout, env }) {
+  const { positionals, options } = parseArguments(argv, { valueOptions: ['state-dir'] });
+  noPositionals(positionals, 'stop');
+
+  // Design section 6: the whole 30000 ms command budget covers prerequisites and
+  // the final success check, not just the shutdown exchange. Every phase is
+  // admitted only while real time remains, and no phase gets a fresh clamp that
+  // would hide an expired caller budget.
+  const deadline = performance.now() + STOP_BUDGET_MS;
+  const remaining = () => deadline - performance.now();
+  const ensureBudget = () => {
+    if (remaining() <= 0) {
+      throw blockedPrerequisite(
+        'the broker stop was not confirmed in time; ownership is preserved (BROKER_STOP_TIMEOUT)',
+        'BROKER_STOP_TIMEOUT',
+      );
+    }
+  };
+
+  const paths = commandStatePaths(options, env);
+  ensureBudget();
+  const config = await loadPortableConfiguration(paths);
+  ensureBudget();
+  const control = await readLocalCredential(paths.controlCredentialFile, 'the control credential');
+  ensureBudget();
+
+  const record = await readSecureOwnership(paths.brokerLockFile);
+  // An uncancellable read that settles after the deadline is not success and may
+  // not admit the occupancy probe.
+  ensureBudget();
+  if (record.absent === true) {
+    const probe = await probeOccupancy(config.broker.port, {
+      timeoutMs: Math.min(PROBE_TIMEOUT_MS, Math.max(1, remaining())),
+    });
+    ensureBudget();
+    if (probe === 'refused') {
+      stdout.write('No broker is running for this state directory.\n');
+      return EXIT_CODE.OK;
+    }
+    throw startupConflict(
+      'the configured port is occupied without a matching ownership record (BROKER_INSTANCE_CONFLICT)',
+    );
+  }
+  if (record.schemaVersion === 1) throw legacyUpgrade();
+
+  // Readiness is admitted over the secure channel first; a stop never sends a
+  // control credential to an endpoint that has not proven the channel.
+  let readiness;
+  try {
+    readiness = await secureExchange({
+      lock: record,
+      token: control,
+      method: 'GET',
+      path: '/v1/ready',
+      timeoutMs: Math.min(1000, Math.max(1, remaining())),
+      maxBytes: 16_384,
+    });
+  } catch (error) {
+    throw channelCliFailure(error);
+  }
+  ensureBudget();
+  if (readiness.status !== 200 || lifecycleEnvelopeProblem(readiness.body, record) !== null) {
+    throw startupConflict(
+      'the broker did not confirm matching readiness (BROKER_INSTANCE_CONFLICT)',
+    );
+  }
+
+  let accepted;
+  try {
+    accepted = await secureExchange({
+      lock: record,
+      token: control,
+      method: 'POST',
+      path: '/v1/shutdown',
+      body: { instance: record.instance },
+      timeoutMs: Math.max(1, remaining()),
+      maxBytes: 16_384,
+    });
+  } catch (error) {
+    throw channelCliFailure(error);
+  }
+  // Expiry while the shutdown exchange was pending refuses the result instead of
+  // treating a late 202 as an accepted stop.
+  ensureBudget();
+  if (accepted.status === 409) {
+    throw startupConflict(
+      'the broker instance changed before stop was accepted (BROKER_INSTANCE_CONFLICT)',
+    );
+  }
+  if (accepted.status !== 202) throw failureFromResponse(accepted);
+  if (
+    accepted.body?.schema_version !== 1 ||
+    accepted.body?.instance !== record.instance ||
+    accepted.body?.stopping !== true
+  ) {
+    throw startupConflict(
+      'the broker returned no supported stop acceptance (BROKER_INSTANCE_CONFLICT)',
+    );
+  }
+
+  // A 202 means stop accepted, not complete: wait for the exact record to
+  // disappear and the matching listener to cease, without force-killing anything.
+  for (;;) {
+    // The polling delay may consume the last of the budget: a continuation that
+    // starts after expiry cannot open another protected read.
+    ensureBudget();
+    const current = await readSecureOwnership(paths.brokerLockFile);
+    ensureBudget();
+    if (current.absent === true) {
+      const probe = await probeOccupancy(config.broker.port, {
+        timeoutMs: Math.min(PROBE_TIMEOUT_MS, Math.max(1, remaining())),
+      });
+      // An expired observation is not an idempotent success.
+      ensureBudget();
+      if (probe === 'refused') {
+        stdout.write('Broker stopped.\n');
+        return EXIT_CODE.OK;
+      }
+    }
+    ensureBudget();
+    await delay(Math.min(100, Math.max(1, remaining())));
+  }
 }
 
 async function dispatch(argv, context) {
@@ -503,9 +945,11 @@ async function dispatch(argv, context) {
   if (command === 'init') return runInit(rest, context);
   if (command === 'owner') return runOwnerCommand(rest, context);
   if (command === 'origin') return runOriginCommand(rest, context);
+  if (command === 'telegram') return runTelegramCommand(rest, context);
   if (command === 'serve') return runServe(rest, context);
   if (command === 'pair') return runPair(rest, context);
   if (command === 'mcp') return runMcp(rest, context);
+  if (command === 'stop') return runStop(rest, context);
   if (command === 'status') return runStatus(rest, context);
   if (command === 'retry') return runRetry(rest, context);
 
@@ -514,16 +958,34 @@ async function dispatch(argv, context) {
   );
 }
 
-export async function run(argv, io = {}) {
+export async function run(argv, io) {
+  // Only the standalone executable has no injected io; an embedding caller always
+  // supplies streams and receives the exit code instead.
+  const standalone = io === undefined;
+  io = io ?? {};
   const stdout = io.stdout ?? process.stdout;
   const stderr = io.stderr ?? process.stderr;
   const env = io.env ?? process.env;
+  const stdin = io.stdin ?? process.stdin;
 
   try {
-    return await dispatch(argv, { stdout, stderr, env });
+    return await dispatch(argv, { stdout, stderr, env, stdin });
   } catch (error) {
     if (error instanceof CliError) {
-      stderr.write(`proceed-mcp: ${error.message}\n`);
+      const message = `proceed-mcp: ${error.message}\n`;
+      if (standalone && error.expiredWhilePending === true) {
+        // The documented startup deadline is stricter than an uncancellable pending
+        // prerequisite read. No detached process, ownership record or secret write
+        // exists at this point, so the standalone command ends exactly at its
+        // deadline with a synchronous diagnostic rather than waiting past it.
+        try {
+          writeSync(2, message);
+        } catch {
+          /* stderr is unavailable; the exit code still classifies the failure */
+        }
+        process.exit(error.exitCode);
+      }
+      stderr.write(message);
       return error.exitCode;
     }
     stderr.write(`proceed-mcp: unexpected failure: ${error?.message ?? 'unknown error'}\n`);

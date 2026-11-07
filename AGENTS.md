@@ -27,6 +27,7 @@ These are editing roles, not published human accountability. Each capability has
 | `telegram-approval` | [spec](openspec/specs/telegram-approval/spec.md) | @product-manager; primary spec author |
 | `opencode-session-continuation` | [spec](openspec/specs/opencode-session-continuation/spec.md) | @product-manager; primary spec author; retained path, portable meaning |
 | `npm-distribution` | [spec](openspec/specs/npm-distribution/spec.md) | @product-manager; primary spec author |
+| `proceed-agent-guidance` | `openspec/specs/proceed-agent-guidance/spec.md` | @product-manager; primary spec author |
 | Current specs | [openspec/specs](openspec/specs/) | Capability authors listed above |
 | Historical tasks and evidence | [tasks.md](openspec/changes/archive/2026-11-05-add-telegram-approval-opencode-v2/tasks.md) | @sdet-engineer; slice details and correction history |
 

@@ -12,6 +12,7 @@
 // decision, caller receipt or acknowledgement. Closing stdin starts cleanup
 // immediately: submitted work that has not begun never reaches the broker.
 import { createInterface } from 'node:readline';
+import manifest from '../../package.json' with { type: 'json' };
 import {
   CLIENT_REQUEST_ID_PATTERN,
   DECISION_ID_PATTERN,
@@ -22,7 +23,9 @@ import {
 
 export const MCP_PROTOCOL_VERSION = '2025-11-25';
 export const SERVER_NAME = 'proceed-mcp';
-export const SERVER_VERSION = '0.1.0-preview.1';
+// Advertised identity is the manifest this build was packaged from, so source
+// checkout and installed bytes report the same candidate version.
+export const SERVER_VERSION = manifest.version;
 
 // JSON Schema patterns reuse the format identifiers the broker validates, so the
 // catalog cannot advertise a shape the product would not accept.

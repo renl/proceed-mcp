@@ -12,6 +12,12 @@ if (process.platform === 'win32') process.env.PATHEXT = '.EXE';
 process.env.PROCEED_TELEGRAM_BOT_TOKEN = 'offline-synthetic-token';
 const request = http.request.bind(http);
 http.request = (url, options, callback) => {
+  // HTTP assembly over an already authenticated TLS socket uses an options object.
+  // Keep loopback-only admission. This does not replace or bypass TLS admission.
+  if (url && typeof url === 'object' && !(url instanceof URL)) {
+    if (url.host !== '127.0.0.1' || !url.agent) throw Error('offline loopback socket required');
+    return request(url, options, callback);
+  }
   const address = new URL(url);
   if (address.hostname !== '127.0.0.1' || address.protocol !== 'http:') {
     throw Error('offline harness forbids nonloopback HTTP');
@@ -20,8 +26,10 @@ http.request = (url, options, callback) => {
 };
 https.request = (url, options, callback) => {
   const address = new URL(url);
-  if (address.origin !== 'https://api.telegram.org'
-    || !/^\/botoffline-synthetic-token\/[A-Za-z]+$/.test(address.pathname)) {
+  if (
+    address.origin !== 'https://api.telegram.org' ||
+    !/^\/botoffline-synthetic-token\/[A-Za-z]+$/.test(address.pathname)
+  ) {
     throw Error('offline harness forbids external HTTPS');
   }
   return request(`${target}/${address.pathname.split('/').at(-1)}`, options, callback);
