@@ -158,16 +158,19 @@ async function secureRecordOrThrow(lockFile) {
 
 // Broker-dependent work waits for the one shared availability attempt; a failed
 // attempt becomes the documented tool-level prerequisite rather than an approval
-// or a fabricated outcome. Only fixed classifications and actionable command
-// templates are published, so a legacy listener still names the safe restart.
+// or a fabricated outcome. The CLI classification is kept on the local error so
+// the adapter's fixed mapping still publishes the safe command template; the
+// underlying exception, child or TLS text is never forwarded.
 function gateClient(client, availability) {
   return {
     async request(...args) {
       try {
         await availability;
       } catch (error) {
-        const failure = startupToolFailure(error);
-        throw new LocalRequestError(failure.code, failure.message);
+        throw new LocalRequestError(
+          error?.code ?? 'BROKER_UNAVAILABLE',
+          startupToolFailure(error).message,
+        );
       }
       return client.request(...args);
     },
