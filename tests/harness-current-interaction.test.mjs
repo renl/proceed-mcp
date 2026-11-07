@@ -1,9 +1,11 @@
 // TEST ONLY. Native interaction logic, not rendered UI, key-loader or wire proof.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
 import { registerHooks } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertIdentityMessage } from './support/harness-navigation-observation.mjs';
 
 test('current interaction submits its captured Reject while replaced and cleaned continuations are inert', async () => {
   const calls = [];
@@ -62,9 +64,12 @@ test('current interaction submits its captured Reject while replaced and cleaned
     toasts = [],
     pending = [];
   let commands, cleanup;
+  const renderer = Object.assign(new EventEmitter(), { width: 100, height: 50 });
+  const queries = [];
   const root = fileURLToPath(new URL('../', import.meta.url));
   const context = {
     app: { version: '2.2.5' },
+    renderer,
     options: {
       state_dir: join(root, '.scratch/current/state'),
       harness_id: 'qualification',
@@ -79,7 +84,10 @@ test('current interaction submits its captured Reject while replaced and cleaned
     data: {
       session: {
         list: () => [{ id: 'current-session', title: 'Current session' }],
-        get: () => ({ id: 'current-session' }),
+        get: (id) => {
+          queries.push(id);
+          return { id: 'current-session', title: 'Current session' };
+        },
       },
     },
     ui: {
@@ -89,6 +97,9 @@ test('current interaction submits its captured Reject while replaced and cleaned
         },
       },
       dialog: {
+        confirm(options) {
+          return new Promise((resolve) => dialogs.push({ options, resolve }));
+        },
         select(options) {
           return new Promise((resolve) => dialogs.push({ options, resolve }));
         },
@@ -107,10 +118,28 @@ test('current interaction submits its captured Reject while replaced and cleaned
     assert.equal(typeof cleanup, 'function');
     const open = commands.find((c) => c.id === 'proceed.harness.open').run;
     const start = async () => {
+      const beforeCalls = calls.length;
+      const beforeReads = queries.length;
       pending.push(open());
       dialogs.at(-1).resolve('current-session');
       await flush();
+      const confirmation = dialogs.at(-1);
+      assert.equal(confirmation.options.title, 'Open Proceed question?');
+      assert.deepEqual(confirmation.options.label, { confirm: 'Open question', cancel: 'Cancel' });
+      assertIdentityMessage(confirmation.options.message, {
+        id: 'current-session',
+        title: 'Current session',
+        ordinal: 'Session 1',
+      });
+      assert.equal(calls.length, beforeCalls, 'navigation must not query pending prematurely');
+      assert.equal(queries.length, beforeReads + 1);
+      assert.equal(renderer.listenerCount('resize'), 1);
+      confirmation.resolve(true);
+      await flush();
+      assert.deepEqual(queries.slice(beforeReads), ['current-session', 'current-session']);
+      assert.equal(renderer.listenerCount('resize'), 0);
       assert.match(dialogs.at(-1).options.title, /Synthetic action/);
+      assert.equal(dialogs.at(-1).options.current, 'reject');
       return dialogs.at(-1);
     };
     const current = await start();
@@ -154,10 +183,14 @@ test('current interaction submits its captured Reject while replaced and cleaned
     disposed.resolve('reject');
     await Promise.all(pending);
     assert.equal(calls.filter((c) => c.operation === 'decisions').length, 1);
+    // The public fingerprint is intentionally visible. The credential and key
+    // file location are not dialog/toast content, including the Respond prompt.
+    assert.doesNotMatch(JSON.stringify({ dialogs, toasts }), /hop_[d]{64}|not-created\.token/);
   } finally {
     cleanup?.();
     for (const dialog of dialogs) dialog.resolve(undefined);
     await Promise.allSettled(pending);
+    assert.equal(renderer.listenerCount('resize'), 0);
     hook.deregister();
     delete globalThis.__sdetCurrentExchange;
   }
