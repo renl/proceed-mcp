@@ -1,15 +1,17 @@
 // TEST ONLY. Design section 2, executable admission and pre-handoff refusal.
-// Native no-launch checks. These do not qualify spawned children or Bun pipes.
+// Native no-launch/unit checks. These do not qualify spawned children or Bun pipes.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
+import { EventEmitter } from 'node:events';
+import { PassThrough, Writable } from 'node:stream';
 import { mkdir, mkdtemp, writeFile, rm, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runHelperExchange, resolveNodeRuntime } from '../src/harness/node-helper.js';
-import { syntheticOperator } from './support/harness-helper-vectors.mjs';
+import { frame, ready, syntheticOperator } from './support/harness-helper-vectors.mjs';
 import { assertNoSpawn } from './support/harness-parent-observations.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -77,3 +79,102 @@ test('actual resolver rejects a shell wrapper instead of selecting it as Node', 
     await assert.rejects(access(owned, constants.F_OK), { code: 'ENOENT' });
   }
 });
+
+// TEST ONLY: script the imported ChildProcess boundary, not a production hook or
+// an observation comparator. Real parent framing, admission, catch and cleanup
+// execute against owned streams. No process, helper, broker or authority exists.
+function submittedChild(confirmClose) {
+  const child = new EventEmitter();
+  const frames = [];
+  const kills = [];
+  const outbound = new PassThrough();
+  const inbound = new Writable({
+    write(bytes, encoding, done) {
+      const value = JSON.parse(bytes.subarray(4).toString('utf8'));
+      frames.push(value);
+      if (value.type === 'hello') {
+        outbound.write(frame({ ...ready(), exchange_id: value.exchange_id }));
+      } else if (value.type === 'exchange') {
+        outbound.write(
+          frame({
+            schema_version: 1,
+            type: 'error',
+            exchange_id: value.exchange_id,
+            code: 'BROKER_UNAVAILABLE',
+          }),
+        );
+      }
+      done();
+    },
+  });
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdio = [null, child.stdout, child.stderr, inbound, outbound];
+  child.kill = (signal) => {
+    kills.push(signal ?? 'SIGTERM');
+    if (confirmClose) queueMicrotask(() => child.emit('close', null, 'SIGTERM'));
+    return true;
+  };
+  return { child, frames, kills };
+}
+
+for (const confirmClose of [true, false]) {
+  test(
+    `actual parent preserves submitted after handoff with ${confirmClose ? 'confirmed' : 'unconfirmed'} cleanup`,
+    { timeout: 5000 },
+    async () => {
+      const fixture = submittedChild(confirmClose);
+      const original = childProcess.spawn;
+      let attempts = 0;
+      let fenced = 0;
+      childProcess.spawn = () => {
+        attempts += 1;
+        return fixture.child;
+      };
+      syncBuiltinESMExports();
+      try {
+        // Resolve the already-running genuine Node installation. It is not
+        // launched. A corrected resolver must not need to accept a wrapper here.
+        let failure;
+        try {
+          await runHelperExchange({
+            ...valid,
+            env: { PATH: dirname(process.execPath) },
+            cwd: root,
+            budgetMs: 3000,
+            onUnconfirmedCleanup: () => {
+              fenced += 1;
+            },
+          });
+        } catch (error) {
+          failure = error;
+        }
+        assert.equal(attempts, 1);
+        assert.deepEqual(
+          fixture.frames.map((value) => value.type),
+          ['hello', 'exchange'],
+        );
+        assert.equal(fixture.frames[1].operator_credential, syntheticOperator);
+        assert.equal(fixture.frames[1].exchange_id, fixture.frames[0].exchange_id);
+        assert.deepEqual(fixture.kills, confirmClose ? ['SIGTERM'] : ['SIGTERM', 'SIGKILL']);
+        assert.equal(fenced, confirmClose ? 0 : 1);
+        assert.ok(fixture.child.stdio.filter(Boolean).every((stream) => stream.destroyed));
+        assert.equal(
+          failure?.code,
+          confirmClose ? 'BROKER_UNAVAILABLE' : 'HELPER_PROTOCOL_INVALID',
+        );
+        assert.equal(JSON.stringify(failure).includes(syntheticOperator), false);
+        assert.equal(String(failure).includes(syntheticOperator), false);
+        assert.equal(
+          failure.submitted,
+          true,
+          'unconfirmed cleanup must not erase observed authority handoff',
+        );
+      } finally {
+        childProcess.spawn = original;
+        syncBuiltinESMExports();
+        for (const stream of fixture.child.stdio.filter(Boolean)) stream.destroy();
+      }
+    },
+  );
+}
