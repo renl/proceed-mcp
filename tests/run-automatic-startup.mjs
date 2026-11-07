@@ -133,6 +133,7 @@ try {
   }
   await writeFile(join(directory, 'input-paths.json'), JSON.stringify(files));
   const mode = process.argv[2] ?? 'checkpoint';
+  if (mode === 'remaining' && process.argv[3]) assert.match(process.argv[3], /^[A-Z0-9,-]+$/);
   assert.ok(
     [
       'checkpoint',
@@ -162,6 +163,9 @@ try {
                 ? [`--deadline-stage=${process.argv[3]}`]
                 : []),
               ...(mode === 'remaining' ? ['--remaining-only'] : []),
+              ...(mode === 'remaining' && process.argv[3]
+                ? [`--remaining-cases=${process.argv[3]}`]
+                : []),
             ];
   await progress(`run-${mode}`);
   const result = await docker(
@@ -181,7 +185,7 @@ try {
       '--cpus=2',
       '--pids-limit=256',
       '--tmpfs',
-      '/fixtures:rw,mode=0700',
+      mode === 'package' ? '/fixtures:rw,exec,mode=0700' : '/fixtures:rw,mode=0700',
       '--tmpfs',
       '/tmp:rw,mode=0700',
       '--mount',
@@ -261,5 +265,6 @@ try {
   await progress('complete');
   clearTimeout(watchdog);
   console.log(JSON.stringify(summary));
+  console.log(JSON.stringify({ evidence: directory }));
   process.exitCode = inner === 'PASS' && cleanup ? 0 : 1;
 }

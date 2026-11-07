@@ -115,9 +115,17 @@ if (fault) {
       record({ event: 'credential-fault', fault, pid: process.pid });
     }
     const handle = await open(path, ...args);
-    if (fault === 'load-unsafe-handle' || fault === 'lock-unsafe-handle') {
+    if (fault === 'load-unsafe-handle') {
       await handle.chmod(0o644);
       record({ event: 'credential-fault', fault, pid: process.pid });
+    }
+    if (fault === 'lock-unsafe-handle') {
+      const chmod = handle.chmod.bind(handle);
+      handle.chmod = async (...parameters) => {
+        await chmod(...parameters);
+        await chmod(0o644);
+        record({ event: 'credential-fault', fault, pid: process.pid });
+      };
     }
     const read = handle.readFile.bind(handle);
     handle.readFile = async (...parameters) => {

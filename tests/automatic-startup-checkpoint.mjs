@@ -86,6 +86,15 @@ const outerTimer = setTimeout(() => {
 }, 540000);
 
 async function check(id, work, { independent = false } = {}) {
+  const selected = process.argv
+    .find((value) => value.startsWith('--remaining-cases='))
+    ?.split('=')[1];
+  if (
+    selected &&
+    !['AUTO-TLS-PLATFORM', 'AUTO-JOURNAL-OBSERVER-CONTROL'].includes(id) &&
+    !selected.split(',').includes(id)
+  )
+    return;
   current = id;
   await c.progress(id);
   try {

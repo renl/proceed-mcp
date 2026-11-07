@@ -104,10 +104,10 @@ export async function remainingCases(h) {
         });
         assert.equal(refused.code, 4);
         assert.equal(await absent(join(setup.path, 'broker.lock')), true);
-        assert.ok((await readFile(credential)).equals(before));
       } finally {
         await chown(credential, process.geteuid(), process.getegid());
       }
+      assert.ok((await readFile(credential)).equals(before));
     },
     independent,
   );
@@ -153,6 +153,56 @@ export async function remainingCases(h) {
 
   // Real protected-record reads and TCP occupancy. Short budgets here prove
   // refusal/preservation, not the separately known-RED 150000 ms child deadline.
+  for (const fault of ['load-substitute', 'load-unsafe-handle', 'load-read-failure']) {
+    await check(
+      `AUTO-LOCK-READER-${fault.toUpperCase()}`,
+      async () => {
+        const setup = await setupState(`reader-${fault}`);
+        const lock = await syntheticLock(setup);
+        const before = (await events()).length;
+        const result = await c.cli(['stop'], {
+          state: setup.path,
+          moreEnv: {
+            PROCEED_TEST_CREDENTIAL_FAULT: fault,
+            PROCEED_TEST_CREDENTIAL_FAULT_FILE: lock.path,
+          },
+        });
+        const observed = (await events()).slice(before);
+        assert.ok(observed.some((e) => e.event === 'credential-fault' && e.fault === fault));
+        assert.notEqual(result.code, 0);
+        if (fault !== 'load-read-failure')
+          assert.ok(
+            !observed.some((e) => e.event === 'credential-content-read'),
+            'unsafe/substituted trust handle refused before key content',
+          );
+        if (fault === 'load-substitute') {
+          assert.equal(await readFile(lock.path, 'utf8'), 'SYNTHETIC_REPLACEMENT\n');
+          assert.ok((await readFile(`${lock.path}.original`)).equals(lock.bytes));
+        } else assert.ok((await readFile(lock.path)).equals(lock.bytes));
+      },
+      independent,
+    );
+  }
+  await check(
+    'AUTO-EXPIRED-BUDGET-NO-LAUNCH',
+    async () => {
+      const setup = await setupState('expired-admission');
+      let launches = 0;
+      await assert.rejects(
+        awaitSecureAvailability({
+          lockFile: join(setup.path, 'broker.lock'),
+          port: setup.config.broker.port,
+          token: 'SYNTHETIC_AUTHORITY',
+          budgetMs: 0,
+          launch() {
+            launches++;
+          },
+        }),
+      );
+      assert.equal(launches, 0, 'expired attempt cannot admit occupancy/launch work');
+    },
+    independent,
+  );
   for (const kind of [
     'occupied-no-lock',
     'malformed',
@@ -196,7 +246,8 @@ export async function remainingCases(h) {
             server = lifecyclePeer(lock, 'SYNTHETIC_AUTHORITY', received);
             await listen(server, lock.port);
           }
-          const bytes = lock ? await readFile(lock.path) : null;
+          const bytes =
+            kind === 'foreign-owner' ? lock.bytes : lock ? await readFile(lock.path) : null;
           const start = performance.now();
           await assert.rejects(
             awaitSecureAvailability({
@@ -217,6 +268,8 @@ export async function remainingCases(h) {
             0,
             'unsafe records never authorize HTTP, even to matching-key peer',
           );
+          if (kind === 'foreign-owner')
+            await chown(lock.path, process.geteuid(), process.getegid());
           if (lock) assert.ok((await readFile(lock.path)).equals(bytes));
           assert.ok((await readFile(join(setup.path, 'journal.log'))).equals(journal));
         } finally {
