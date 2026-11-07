@@ -61,7 +61,19 @@ try {
       ]),
     );
     // Only fixed IDs and counts leave the namespace, never TAP assertion values.
-    await writeFile(`/evidence/${id}.json`, JSON.stringify({ counts, code }));
+    const failure =
+      selection === 'identity' &&
+      code !== 0 &&
+      output.includes(
+        'served MCP identity must equal the candidate manifest, not the published predecessor',
+      ) &&
+      output.includes('0.1.0-preview.1') &&
+      output.includes('0.1.0-preview.2')
+        ? 'SERVED-VERSION-MISMATCH'
+        : code === 0
+          ? null
+          : 'UNCLASSIFIED';
+    await writeFile(`/evidence/${id}.json`, JSON.stringify({ counts, code, failure }));
     assert.ok(counts.tests > 0 && bytes <= 262144);
     assert.equal(code, 0, id);
     assert.equal(counts.fail, 0);
