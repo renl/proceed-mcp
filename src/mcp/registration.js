@@ -14,6 +14,8 @@ import {
   REGISTRATION_SECRET_PATTERN,
   isPlainObject,
 } from '../util/values.js';
+import { LocalRequestError } from '../http/local-client.js';
+import { startupToolFailure } from '../broker/startup-failure.js';
 
 export const REGISTRATION_HEARTBEAT_MS = 10000;
 export const REGISTRATION_SHUTDOWN_BUDGET_MS = 2000;
@@ -259,9 +261,17 @@ class RegistrationBinding {
   async #send(method, path, body, headers = {}, signal = this.#lifecycle.signal) {
     try {
       return await this.#client.request(method, path, body, headers, { signal });
-    } catch {
-      // Transport failure, abort and local client errors carry no authority
-      // claim, so they stay one redacted unavailable prerequisite.
+    } catch (error) {
+      // A local startup classification keeps its fixed tool mapping and safe
+      // guidance; the underlying message is never forwarded. Every other
+      // transport failure, abort or unrecognized error stays one redacted
+      // unavailable prerequisite.
+      if (error instanceof LocalRequestError) {
+        const failure = startupToolFailure(error);
+        throw new RegistrationError(failure.code, failure.message, {
+          retryable: failure.code === 'BROKER_UNAVAILABLE',
+        });
+      }
       throw unavailable();
     }
   }

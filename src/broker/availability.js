@@ -32,7 +32,7 @@ export function startupTimeout() {
 
 export function upgradeGuidance(message) {
   return blockedPrerequisite(
-    `${message}; stop that broker through its own Ctrl+C or operator interface, then restart it with "serve --secure-local" using its environment token, or provision the token file for automatic startup`,
+    `${message}; stop that broker through its own Ctrl+C or operator interface, then restart it with "serve --secure-local" using its environment token, or provision the token file for automatic startup (BROKER_INSTANCE_CONFLICT)`,
     'BROKER_INSTANCE_CONFLICT',
   );
 }

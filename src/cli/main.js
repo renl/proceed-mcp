@@ -19,6 +19,7 @@ import {
   startupConflict,
 } from '../broker/availability.js';
 import { lifecycleEnvelopeProblem } from '../broker/lifecycle-envelope.js';
+import { startupToolFailure } from '../broker/startup-failure.js';
 import {
   createSecureLocalClient,
   secureExchange,
@@ -158,67 +159,14 @@ async function secureRecordOrThrow(lockFile) {
 // Broker-dependent work waits for the one shared availability attempt; a failed
 // attempt becomes the documented tool-level prerequisite rather than an approval
 // or a fabricated outcome. Only fixed classifications and actionable command
-// templates are published: raw exception, child, TLS or path text is never
-// forwarded, so a legacy or unsupported listener still names the safe restart.
-const AVAILABILITY_TOOL_FAILURES = new Map([
-  [
-    'BROKER_INSTANCE_CONFLICT',
-    {
-      code: 'BROKER_UNAVAILABLE',
-      message:
-        'the local broker uses an unsupported local channel; stop it through its own Ctrl+C or operator interface, then restart it with "proceed-mcp serve --secure-local" or provision the automatic-startup token file',
-    },
-  ],
-  [
-    'TELEGRAM_CREDENTIAL_UNAVAILABLE',
-    {
-      code: 'BROKER_UNAVAILABLE',
-      message:
-        'the automatic-startup Telegram credential is missing or unusable; run "proceed-mcp telegram provision --token-stdin" or select the correct safe file',
-    },
-  ],
-  [
-    'PROTECTION_UNVERIFIED',
-    {
-      code: 'STORAGE_FAILURE',
-      message:
-        'protected broker storage could not be verified; select dedicated protected storage or repair it explicitly outside startup',
-    },
-  ],
-  [
-    'STATE_NOT_OWNED',
-    {
-      code: 'BROKER_UNAVAILABLE',
-      message:
-        'broker state ownership is uncertain; preserve the state directory and investigate ownership before a new attempt',
-    },
-  ],
-  [
-    'BROKER_STARTUP_TIMEOUT',
-    {
-      code: 'BROKER_UNAVAILABLE',
-      message:
-        'the broker did not become ready within the startup deadline; inspect "proceed-mcp status" before a new attempt',
-    },
-  ],
-]);
-const AVAILABILITY_TOOL_FALLBACK = {
-  code: 'BROKER_UNAVAILABLE',
-  message:
-    'the local broker could not be provided automatically; inspect "proceed-mcp status" and the setup instructions',
-};
-
-function availabilityToolFailure(error) {
-  return AVAILABILITY_TOOL_FAILURES.get(error?.code) ?? AVAILABILITY_TOOL_FALLBACK;
-}
-
+// templates are published, so a legacy listener still names the safe restart.
 function gateClient(client, availability) {
   return {
     async request(...args) {
       try {
         await availability;
       } catch (error) {
-        const failure = availabilityToolFailure(error);
+        const failure = startupToolFailure(error);
         throw new LocalRequestError(failure.code, failure.message);
       }
       return client.request(...args);
