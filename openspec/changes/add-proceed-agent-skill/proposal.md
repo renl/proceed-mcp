@@ -37,7 +37,7 @@ None. Existing approval, delivery, and distribution requirements remain authorit
 
 This change independently delivers a usable skill and installation guidance against the current Telegram workflow. It is not unexposed foundation work. It can land on `main` without any startup or dual-channel change.
 
-Behavioral dependencies are the current [Telegram approval](../../specs/telegram-approval/spec.md), [portable delivery](../../specs/opencode-session-continuation/spec.md), and [existing package/setup](../../specs/npm-distribution/spec.md) contracts. There is no dependency on an unimplemented program outcome.
+Behavioral dependencies are the current Telegram approval (`openspec/specs/telegram-approval/spec.md`), portable delivery (`openspec/specs/opencode-session-continuation/spec.md`), and existing package/setup (`openspec/specs/npm-distribution/spec.md`) contracts. Paths are repository-relative. There is no dependency on an unimplemented program outcome.
 
 Excluded: Runtime or public tool changes, automatic broker startup, native-harness answer arbitration, dual-channel answers, native permission-prompt automation, permission bypass, automatic post-timeout resumption, Events, a new distribution service/catalog/installer, global configuration edits during development, package republishing, and public release. Startup and dual-channel behavior require separately scoped changes.
 
@@ -61,5 +61,5 @@ The user authorized the skill and README outcome and changed the program's deliv
 ## Related Artifacts
 
 - [Product acceptance](specs/proceed-agent-guidance/spec.md)
-- [Existing setup and tools](../../../README.md)
+- Existing setup and tools: repository-relative `README.md`
 - [OpenCode V2 skills reference](https://opencode.ai/v2/docs/skills/)

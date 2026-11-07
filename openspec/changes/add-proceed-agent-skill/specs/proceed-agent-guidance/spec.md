@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Give humans reusable, installable agent instructions for safe use of Proceed's existing Telegram workflow without repeating the workflow for each task. Parent: [proposal](../../proposal.md), including scope and authoritative behavioral dependencies.
+Give humans reusable, installable agent instructions for safe use of Proceed's existing Telegram workflow without repeating the workflow for each task. Parent: the `add-proceed-agent-skill` change's `proposal.md`, including scope and authoritative behavioral dependencies.
 
 ## ADDED Requirements
 
@@ -39,7 +39,7 @@ The README MUST connect skill installation and loading to the supported empty-st
 
 ### Requirement: First-use acceptance order
 
-The operator's hands-on demonstration is scheduled after deployment of the complete program preview, not as a prerequisite to developing subsequent program outcomes. This changes acceptance order, not the required first-use result or independent boundary-proof obligations. The [proposal's delivery and acceptance order](../../proposal.md#delivery-and-acceptance-order) governs any still-unmet landing or exposure check. The guidance MUST preserve this acceptance order.
+The operator's hands-on demonstration is scheduled after deployment of the complete program preview, not as a prerequisite to developing subsequent program outcomes. This changes acceptance order, not the required first-use result or independent boundary-proof obligations. The change proposal's Delivery and Acceptance Order section governs any still-unmet landing or exposure check. The guidance MUST preserve this acceptance order.
 
 #### Scenario: Schedule the operator demonstration
 
