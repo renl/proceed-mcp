@@ -162,15 +162,6 @@ async function exercise(
     }
     if (child) {
       proc = await identityPromise;
-      assert.equal(proc[0], process.execPath);
-      for (const fd of proc.slice(3)) assert.match(fd, /^(socket|pipe):\[/);
-      assert.notEqual(proc[3], proc[4]);
-      assert.equal(proc[2].length, 0);
-      assert.equal(child.exitCode !== null || child.signalCode !== null, true);
-      assert.ok(Number.isFinite(closedAt), 'real close must precede return');
-      assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
-      assert.ok(child.stdio.filter(Boolean).every((s) => s.destroyed));
-      assert.ok(performance.now() <= entryAt + budget + 100, 'one original budget');
       physical.push({
         case: mode,
         pid: child.pid,
@@ -185,7 +176,20 @@ async function exercise(
         forceAt,
         exitAt,
         closedAt,
+        returned: result !== undefined,
+        code: failure?.code ?? null,
+        submitted: failure?.submitted ?? null,
+        fenceNotifications: fenced,
       });
+      assert.equal(proc[0], process.execPath);
+      for (const fd of proc.slice(3)) assert.match(fd, /^(socket|pipe):\[/);
+      assert.notEqual(proc[3], proc[4]);
+      assert.equal(proc[2].length, 0);
+      assert.equal(child.exitCode !== null || child.signalCode !== null, true);
+      assert.ok(Number.isFinite(closedAt), 'real close must precede return');
+      assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
+      assert.ok(child.stdio.filter(Boolean).every((s) => s.destroyed));
+      assert.ok(performance.now() <= entryAt + budget + 100, 'one original budget');
       assertParentPrivacy(
         {
           argv: proc[1],

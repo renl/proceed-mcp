@@ -1,5 +1,6 @@
 // TEST ONLY. Finite hostile peer on the actual private descriptor boundary.
-import { createReadStream, createWriteStream, writeFileSync } from 'node:fs';
+import { writeSync, writeFileSync } from 'node:fs';
+import { Socket } from 'node:net';
 import { encodeFrame, FrameReader } from '../../../src/harness/helper-protocol.js';
 const mode = process.argv[2];
 writeFileSync(
@@ -12,17 +13,20 @@ writeFileSync(
     environment: process.env,
   }),
 );
-const input = createReadStream(null, { fd: 3 });
-const output = createWriteStream(null, { fd: 4 });
+const input = new Socket({ fd: 3, readable: true, writable: false });
+const send = (bytes) => {
+  let offset = 0;
+  while (offset < bytes.length) offset += writeSync(4, bytes, offset, bytes.length - offset);
+};
 const reader = new FrameReader();
 const watchdog = setTimeout(() => process.exit(90), 12000);
 if (mode === 'hung-child-force') process.on('SIGTERM', () => {});
-const finish = (bytes, code = 0) =>
-  output.end(bytes, () => {
-    clearTimeout(watchdog);
-    input.destroy();
-    process.exit(code);
-  });
+const finish = (bytes, code = 0) => {
+  send(bytes);
+  clearTimeout(watchdog);
+  input.destroy();
+  process.exit(code);
+};
 input.on('data', (bytes) => {
   for (const value of reader.push(bytes)) {
     if (value.type === 'hello') {
@@ -40,7 +44,7 @@ input.on('data', (bytes) => {
       if (mode === 'wrong-id') ready.exchange_id = 'f'.repeat(32);
       if (mode === 'wrong-version') ready.schema_version = 2;
       if (mode === 'wrong-order') ready.type = 'response';
-      output.write(encodeFrame(ready));
+      send(encodeFrame(ready));
     } else {
       if (['invocation-cancel', 'exchange-deadline', 'hung-child-force'].includes(mode)) return;
       if (mode === 'stdout-tripwire') process.stdout.write('synthetic-noise');
@@ -54,7 +58,7 @@ input.on('data', (bytes) => {
       });
       if (mode === 'extra-child-frame') return finish(Buffer.concat([response, response]));
       if (mode === 'response-with-open-pipes') {
-        output.write(response);
+        send(response);
         return;
       }
       finish(response, mode === 'response-then-nonzero-exit' ? 1 : 0);
@@ -62,4 +66,3 @@ input.on('data', (bytes) => {
   }
 });
 input.on('error', () => process.exit(1));
-output.on('error', () => process.exit(1));

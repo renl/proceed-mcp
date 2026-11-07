@@ -793,6 +793,8 @@ Maintained command: `node tests/run-harness-host.mjs --parent-process-run`, oute
 
 Cheap scoped formatter, new-file syntax and whitespace checks PASS before execution. Runtime controls are UNRUN at this preparation checkpoint. The exact existing `parentCases` inventory remains authoritative. Unreached cases, broker uncertainty/refresh and rendered generation disablement stay UNRUN, never inferred from synthetic peers. NH.4/NH.5 remain unchecked. No production hook, dependency, criterion, permission, role or retry change is made.
 
+First adapter run at `aa5519f` stopped in `supported-node-positive` before recording any PASS, at the physical-exit assertion. Evidence `.scratch/harness-host/run-linux-yJKrA4/result.json`. Outer exit 1, assertion FAIL, owned cleanup PASS including exact container absence. This is not yet classified as a production failure. The synthetic peer used filesystem streams for socket descriptors. The revised peer uses the same native socket-read/synchronous-descriptor-write mechanism as the production helper, without changing parent behavior or criteria. The observer now retains fixed outcome and physical metadata before assertions so an early failure is diagnosable. This is an adapter-input correction, not an NH.5 retry. NH.5 remains zero attempts.
+
 ## Workflow follow-up
 
 - After independent integrated-candidate verification, coordination routes the declared owners' delta review against updated merged specs, then authorizes one CLI archive and the single PR merge. No manual spec sync or archive while the parent is unmerged. Complete active task/evidence content and live link repairs before the immutable move.
