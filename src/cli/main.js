@@ -910,6 +910,9 @@ async function runStop(argv, { stdout, env }) {
   // A 202 means stop accepted, not complete: wait for the exact record to
   // disappear and the matching listener to cease, without force-killing anything.
   for (;;) {
+    // The polling delay may consume the last of the budget: a continuation that
+    // starts after expiry cannot open another protected read.
+    ensureBudget();
     const current = await readSecureOwnership(paths.brokerLockFile);
     ensureBudget();
     if (current.absent === true) {
