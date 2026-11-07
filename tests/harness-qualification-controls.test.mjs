@@ -157,9 +157,15 @@ test('QUAL-RENDERED driver control cannot substitute missing attacks, callback r
     expires_at: 'synthetic deadline',
   };
   const writes = [];
+  const session = { id: question.session_id, title: 'equal host titles' };
   let terminal = false;
   const driver = {
     stdin: { write: (bytes) => writes.push(bytes) },
+    waitSessionPicker: async (expected) => {
+      assert.deepEqual(writes, ['\x07']);
+      assert.equal(expected.option, `${session.title} (${session.id})`);
+      assert.equal(expected.sessionID, question.session_id);
+    },
     observe: async () => ({
       presentation: question,
       status: terminal ? { ...pending.status, ...winner } : pending.status,
@@ -179,25 +185,75 @@ test('QUAL-RENDERED driver control cannot substitute missing attacks, callback r
       return retained;
     },
   };
-  await exerciseRenderedProduct(driver, question, 'respond', '\x07');
-  assert.deepEqual(writes, ['\x07', 'Respond\r', 'approved\r']);
+  await exerciseRenderedProduct(driver, question, 'respond', session);
+  assert.deepEqual(writes, ['\x07', `${session.id}\r`, 'Respond\r', 'approved\r']);
+  writes.length = 0;
   terminal = false;
   await assert.rejects(
     exerciseRenderedProduct(
       { ...driver, ordinaryAttacks: async () => [] },
       question,
       'respond',
-      '\x07',
+      session,
     ),
     /missing real ordinary-API attack/,
   );
+  writes.length = 0;
   await assert.rejects(
     exerciseRenderedProduct(
       { ...driver, waitRetainedOutcome: async () => ({ ...winner, resolution: 'approved' }) },
       question,
       'respond',
-      '\x07',
+      session,
     ),
+  );
+});
+
+test('QUAL-PICKER: missing/currently lost UI stops keys before a choice, never reopens it', async () => {
+  const question = {
+    ...presentation,
+    session_label: 'equal request labels',
+    action: 'Action',
+    context: 'Context',
+    expires_at: 'synthetic deadline',
+  };
+  const session = { id: question.session_id, title: 'equal host titles' };
+  for (const stage of ['picker', 'question', 'attack']) {
+    const writes = [];
+    let attacked = false;
+    const driver = {
+      stdin: { write: (bytes) => writes.push(bytes) },
+      observe: async () => ({ ...pending, presentation: question }),
+      waitSessionPicker: async () => {
+        if (stage === 'picker') throw new Error('exact ID/title not currently visible');
+      },
+      waitRendered: async (fields) => {
+        assert.deepEqual(fields, [
+          question.request_id,
+          question.session_label,
+          question.action,
+          question.context,
+          question.expires_at,
+          'Approve',
+          'Reject',
+          'Respond',
+        ]);
+        if (stage === 'question') throw new Error('complete question not currently visible');
+      },
+      waitCurrentProductDialog: async () => {
+        if (attacked) throw new Error('dialog was dismissed by ordinary API');
+      },
+      ordinaryAttacks: async (_p, afterEach) => {
+        attacked = true;
+        await afterEach(ordinaryAttackCases[0]);
+      },
+    };
+    await assert.rejects(exerciseRenderedProduct(driver, question, 'reject', session));
+    assert.deepEqual(writes, stage === 'picker' ? ['\x07'] : ['\x07', `${session.id}\r`]);
+  }
+  await assert.rejects(
+    exerciseRenderedProduct({}, question, 'approve', { ...session, id: 'foreign-session' }),
+    /picker must target the bound host ID/,
   );
 });
 

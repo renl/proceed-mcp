@@ -19,16 +19,29 @@ export const ordinaryAttackCases = Object.freeze([
 // Compose only with real PTY stdin, actual rendered-output waits and independent
 // public broker wire observations. Unit controls of this procedure are not proof
 // that those I/O adapters or the genuine product exist.
-export async function exerciseRenderedProduct(driver, presentation, choice, openKeys) {
+export async function exerciseRenderedProduct(driver, presentation, choice, session) {
   assert.ok(['dismiss', 'reject', 'respond', 'approve'].includes(choice));
-  assert.ok(typeof openKeys === 'string' && openKeys.length > 0);
+  assert.equal(session.id, presentation.session_id, 'picker must target the bound host ID');
+  assert.ok(typeof session.title === 'string' && session.title.length > 0);
+  assert.ok(typeof session.id === 'string' && session.id.length > 0);
+  assert.doesNotMatch(session.id, /[\x00-\x1f\x7f]/, 'host ID must be safe PTY search input');
   const before = await driver.observe(presentation);
   assert.equal(before.presentation.request_id, presentation.request_id);
   assert.equal(before.presentation.presentation_id, presentation.presentation_id);
   assert.equal(before.presentation.session_id, presentation.session_id);
   assertAttackNonEffect(before, before);
 
-  driver.stdin.write(openKeys); // Actual documented product control, not fixture UI.
+  // First select the exact documented host session. The caller-supplied request
+  // label is not the host title or identity. Equal titles must remain selectable
+  // by full ID. Selection Enter is navigation, NOT the later default Reject.
+  driver.stdin.write('\x07'); // Product ctrl+g, not a fixture control.
+  await driver.waitSessionPicker({
+    title: 'Select the Proceed session whose pending question to open',
+    option: `${session.title} (${session.id})`,
+    sessionID: session.id,
+  });
+  assertAttackNonEffect(before, await driver.observe(presentation));
+  driver.stdin.write(`${session.id}\r`);
   await driver.waitRendered([
     presentation.request_id,
     presentation.session_label,
@@ -39,6 +52,7 @@ export async function exerciseRenderedProduct(driver, presentation, choice, open
     'Reject',
     'Respond',
   ]);
+  await driver.waitCurrentProductDialog(presentation);
   const attacks = [];
   await driver.ordinaryAttacks(presentation, async (id) => {
     assert.ok(ordinaryAttackCases.includes(id), 'unknown ordinary-API attack');
@@ -57,6 +71,7 @@ export async function exerciseRenderedProduct(driver, presentation, choice, open
 
   // No reopen between attacks and selection. A fresh callback or handler call
   // cannot rescue an API-settled/dismissed product dialog to make the test pass.
+  await driver.waitCurrentProductDialog(presentation);
   if (choice === 'dismiss') {
     driver.stdin.write('\x1b');
     await driver.waitDismissed();

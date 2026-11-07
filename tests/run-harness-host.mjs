@@ -14,12 +14,15 @@ if (process.argv[2] === '--qualification-preflight') {
         runtime: 'UNRUN',
         cleanup: 'NOT APPLICABLE - no resources started',
         blocked: [
-          'Pin and review the genuine production TUI checkpoint, protected loading, adapter and package identity. Concurrent inputs are not qualified',
-          'Compose synthetic broker/transport fixtures and product/adversary entries in the existing contained lifecycle after source handoff',
-          'Bind actual ordinary RPC/helper targets and programmatic command dispatch to the implemented entry, without decision test APIs',
-          'Compose the approved public command.transform -> registered Tool.Info.execute fixture and arm transparent shared MCP capture before invocation. Normal permission refusal is a stop, not a bypass',
-          'Next actual platform/runtime execution needs coordination authorization after combined affected boundary review',
+          'W1: production source checkpoint exists, but linuxPayload/stageLinuxFixture still stage only the platform entry. Stage the complete approved src tree and package ./tui with relative imports, exact product options, transport and wrapper entries. Extend complete external-origin and separate service inventories for that explicit set',
+          'W2: the maintained inner runner has no synthetic broker/pair/keygen/enrollment composition. Separate broker/Telegram setup from the single real-host adapter, compare the currently rendered product fingerprint before fixture confirmation, and prove no setup work',
+          'W3: embedded transport helper still uses the general client and seven cases. Compose real listeners and product operator loading/client for TLS profile, original 10000 ms deadline, 64 KiB ceiling, aborts and pre-redaction captures',
+          'W4: no actual PTY current-screen adapter implements waitSessionPicker/waitCurrentProductDialog. Require exact ID plus host title, selection Enter, data.session.get before scoped pending, then the complete currently visible question. Accumulated ANSI titles cannot satisfy this gate',
+          'W4: bind actual exposed RPC/helper targets and keymap.dispatch attacks to the existing product dialog without reopening. Compose public command.transform -> registered Tool.Info.execute with the actual host-selected agent and shared transparent MCP capture armed before initialization. Normal permission refusal is a stop, not a bypass',
+          'W5: raw private capture scans, sanitized export and observed product/fixture Cleanup plus abort/timer checks are not composed. Existing --linux-run remains platform-only, not this qualification',
         ],
+        executionAuthority:
+          'One contained qualification attempt is authorized only after W1-W5 and cheap checks are complete. No attempt is consumed by this NO-LAUNCH report',
         invocationScope: 'Registered-wrapper only. No provider/model access or spend',
         excludedProof: [
           'normal assistant tool selection/sequencing',
