@@ -8,8 +8,8 @@
 // private pipes, which carries the unchanged protected TLS-PSK admission, the
 // remaining 10000 ms budget and the 64 KiB response ceiling. A command can open
 // the local interaction, but only the operator's completed dialog choice can
-// submit a decision; command arguments and RPC inputs are ignored. Dismissal, an
-// expired deadline, disposal and Cleanup send nothing.
+// submit a decision; command arguments and RPC inputs are ignored. Dismissal,
+// replacement, an expired deadline, disposal and Cleanup send nothing.
 import { runHelperExchange, HelperChannelError } from './node-helper.js';
 import { resolveStateDir, statePaths } from '../state/paths.js';
 import { loadPortableConfiguration } from '../state/store.js';
@@ -98,11 +98,44 @@ function showError(context, error) {
   });
 }
 
+// One local interaction owns its session picker, question/response dialogs and
+// any exchange it started. A newer interaction, disposal or Cleanup fences it
+// before its next phase, so a completion that arrives after replacement is
+// inert: it cannot open another dialog, start another helper exchange or reuse
+// an old presentation. The fence is local only; the durable request stays
+// pending, and no broker admission or decision is queued behind it.
+function beginInteraction(generation) {
+  const replaced = generation.interaction;
+  generation.interaction = null;
+  if (replaced !== null) {
+    replaced.active = false;
+    replaced.controller.abort();
+  }
+  const interaction = { active: true, controller: new AbortController() };
+  generation.interaction = interaction;
+  return interaction;
+}
+
+function disposeInteraction(generation, interaction) {
+  interaction.active = false;
+  if (generation.interaction === interaction) generation.interaction = null;
+}
+
+// A continuation may act only while its own interaction and the setup
+// generation that owns it are both still active.
+function interactionActive(generation, interaction) {
+  return generation.active && interaction.active;
+}
+
 // One operator-route exchange through the private helper. A non-2xx reply is the
 // broker's versioned envelope and its code travels unchanged; a fixed local
 // helper code never becomes a broker claim.
-async function exchange(generation, operation, body, presentationId = null) {
+async function exchange(generation, interaction, operation, body, presentationId = null) {
   if (generation.disabled) throw new HelperChannelError('HELPER_PROTOCOL_INVALID');
+  // A fenced interaction never reaches executable resolution or spawn.
+  if (!interactionActive(generation, interaction)) {
+    throw new HelperChannelError('EXCHANGE_CANCELLED');
+  }
   const response = await runHelperExchange({
     operation,
     body,
@@ -110,8 +143,8 @@ async function exchange(generation, operation, body, presentationId = null) {
     port: generation.port,
     lockFile: generation.lockFile,
     operatorCredential: generation.credential,
-    signal: generation.controller.signal,
-    isActive: () => generation.active,
+    signal: interaction.controller.signal,
+    isActive: () => interactionActive(generation, interaction),
     // Unconfirmed owned cleanup disables further helper exchanges for this
     // generation instead of reporting success.
     onUnconfirmedCleanup: () => {
@@ -189,27 +222,32 @@ function enrollmentMessage(enrollment, { keyId, harnessId, ownerId }) {
 
 async function proposeEnrollment(generation, context) {
   if (!generation.active) return;
-  let enrollment;
+  const interaction = beginInteraction(generation);
   try {
-    const body = await exchange(generation, 'enrollments', {
-      harness_id: generation.harnessId,
-      owner_id: generation.ownerId,
+    let enrollment;
+    try {
+      const body = await exchange(generation, interaction, 'enrollments', {
+        harness_id: generation.harnessId,
+        owner_id: generation.ownerId,
+      });
+      enrollment = enrollmentFrom(body, generation);
+    } catch (error) {
+      if (!interactionActive(generation, interaction)) return;
+      showError(context, error);
+      return;
+    }
+    if (!interactionActive(generation, interaction)) return;
+    if (enrollment === null) {
+      disabled(context, 'Proceed harness: the broker returned an unusable enrollment response.');
+      return;
+    }
+    await context.ui.dialog.alert({
+      title: 'Proceed harness operator enrollment',
+      message: enrollmentMessage(enrollment, generation),
     });
-    enrollment = enrollmentFrom(body, generation);
-  } catch (error) {
-    if (!generation.active) return;
-    showError(context, error);
-    return;
+  } finally {
+    disposeInteraction(generation, interaction);
   }
-  if (!generation.active) return;
-  if (enrollment === null) {
-    disabled(context, 'Proceed harness: the broker returned an unusable enrollment response.');
-    return;
-  }
-  await context.ui.dialog.alert({
-    title: 'Proceed harness operator enrollment',
-    message: enrollmentMessage(enrollment, generation),
-  });
 }
 
 function presentationFrom(body, { harnessId, ownerId, sessionId }) {
@@ -263,7 +301,7 @@ function questionTitle(presentation) {
 
 // Only a documented session the host can still resolve may receive a question.
 // The foreground session, tab order and recent activity are never substitutes.
-async function chooseSession(generation, context) {
+async function chooseSession(generation, interaction, context) {
   let listed = [];
   try {
     listed = context.data.session.list();
@@ -288,7 +326,8 @@ async function chooseSession(generation, context) {
       value: entry.id,
     })),
   });
-  if (choice === undefined || !generation.active) return null;
+  // A replaced or disposed picker completion grants nothing and opens nothing.
+  if (choice === undefined || !interactionActive(generation, interaction)) return null;
   if (context.data.session.get(choice) === undefined) {
     try {
       await context.data.session.sync(choice);
@@ -296,6 +335,7 @@ async function chooseSession(generation, context) {
       // An unresolvable session stays unresolvable; no decision UI is shown.
     }
   }
+  if (!interactionActive(generation, interaction)) return null;
   if (context.data.session.get(choice) === undefined) {
     context.ui.toast.show({
       message: 'Proceed: that session cannot be resolved; no question was opened.',
@@ -325,11 +365,12 @@ function retainedStatus(body, presentation) {
 
 // A transport failure is uncertainty, not a failed commit: refresh the
 // authoritative binding once and report what it says. Nothing is replayed.
-async function reportTransportUncertainty(generation, context, presentation) {
-  if (!generation.active) return;
+async function reportTransportUncertainty(generation, interaction, context, presentation) {
+  if (!interactionActive(generation, interaction)) return;
   try {
     const body = await exchange(
       generation,
+      interaction,
       'presentation',
       {
         harness_id: generation.harnessId,
@@ -339,7 +380,7 @@ async function reportTransportUncertainty(generation, context, presentation) {
       },
       presentation.presentation_id,
     );
-    if (!generation.active) return;
+    if (!interactionActive(generation, interaction)) return;
     const status = retainedStatus(body, presentation);
     context.ui.toast.show({
       message:
@@ -350,7 +391,7 @@ async function reportTransportUncertainty(generation, context, presentation) {
       duration: 30000,
     });
   } catch {
-    if (!generation.active) return;
+    if (!interactionActive(generation, interaction)) return;
     context.ui.toast.show({
       message: 'Proceed: the outcome could not be confirmed. Refresh before retrying.',
       variant: 'warning',
@@ -359,8 +400,8 @@ async function reportTransportUncertainty(generation, context, presentation) {
   }
 }
 
-async function submitDecision(generation, context, presentation, choice, text) {
-  if (!generation.active) return;
+async function submitDecision(generation, interaction, context, presentation, choice, text) {
+  if (!interactionActive(generation, interaction)) return;
   // The broker is authoritative, but a dialog completed after the immutable
   // deadline must not even attempt a mutation.
   if (!(Date.parse(presentation.expires_at) > Date.now())) {
@@ -375,6 +416,7 @@ async function submitDecision(generation, context, presentation, choice, text) {
   try {
     body = await exchange(
       generation,
+      interaction,
       'decisions',
       {
         harness_id: generation.harnessId,
@@ -388,7 +430,7 @@ async function submitDecision(generation, context, presentation, choice, text) {
       presentation.presentation_id,
     );
   } catch (error) {
-    if (!generation.active) return;
+    if (!interactionActive(generation, interaction)) return;
     if (error instanceof HarnessRequestError) {
       showError(context, error);
       return;
@@ -399,10 +441,10 @@ async function submitDecision(generation, context, presentation, choice, text) {
       showError(context, error);
       return;
     }
-    await reportTransportUncertainty(generation, context, presentation);
+    await reportTransportUncertainty(generation, interaction, context, presentation);
     return;
   }
-  if (!generation.active) return;
+  if (!interactionActive(generation, interaction)) return;
   const decision = decisionFrom(body, presentation);
   if (decision === null) {
     disabled(context, 'Proceed harness: the broker returned an unusable decision response.');
@@ -422,69 +464,74 @@ async function submitDecision(generation, context, presentation, choice, text) {
 // disposal or a Cleanup generation submits nothing.
 async function openQuestion(generation, context) {
   if (!generation.active) return;
-  const sessionId = await chooseSession(generation, context);
-  if (sessionId === null || !generation.active) return;
-  let pending;
+  const interaction = beginInteraction(generation);
   try {
-    const body = await exchange(generation, 'pending', {
-      harness_id: generation.harnessId,
-      owner_id: generation.ownerId,
-      session_id: sessionId,
+    const sessionId = await chooseSession(generation, interaction, context);
+    if (sessionId === null || !interactionActive(generation, interaction)) return;
+    let pending;
+    try {
+      const body = await exchange(generation, interaction, 'pending', {
+        harness_id: generation.harnessId,
+        owner_id: generation.ownerId,
+        session_id: sessionId,
+      });
+      pending = presentationFrom(body, {
+        harnessId: generation.harnessId,
+        ownerId: generation.ownerId,
+        sessionId,
+      });
+    } catch (error) {
+      if (!interactionActive(generation, interaction)) return;
+      showError(context, error);
+      return;
+    }
+    if (!interactionActive(generation, interaction)) return;
+    if (!pending.ok) {
+      disabled(context, 'Proceed harness: the broker returned an unusable presentation.');
+      return;
+    }
+    const presentation = pending.presentation;
+    if (presentation === null) {
+      context.ui.toast.show({
+        message: 'Proceed: the selected session has no pending question.',
+        variant: 'info',
+        duration: 15000,
+      });
+      return;
+    }
+    if (!(Date.parse(presentation.expires_at) > Date.now())) {
+      context.ui.toast.show({
+        message: 'Proceed: this question reached its deadline and cannot be answered.',
+        variant: 'warning',
+        duration: 20000,
+      });
+      return;
+    }
+    const choice = await context.ui.dialog.select({
+      title: questionTitle(presentation),
+      current: 'reject',
+      options: [
+        { title: 'Reject', value: 'reject' },
+        { title: 'Respond', value: 'respond' },
+        { title: 'Approve', value: 'approve' },
+      ],
     });
-    pending = presentationFrom(body, {
-      harnessId: generation.harnessId,
-      ownerId: generation.ownerId,
-      sessionId,
-    });
-  } catch (error) {
-    if (!generation.active) return;
-    showError(context, error);
-    return;
+    if (choice === undefined || !interactionActive(generation, interaction)) return;
+    if (choice !== 'approve' && choice !== 'reject' && choice !== 'respond') return;
+    let text = null;
+    if (choice === 'respond') {
+      const answer = await context.ui.dialog.prompt({
+        title: `Proceed response for ${inert(presentation.request_id)}`,
+        description: 'Text is recorded as instructions for this request and is never an approval.',
+        placeholder: 'Instructions for the requested action',
+      });
+      if (answer === undefined || !interactionActive(generation, interaction)) return;
+      text = answer;
+    }
+    await submitDecision(generation, interaction, context, presentation, choice, text);
+  } finally {
+    disposeInteraction(generation, interaction);
   }
-  if (!generation.active) return;
-  if (!pending.ok) {
-    disabled(context, 'Proceed harness: the broker returned an unusable presentation.');
-    return;
-  }
-  const presentation = pending.presentation;
-  if (presentation === null) {
-    context.ui.toast.show({
-      message: 'Proceed: the selected session has no pending question.',
-      variant: 'info',
-      duration: 15000,
-    });
-    return;
-  }
-  if (!(Date.parse(presentation.expires_at) > Date.now())) {
-    context.ui.toast.show({
-      message: 'Proceed: this question reached its deadline and cannot be answered.',
-      variant: 'warning',
-      duration: 20000,
-    });
-    return;
-  }
-  const choice = await context.ui.dialog.select({
-    title: questionTitle(presentation),
-    current: 'reject',
-    options: [
-      { title: 'Reject', value: 'reject' },
-      { title: 'Respond', value: 'respond' },
-      { title: 'Approve', value: 'approve' },
-    ],
-  });
-  if (choice === undefined || !generation.active) return;
-  if (choice !== 'approve' && choice !== 'reject' && choice !== 'respond') return;
-  let text = null;
-  if (choice === 'respond') {
-    const answer = await context.ui.dialog.prompt({
-      title: `Proceed response for ${inert(presentation.request_id)}`,
-      description: 'Text is recorded as instructions for this request and is never an approval.',
-      placeholder: 'Instructions for the requested action',
-    });
-    if (answer === undefined || !generation.active) return;
-    text = answer;
-  }
-  await submitDecision(generation, context, presentation, choice, text);
 }
 
 export const harnessTuiDefinition = {
@@ -527,7 +574,7 @@ export const harnessTuiDefinition = {
     const generation = {
       active: true,
       disabled: false,
-      controller: new AbortController(),
+      interaction: null,
       harnessId: options.harnessId,
       ownerId: options.ownerId,
       keyId: loaded.keyId,
@@ -569,9 +616,14 @@ export const harnessTuiDefinition = {
 
     return () => {
       // Fence this generation first so no late dialog result can submit, then
-      // abort the transports it owns.
+      // abort the interaction it still owns.
       generation.active = false;
-      generation.controller.abort();
+      const interaction = generation.interaction;
+      generation.interaction = null;
+      if (interaction !== null) {
+        interaction.active = false;
+        interaction.controller.abort();
+      }
     };
   },
 };
