@@ -4127,8 +4127,14 @@ class PortableBroker {
         }
       }
       // An authorized matching replay enables the presentation only after the
-      // request itself is already durable; it never retargets the stored route.
-      if (storedRoute !== null && existing.presentation_id === null) {
+      // request itself is already durable. A call with no route supplies no
+      // matching context, so it never enables one; it also never retargets or
+      // removes the stored route.
+      if (
+        storedRoute !== null &&
+        existing.presentation_id === null &&
+        requestedRoute !== undefined
+      ) {
         const presentationId = this.#allocatePresentationId();
         await this.#append([
           {
