@@ -5,6 +5,8 @@ import { mkdir, readFile, writeFile, appendFile, symlink, access, readdir } from
 import { join } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
+import { randomUUID } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
 import {
   withQualificationBroker,
   confirmQualificationEnrollment,
@@ -15,6 +17,8 @@ import {
   compositionRenderEvidence,
   compositionErrorCode,
   compositionCurrentFrame,
+  compositionActivation,
+  compositionAdmission,
 } from './harness-composition-readiness.mjs';
 import { assertPluginInventory } from './harness-plugin-inventory.mjs';
 import {
@@ -41,6 +45,7 @@ let productCleanup = 'UNRUN',
 let commandEligibility = 'UNRUN';
 const keys = { ctrlG: 0, enter: 0, exit: 0 };
 let readinessFrame = '';
+let readinessObservation;
 await mkdir(evidence, { recursive: true });
 const progress = async (next) => {
   phase = next;
@@ -156,6 +161,8 @@ try {
           /(?:opencode v)?2\.2\.5$/,
         );
         await progress('compiled-product-start');
+        const run = randomUUID();
+        await writeFile(join(evidence, 'composition-binding.json'), JSON.stringify({ run }));
         child = spawn('/usr/bin/script', linuxScriptArguments('/run/proceed/host-state/pty.raw'), {
           env,
           cwd: '/run/proceed/host-state/work',
@@ -225,15 +232,65 @@ try {
         );
         assert.equal(runtime.version, '2.2.5');
         assert.equal(runtime.bun, '1.4.4');
-        commandEligibility = runtime.commandEligible === true ? 'OBSERVED' : 'UNRUN';
+        assert.equal(runtime.run, run);
+        assert.equal(typeof runtime.generation, 'string');
+        const binding = { run, generation: runtime.generation, session: runtime.session };
+        const origin = { target: fixture, entry: join(fixture, 'tui.ts') };
+        const readObservation = (name) => {
+          try {
+            return JSON.parse(readFileSync(join(evidence, name), 'utf8'));
+          } catch {
+            return null;
+          }
+        };
+        let request,
+          sequence = 0;
         await progress('rendered-host-and-product-registration');
         await awaitCompositionRender({
-          observe: async () => ({
-            exited,
-            overflow,
-            commandEligible: runtime.commandEligible,
-            rendered: compositionRenderEvidence(compositionCurrentFrame(transcript.toString())),
-          }),
+          observe: async () => {
+            const activation = compositionActivation(
+              (await logs('/run/proceed/host-state')).toString(),
+              origin,
+            );
+            if (activation && !binding.hostRun) binding.hostRun = activation.run;
+            const frame = compositionCurrentFrame(transcript.toString());
+            const frameToken = transcript.length;
+            const response = readObservation('composition-selector-response.json');
+            const live = readObservation('composition-live.json');
+            const admitted = compositionAdmission({
+              binding,
+              activation,
+              frame,
+              frameToken,
+              request,
+              response,
+              live,
+              exited,
+              now: Date.now(),
+              deadline: readinessEnd,
+            });
+            if (admitted) readinessObservation = { binding, activation, request, response, live };
+            else if (
+              activation &&
+              compositionRenderEvidence(frame).hostFrameSeen &&
+              (!request ||
+                request.frameToken !== frameToken ||
+                response?.request === request.request)
+            ) {
+              request = { ...binding, request: ++sequence, frame, frameToken };
+              writeFileSync(
+                join(evidence, 'composition-selector-request.json'),
+                JSON.stringify(request),
+              );
+            }
+            return {
+              exited,
+              overflow,
+              admitted,
+              commandEligible: response?.commandEligible === true,
+              rendered: compositionRenderEvidence(frame),
+            };
+          },
           pause: () => delay(20),
           now: Date.now,
           deadline: readinessEnd,
@@ -241,19 +298,44 @@ try {
             renderEvidence = observed;
           },
         });
+        // Re-observe invalidation after the async exchange. No await between the
+        // final current-frame/live-generation check and this one normal key.
+        const activation = compositionActivation(
+          (await logs('/run/proceed/host-state')).toString(),
+          origin,
+        );
         readinessFrame = compositionCurrentFrame(transcript.toString());
+        assert.equal(
+          compositionAdmission({
+            binding,
+            activation,
+            frame: readinessFrame,
+            frameToken: transcript.length,
+            request,
+            response: readObservation('composition-selector-response.json'),
+            live: readObservation('composition-live.json'),
+            exited,
+            now: Date.now(),
+            deadline: readinessEnd,
+          }),
+          true,
+        );
+        commandEligibility = 'FRESH_SAME_GENERATION';
         keys.ctrlG++;
         child.stdin.write('\x07');
         await wait(
           'rendered-product-session-picker',
           () =>
-            plain(transcript).includes('Select the Proceed session') &&
-            plain(transcript).includes(runtime.session),
+            compositionCurrentFrame(transcript.toString()).includes('Select the Proceed session') &&
+            compositionCurrentFrame(transcript.toString()).includes('Composition empty exchange') &&
+            compositionCurrentFrame(transcript.toString()).includes(runtime.session),
         );
         keys.enter++;
         child.stdin.write('\r');
         await wait('rendered-product-empty-result', () =>
-          plain(transcript).includes('selected session has no pending question'),
+          compositionCurrentFrame(transcript.toString()).includes(
+            'selected session has no pending question',
+          ),
         );
         const wire = JSON.parse(
           '[' +
@@ -395,6 +477,7 @@ try {
                 commandEligibility,
                 keys,
                 readinessFrame,
+                readinessObservation,
                 productCleanup,
                 hostExit,
                 inventory,

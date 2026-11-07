@@ -11,8 +11,9 @@ export function compositionCurrentFrame(ansi) {
     syncing = false;
   const tokens =
     ansi.match(
-      /\x1b\](?:[^\x07\x1b]|\x1b(?!\\))*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|[^\x1b]/gu,
+      /\x1b[P_](?:[^\x1b]|\x1b(?!\\))*\x1b\\|\x1b\](?:[^\x07\x1b]|\x1b(?!\\))*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|[^\x1b]/gu,
     ) ?? [];
+  if (tokens.join('') !== ansi) return ''; // Incomplete escape sequence.
   for (const token of tokens) {
     if (token === '\x1b[?2026h') {
       syncing = true;
@@ -24,8 +25,15 @@ export function compositionCurrentFrame(ansi) {
       continue;
     }
     if (token.startsWith('\x1b]')) continue;
+    // Pinned startup capability queries (DCS termcap and APC graphics). They
+    // precede the first screen and do not paint terminal cells.
+    if (token.startsWith('\x1bP') || token.startsWith('\x1b_')) {
+      if (frame || syncing) return ''; // Not supported inside a rendered frame.
+      continue;
+    }
     if (token.startsWith('\x1b[')) {
       const position = /^\x1b\[(\d*);?(\d*)[Hf]$/.exec(token);
+      if (!syncing && (position || /[JK]$/.test(token))) frame = '';
       if (position) {
         row = +(position[1] || 1) - 1;
         col = +(position[2] || 1) - 1;
@@ -47,6 +55,7 @@ export function compositionCurrentFrame(ansi) {
     if (token === '\r') col = 0;
     else if (token === '\n') row++;
     else if (token >= ' ' && row < 100 && col < 300) {
+      if (!syncing) frame = '';
       rows[row] ??= [];
       while (rows[row].length < col) rows[row].push(' ');
       rows[row][col++] = token;
@@ -81,11 +90,121 @@ function readyToast(text) {
 }
 export function compositionRenderEvidence(text) {
   return {
-    hostFrameSeen: text.includes('2.2.5'),
+    hostFrameSeen: text.includes('2.2.5') && text.includes('Ask anything'),
     productReadySeen: readyToast(text),
     pickerTitleSeen: text.includes('Select the Proceed session'),
     emptyResultSeen: text.includes('selected session has no pending question'),
   };
+}
+
+export const openTitle = 'Proceed harness: open the pending question for a session';
+export function observeCompositionSelectors(context, session) {
+  const command = context.keymap.commands().find((item) => item.id === 'proceed.harness.open');
+  const resolved = context.data.session.get(session);
+  return {
+    commandEligible:
+      !!command &&
+      command.title === openTitle &&
+      (typeof command.enabled === 'function'
+        ? command.enabled() === true
+        : command.enabled !== false) &&
+      context.keymap.active().some((item) => item.key === 'ctrl+g' && item.title === openTitle),
+    session: resolved?.id === session ? session : null,
+  };
+}
+
+// The generation label binds test observations only. Host setup/reconcile logs,
+// not that label, establish activation. Identical reconciles do not replace it.
+export function compositionActivation(text, { target, entry }) {
+  const lines = text
+    .split('\n')
+    .filter((line) => /component=plugin(?: |$)/.test(line) && /role=cli(?: |$)/.test(line));
+  const field = (line, name) => {
+    const value = line.match(new RegExp(`(?:^| )${name}=("(?:[^"\\\\]|\\\\.)*"|[^ ]+)`))?.[1];
+    return value?.startsWith('"') ? JSON.parse(value) : value;
+  };
+  let run,
+    setup,
+    origin = false,
+    active = false,
+    invalid = false;
+  for (const line of lines) {
+    const currentRun = field(line, 'run');
+    if (!run) run = currentRun;
+    if (!run || currentRun !== run) return null;
+    if (field(line, 'target') === target) {
+      if (
+        field(line, 'stage') === 'read' &&
+        field(line, 'entrypoint') === 'file://' + entry &&
+        line.includes('operation completed')
+      )
+        origin = true;
+      if (field(line, 'plugin') === 'proceed.harness') {
+        if (field(line, 'stage') === 'cleanup') invalid = true;
+        if (field(line, 'stage') === 'setup') {
+          if (line.includes('operation started')) {
+            if (setup) invalid = true;
+            setup = field(line, 'id');
+            active = false;
+          }
+          if (line.includes('operation failed')) invalid = true;
+          if (line.includes('operation completed') && setup === field(line, 'id')) active = true;
+        }
+      }
+    }
+  }
+  // Completion of reconcile follows the host's active=true assignment.
+  const completed = lines.some(
+    (line, i) =>
+      line.includes('plugin reconciliation completed') &&
+      lines
+        .slice(0, i)
+        .some(
+          (prior) =>
+            field(prior, 'target') === target &&
+            field(prior, 'id') === setup &&
+            prior.includes('operation completed') &&
+            field(prior, 'stage') === 'setup',
+        ),
+  );
+  return origin && active && completed && !invalid ? { run, setup } : null;
+}
+
+export function compositionAdmission({
+  binding,
+  activation,
+  frame,
+  frameToken,
+  request,
+  response,
+  live,
+  exited,
+  now,
+  deadline,
+}) {
+  return (
+    !exited &&
+    now < deadline &&
+    !!activation &&
+    activation.run === binding.hostRun &&
+    !!frame &&
+    compositionRenderEvidence(frame).hostFrameSeen &&
+    response?.run === binding.run &&
+    response?.generation === binding.generation &&
+    live?.run === binding.run &&
+    live?.generation === binding.generation &&
+    live?.live === true &&
+    request?.generation === binding.generation &&
+    request?.run === binding.run &&
+    response?.request === request?.request &&
+    request?.frame === frame &&
+    Number.isSafeInteger(frameToken) &&
+    frameToken > 0 &&
+    request?.frameToken === frameToken &&
+    response?.live === true &&
+    response?.commandEligible === true &&
+    response?.session === binding.session
+  );
 }
 
 // Pinned public Context.keymap.commands lists reachable commands. The fixture
@@ -102,12 +221,7 @@ export async function awaitCompositionRender({ observe, pause, now, deadline, re
       throw Object.assign(new Error('capture limit'), {
         code: 'CAPTURE_LIMIT',
       });
-    if (
-      state.rendered.hostFrameSeen &&
-      state.rendered.productReadySeen &&
-      state.commandEligible === true
-    )
-      return;
+    if (state.admitted === true) return;
     await pause();
   }
   throw Object.assign(new Error('render readiness deadline'), {

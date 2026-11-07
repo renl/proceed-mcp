@@ -3,12 +3,22 @@
 import * as Plugin from '@opencode/plugin/tui/plugin';
 import product from '@meshimize/proceed-mcp/tui';
 import { writeFile } from 'node:fs/promises';
-import { setTimeout as delay } from 'node:timers/promises';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { observeCompositionSelectors } from '/payload/tests/support/harness-composition-readiness.mjs';
 
 export default Plugin.define({
   id: product.id,
   async setup(context) {
     let phase = 'product-setup';
+    const root = '/run/proceed/evidence/';
+    const { run } = JSON.parse(readFileSync(root + 'composition-binding.json', 'utf8'));
+    const generation = randomUUID();
+    let live = true,
+      timer;
+    const publish = () =>
+      writeFileSync(root + 'composition-live.json', JSON.stringify({ run, generation, live }));
+    publish();
     try {
       const cleanup = await product.setup(context);
       if (typeof cleanup !== 'function') throw new Error('Product setup refused');
@@ -21,25 +31,33 @@ export default Plugin.define({
       phase = 'host-session-sync';
       await context.data.session.sync(session.id);
       if (!context.data.session.get(session.id)) throw new Error('Host session unresolved');
+      // Fixed-purpose evidence observation only. No command dispatch, callback,
+      // decision, or product hook. Requests are written after a completed frame.
       phase = 'public-command-eligibility';
+      let last;
       const deadline = Date.now() + 60000;
-      let eligible = false;
-      while (Date.now() < deadline) {
-        // Read-only public host selectors, never dispatch/run or synthetic keys.
-        const command = context.keymap
-          .commands()
-          .find((item) => item.id === 'proceed.harness.open');
-        eligible =
-          !!command &&
-          command.title === 'Proceed harness: open the pending question for a session' &&
-          (typeof command.enabled === 'function' ? command.enabled() : command.enabled !== false) &&
-          context.keymap
-            .active()
-            .some((item) => item.key === 'ctrl+g' && item.title === command.title);
-        if (eligible) break;
-        await delay(20);
-      }
-      if (!eligible) throw new Error('Public command not eligible');
+      timer = setInterval(() => {
+        if (!live || Date.now() >= deadline) {
+          clearInterval(timer);
+          return;
+        }
+        try {
+          const request = JSON.parse(
+            readFileSync(root + 'composition-selector-request.json', 'utf8'),
+          );
+          if (request.run !== run || request.generation !== generation || request.request === last)
+            return;
+          last = request.request;
+          const observation = observeCompositionSelectors(context, session.id);
+          if (!live) return;
+          writeFileSync(
+            root + 'composition-selector-response.json',
+            JSON.stringify({ run, generation, request: request.request, live, ...observation }),
+          );
+        } catch {
+          /* Incomplete/missing evidence refuses readiness. */
+        }
+      }, 20);
       await writeFile(
         '/run/proceed/evidence/composition-ready.json',
         JSON.stringify({
@@ -47,10 +65,15 @@ export default Plugin.define({
           version: context.app.version,
           bun: process.versions.bun,
           node: process.versions.node,
-          commandEligible: eligible,
+          run,
+          generation,
         }),
       );
       return async () => {
+        // Fence at Cleanup ENTRY before any asynchronous product cleanup.
+        live = false;
+        clearInterval(timer);
+        publish();
         await cleanup();
         await writeFile(
           '/run/proceed/evidence/composition-cleanup.json',
@@ -60,6 +83,9 @@ export default Plugin.define({
         );
       };
     } catch {
+      live = false;
+      clearInterval(timer);
+      publish();
       await writeFile(
         '/run/proceed/evidence/composition-fixture-failure.json',
         JSON.stringify({ phase }),
