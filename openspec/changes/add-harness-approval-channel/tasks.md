@@ -720,6 +720,18 @@ Retained ignored evidence is `.scratch/harness-host/run-linux-DJNo59/` with `can
 
 Worktree lifecycle stays active with cleanup pending verified landing. This evidence update changes no code, test criterion, dependency, configuration, base or archive; the verified source is exactly `80197c9` and later evidence-only commits only append this record.
 
+### NH.4 actual parent admission checkpoint - stop on a production gap
+
+Input evidence HEAD is `451d5dae534b6379f063014182bf459ae99ea72e`. Inspected source is `80197c9cb485297770cc70d9028220edcd5d89fd`, parent `f46250e6abafc7787220cd40694fc47f08c09fd9`, unchanged by later evidence commits. Main base remains `a42e23c5dd026c76cf41c43eab21b7f3a4cf5c45`. Entry index is empty. README/status overlays remain unselected. The five implementation files were inspected read-only. The implementation commit changes only those five harness files, not `src/http/local-client.js`.
+
+The minimum first control is `tests/harness-parent-admission.test.mjs`. It invokes the actual product parent for malformed authority, closed-operation/extra-body refusal, preabort and missing Node. A test-only observer on the imported builtin spawn boundary fails any attempted native launch. It supplies no fake child, production hook or runtime attestation. The second control places a known shell wrapper in a unique ignored directory and calls the actual resolver, requiring refusal under design section 2 executable admission. It never executes that file. Finally removes and verifies absence of only its own directory. These native controls do not need a process-owning environment and prove no child pipe, runtime handshake or broker behavior.
+
+Ordered commands, PowerShell in the change worktree: scoped Prettier and syntax checks first (30000/10000 ms). Commit selected test/preparation before execution. Then `node --test tests/harness-parent-admission.test.mjs` (30000 ms). Stop on a production gap, preserve the failing assertion and return the correction through coordination. No wrapper/helper replacement or native helper launch is permitted. Full parent observer binding and the one compiled-host exchange remain blocked until executable admission passes. Existing 37/37 direct-helper evidence is reused only for its recorded protocol/refusal scope and inputs, not parent or broker proof.
+
+Source-review concern for correction review: `node-helper.js` cleanup-failure branch constructs a new channel error without preserving the post-handoff `submitted` flag. `tui-plugin.js` interprets false as no submission. This is a source finding, not an executed cleanup-failure or lost-commit assertion. No decision replay was observed or executed. Exact next correction and runtime-binding work depend on the first admission result below. No gap ID is invented here.
+
+Founder-visible success is unchanged and unproven. This checkpoint is prerequisite/proxy work only. NH.4/NH.5 remain unchecked. No composition, model/provider, Telegram, user key or work decision is launched by these controls. Worktree remains active, cleanup pending verified landing. Pre-exposure, post-deploy and deferred checks retain their existing named owners/triggers.
+
 ## Workflow follow-up
 
 - After independent integrated-candidate verification, coordination routes the declared owners' delta review against updated merged specs, then authorizes one CLI archive and the single PR merge. No manual spec sync or archive while the parent is unmerged. Complete active task/evidence content and live link repairs before the immutable move.
