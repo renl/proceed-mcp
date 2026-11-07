@@ -9,9 +9,14 @@ import { performance } from 'node:perf_hooks';
 import { PassThrough, Writable } from 'node:stream';
 import { mkdir, mkdtemp, writeFile, rm, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { dirname, join } from 'node:path';
+import fsPromises from 'node:fs/promises';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runHelperExchange, resolveNodeRuntime } from '../src/harness/node-helper.js';
+import {
+  runHelperExchange,
+  resolveNodeRuntime,
+  packagedHelperEntry,
+} from '../src/harness/node-helper.js';
 import { frame, ready, syntheticOperator } from './support/harness-helper-vectors.mjs';
 import { assertNoSpawn } from './support/harness-parent-observations.mjs';
 
@@ -65,6 +70,13 @@ test('actual resolver rejects a shell wrapper instead of selecting it as Node', 
   const scratch = join(root, '.scratch/harness-parent-admission');
   await mkdir(scratch, { recursive: true });
   const owned = await mkdtemp(join(scratch, 'admission-'));
+  const original = childProcess.spawn;
+  let attempts = 0;
+  childProcess.spawn = () => {
+    attempts++;
+    throw new Error('wrapper must not execute');
+  };
+  syncBuiltinESMExports();
   try {
     const candidate = join(owned, process.platform === 'win32' ? 'node.exe' : 'node');
     // This file is never executed. A shell script is not a genuine Node runtime,
@@ -75,9 +87,118 @@ test('actual resolver rejects a shell wrapper instead of selecting it as Node', 
       (error) => ['NODE_UNAVAILABLE', 'NODE_UNSUPPORTED'].includes(error.code),
       'shell wrappers must not be admitted as runtime identities',
     );
+    await assert.rejects(runHelperExchange({ ...valid, env: { PATH: owned } }), {
+      code: 'NODE_UNAVAILABLE',
+      submitted: false,
+    });
+    assert.equal(attempts, 0, 'actual parent must not execute the wrapper');
   } finally {
+    childProcess.spawn = original;
+    syncBuiltinESMExports();
     await rm(owned, { recursive: true });
     await assert.rejects(access(owned, constants.F_OK), { code: 'ENOENT' });
+  }
+});
+
+test('actual parent excludes relative, empty and current-directory runtime search entries', async () => {
+  const original = childProcess.spawn;
+  let attempts = 0;
+  childProcess.spawn = () => {
+    attempts++;
+    throw new Error('unsafe PATH must not spawn');
+  };
+  syncBuiltinESMExports();
+  try {
+    for (const PATH of ['.', '', delimiter, dirname(process.execPath)]) {
+      await assert.rejects(
+        runHelperExchange({ ...valid, env: { PATH }, cwd: dirname(process.execPath) }),
+        { code: 'NODE_UNAVAILABLE', submitted: false },
+      );
+    }
+    assert.equal(attempts, 0);
+  } finally {
+    childProcess.spawn = original;
+    syncBuiltinESMExports();
+  }
+});
+
+test('actual parent rejects closed operations and extra body inputs with valid authority before spawn', async () => {
+  const original = childProcess.spawn;
+  let attempts = 0;
+  childProcess.spawn = () => {
+    attempts++;
+    throw new Error('invalid operation must not spawn');
+  };
+  syncBuiltinESMExports();
+  try {
+    const inputs = [
+      ...['start', 'stop', 'readiness', 'owner', 'control', 'proxy'].map((operation) => ({
+        operation,
+      })),
+      ...['url', 'method', 'headers', 'proxy', 'key_file', 'owner_token', 'control_token'].map(
+        (field) => ({
+          body: { ...valid.body, [field]: 'forbidden' },
+        }),
+      ),
+    ];
+    for (const input of inputs) {
+      await assert.rejects(runHelperExchange({ ...valid, ...input }), {
+        code: 'HELPER_PROTOCOL_INVALID',
+        submitted: false,
+      });
+    }
+    assert.equal(attempts, 0);
+  } finally {
+    childProcess.spawn = original;
+    syncBuiltinESMExports();
+  }
+});
+
+test('actual parent refuses changed executable and helper identities before spawn', async () => {
+  // Script only the imported filesystem observation. No installed file is edited.
+  // This proves the parent's race handling, not real filesystem replacement.
+  const originalStat = fsPromises.lstat;
+  const originalSpawn = childProcess.spawn;
+  let attempts = 0;
+  childProcess.spawn = () => {
+    attempts++;
+    throw new Error('replaced identity must not spawn');
+  };
+  try {
+    for (const [target, code] of [
+      [process.execPath, 'NODE_UNAVAILABLE'],
+      [packagedHelperEntry(), 'HELPER_PROTOCOL_INVALID'],
+    ]) {
+      let observations = 0;
+      const realTarget = await fsPromises.realpath(target);
+      const matches = new Set(
+        [target, realTarget].map((p) => p.replaceAll('\\', '/').toLowerCase()),
+      );
+      fsPromises.lstat = async (path, ...args) => {
+        const stat = await originalStat(path, ...args);
+        if (!matches.has(String(path).replaceAll('\\', '/').toLowerCase())) return stat;
+        observations++;
+        // fileIdentity observes link and real-file stat on each pass. Change the
+        // second pass, retaining methods and all unrelated real stat properties.
+        if (observations <= 2) return stat;
+        return new Proxy(stat, {
+          get(value, key) {
+            return key === 'mtimeMs' ? value.mtimeMs + 1 : Reflect.get(value, key);
+          },
+        });
+      };
+      syncBuiltinESMExports();
+      await assert.rejects(
+        runHelperExchange({ ...valid, env: { PATH: dirname(process.execPath) }, cwd: root }),
+        { code, submitted: false },
+      );
+      assert.ok(observations >= 4, 'both identity observations must be reached');
+      assert.equal(attempts, 0);
+    }
+  } finally {
+    fsPromises.lstat = originalStat;
+    childProcess.spawn = originalSpawn;
+    syncBuiltinESMExports();
   }
 });
 
