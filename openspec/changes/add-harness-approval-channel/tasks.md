@@ -783,6 +783,16 @@ Cheap gates PASS in order: scoped Prettier over this file, the admission test an
 
 Remaining real gaps are unchanged. The parent admission/privacy/refusal/lifetime comparators stay unbound to actual spawned process, pipe, exit and broker effects. Rendered TUI generation disablement after an unconfirmed cleanup is UNRUN here; only the parent's single fence notification is observed. The compiled OpenCode 2.2.5/Bun composition exchange and NH.5 preflight remain UNRUN/BLOCKED with zero attempts. Genuine local choice, ordinary API forgery resistance, metadata and original-call routing, live Telegram, installed first use, Windows and release qualification remain UNRUN. NH.4 and NH.5 stay unchecked. Next owner is test engineering through coordination for the contained actual-process observer binding against source commit `dc4badd`.
 
+### NH.4 real-process observer preparation
+
+Input candidate `c60efdaff0e8b50240aedbd7e2a6e312cc0742ff`, production correction `dc4baddfe6ff66e1183faad51d7616cdcf9f2ed8`, base `a42e23c5dd026c76cf41c43eab21b7f3a4cf5c45`. Initial index empty. README and status overlays are preserved and unselected. Worktree remains active with cleanup pending verified landing.
+
+`tests/support/harness-parent-inner.mjs` invokes the actual `runHelperExchange`. The imported spawn observer forwards to genuine Node with unchanged production spawn options. For hostile peers only, it substitutes the helper argument with the finite test-owned `tests/fixtures/harness-parent/child.mjs`. This is parent-boundary proof, not the compiled TUI or secure broker. One control uses the unchanged production helper against an absent run-owned lock, expecting a local refusal. Kernel `/proc` executable, argv, environment and descriptor identities, actual writes/reads, exit/close, signals and PID absence bind the assertions. Synthetic positive replies are explicitly not secure-broker proof.
+
+Maintained command: `node tests/run-harness-host.mjs --parent-process-run`, outer 310000 ms. Reuse the pinned image, network-none/private-PID/init/read-only payload policy and existing 300000 ms aggregate lifecycle. Inner exchanges use a stricter 2500 ms original budget, not proof of the full 10000 ms product ceiling. Stop at the first assertion failure. Export only fixed classifications and nonsecret physical metadata. No raw diagnostic output is exported. Preflight is `--parent-process-preflight` and does not consume NH.5.
+
+Cheap scoped formatter, new-file syntax and whitespace checks PASS before execution. Runtime controls are UNRUN at this preparation checkpoint. The exact existing `parentCases` inventory remains authoritative. Unreached cases, broker uncertainty/refresh and rendered generation disablement stay UNRUN, never inferred from synthetic peers. NH.4/NH.5 remain unchecked. No production hook, dependency, criterion, permission, role or retry change is made.
+
 ## Workflow follow-up
 
 - After independent integrated-candidate verification, coordination routes the declared owners' delta review against updated merged specs, then authorizes one CLI archive and the single PR merge. No manual spec sync or archive while the parent is unmerged. Complete active task/evidence content and live link repairs before the immutable move.

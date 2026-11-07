@@ -29,10 +29,12 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       'transport',
       'transport-first-exchange',
       'helper-contract',
+      'parent-process',
     ].includes(mode),
   );
-  const helper = mode === 'helper-contract';
-  if (helper) {
+  const parent = mode === 'parent-process';
+  const helper = mode === 'helper-contract' || parent;
+  if (helper && !parent) {
     assert.equal(
       typeof helperEntry,
       'string',
@@ -54,7 +56,8 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
             .split(/\r?\n/),
         )
       : linuxPayload;
-  if (helper) assert.ok(payload.includes(helperEntry), 'helper must be a tracked payload source');
+  if (helper && !parent)
+    assert.ok(payload.includes(helperEntry), 'helper must be a tracked payload source');
   const started = Date.now();
   const end = started + hostBudgets.aggregate;
   const executionEnd = end - hostBudgets.teardownReserve;
@@ -148,7 +151,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           candidate,
           image: linuxImage,
           payload,
-          command: `node tests/run-harness-host.mjs ${helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
+          command: `node tests/run-harness-host.mjs ${parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
         },
         null,
         2,
@@ -173,14 +176,16 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       '250',
       'node',
       helper
-        ? '/payload/tests/support/harness-helper-inner.mjs'
+        ? parent
+          ? '/payload/tests/support/harness-parent-inner.mjs'
+          : '/payload/tests/support/harness-helper-inner.mjs'
         : transport
           ? '/payload/tests/support/harness-transport-inner.mjs'
           : setupOnly
             ? '/payload/tests/support/harness-setup-inner.mjs'
             : '/payload/tests/support/harness-linux-inner.mjs',
       ...(firstOnly ? ['--first-exchange-only'] : []),
-      ...(helper ? ['/payload/' + helperEntry] : []),
+      ...(helper && !parent ? ['/payload/' + helperEntry] : []),
     ]);
     created = true;
     const policy = JSON.parse((await command(['inspect', name])).stdout)[0];
