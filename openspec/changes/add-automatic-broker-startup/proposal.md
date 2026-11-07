@@ -36,11 +36,13 @@ This change delivers the complete automatic-startup outcome, not an unexposed fo
 
 It relies on the current [portable MCP contract](../../specs/opencode-session-continuation/spec.md), [Telegram pairing and durable-decision contract](../../specs/telegram-approval/spec.md), and [supported first-use path](../../specs/npm-distribution/spec.md#requirement-complete-first-useful-action-from-empty-state). It follows the [historical implementation](../archive/2026-11-05-add-telegram-approval-opencode-v2/proposal.md) without editing that record.
 
+The same PR may prepare the coupled package candidate version `0.1.0-preview.2` for the changed runtime and CLI, with consistent metadata, tests and README candidate/released-version mapping. This is necessary release correctness within the startup outcome: changed runtime and CLI contents must not retain the already published artifact's version identity. Read-only public npm discovery found this candidate version unused, not reserved. Preparation does not change historical bootstrap-version requirements, add capability requirements or authorize a release.
+
 ### Exclusions
 
 - Native integration, dual-channel approval and agent-skill implementation.
 - System services, login startup, automatic stale-lock takeover, `doctor`, delivery retry and new public APIs solely for tests.
-- Dependency or package-version changes, npm or MCP Registry publishing, and publishing automation.
+- Dependency changes and package-version changes other than the coupled candidate preparation above. npm or MCP Registry publishing, Registry mutation, deployment, actual release and new publishing automation remain excluded. The existing one-time manual-publication exception is unchanged and grants no subsequent publication authority.
 - Automatic recovery of exited clients, MCP Events, post-timeout agent resumption, action execution or changes to the existing five-tool approval contract.
 
 ## Impact and Design Decisions
@@ -65,3 +67,5 @@ authorization, explicit human approval and truthful delivery status.
 The user's hands-on test follows full program delivery, not an immediate pairing or click requirement during development. Independent applicable pre-merge verification remains required. Unavailable live checks remain BLOCKED until executed or covered by eligible scoped acceptance at the relevant delivery step. Historical preview exceptions do not waive this change's checks.
 
 Implementation uses temporary development worktrees followed by prompt PR landing on `main`. Any later separately authorized publication must use clean merged `main`. This proposal neither authorizes testing against real credentials or Telegram nor authorizes publication. Landing this change alone is not a claim of full program deployment.
+
+Candidate preparation does not change the user's full-program development, deployment and subsequent hands-on test timing. Public claims of the new startup feature must remain explicitly unreleased until separately authorized publication and exact-version public installation/startup verification establish delivery. Local candidate validation or PR landing is not publication proof.
