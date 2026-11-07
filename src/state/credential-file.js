@@ -169,12 +169,17 @@ async function assertAncestors(file, { allowMissingTail }) {
   }
 }
 
-// System-owned ancestors may be mode-permissive; anything writable by another
-// non-system account above the dedicated directory is a refusal.
+// An ancestor must not let an untrusted account replace the protected directory.
+// A directory without group/other write permission protects its children. A
+// writable system ancestor such as a temporary or shared root protects them only
+// with the sticky bit, which reserves rename/removal for the entry owner, the
+// directory owner and root. A system root is never required to belong to the
+// operator and its permissions are never altered.
 function ancestorProtects(info) {
   if (!posix()) return true;
   if ((info.mode & 0o022) === 0) return true;
-  return info.uid === 0;
+  if ((info.mode & 0o1000) === 0) return false;
+  return info.uid === 0 || info.uid === effectiveUid();
 }
 
 async function canonicalExisting(path) {
@@ -376,6 +381,26 @@ function withCode(error) {
   return error;
 }
 
+// `true` only when the destination still resolves to the exact object this
+// attempt created. A missing or uninspectable destination, or a different
+// device/inode, is not proof of ownership over the current entry.
+async function removeExactCreated(file, created) {
+  if (created === null) return false;
+  let current;
+  try {
+    current = await lstat(file);
+  } catch {
+    return false;
+  }
+  if (current.dev !== created.dev || current.ino !== created.ino) return false;
+  try {
+    await unlink(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Creates only missing dedicated credential directories and the new credential
 // file. The destination is opened exclusively, protected before the token is
 // written, flushed and reverified before provisioning is reported complete.
@@ -416,19 +441,29 @@ async function provisionInner({ file, stateDir, token }) {
     throw storageFailure('could not create the credential file', 'PROTECTION_UNVERIFIED', cause);
   }
 
+  let created = null;
   try {
     if (posix()) await handle.chmod(POSIX_FILE_MODE);
-    assertOwnerOnlyFile(await handle.stat(), 'the new credential file');
+    created = await handle.stat();
+    assertOwnerOnlyFile(created, 'the new credential file');
     await handle.writeFile(`${token}\n`, 'utf8');
     await handle.sync();
     assertOwnerOnlyFile(await handle.stat(), 'the new credential file');
   } catch (cause) {
     await handle.close().catch(() => {});
-    // The exclusive create succeeded, so this incomplete object is this
-    // attempt's own; removing it takes the credential from nobody else.
-    await unlink(file).catch(() => {});
+    // The exclusive create proved this attempt owned the object it opened, but
+    // the destination may have been renamed away and replaced since. Remove only
+    // the exact object still proven to be this attempt's; preserve a replacement
+    // or an uncertain entry and report the incomplete cleanup.
+    const removed = await removeExactCreated(file, created);
     if (cause?.name === 'CliError') throw cause;
-    throw storageFailure('could not write the credential file', 'PROTECTION_UNVERIFIED', cause);
+    throw storageFailure(
+      removed
+        ? 'could not write the credential file'
+        : 'could not write the credential file; an object created during provisioning could not be proven safe to remove',
+      'PROTECTION_UNVERIFIED',
+      cause,
+    );
   }
   await handle.close();
 
@@ -489,6 +524,9 @@ async function loadInner({ file, stateDir }) {
         'PROTECTION_UNVERIFIED',
       );
     }
+    // Validate the actual opened handle before any content access: a pathname
+    // check before the open cannot prove the handle that will be read.
+    assertOwnerOnlyFile(opened, 'the opened automatic-startup credential file');
     if (opened.size > MAX_TOKEN_INPUT_BYTES) {
       throw blockedPrerequisite(
         'the automatic-startup Telegram credential is malformed; provision it again through a trusted source',
