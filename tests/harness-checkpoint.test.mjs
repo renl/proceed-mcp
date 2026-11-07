@@ -69,7 +69,7 @@ async function enroll(h, key) {
   const confirm = message.reply_markup.inline_keyboard
     .flat()
     .find((b) => b.callback_data.startsWith('he:')).callback_data;
-  const wrongUpdate = h.fixture.enqueue({
+  h.fixture.enqueue({
     callback_query: {
       id: 'wrong-pairing',
       from: { id: 8, is_bot: false },
@@ -77,9 +77,15 @@ async function enroll(h, key) {
       data: confirm,
     },
   });
+  // Observe completion of this callback, not completion of the next long poll.
+  // The latter cannot finish until a future update is enqueued by this test.
   await until(
-    () => h.fixture.batches.some((b) => b.offset > wrongUpdate),
-    'wrong sender consumed before checking authority',
+    () =>
+      h.fixture.calls.some(
+        (call) =>
+          call.method === 'answerCallbackQuery' && call.body.callback_query_id === 'wrong-pairing',
+      ),
+    'wrong-sender callback acknowledged before checking authority',
     h.signal,
   );
   await error(await post(h, '/v1/harness/pending', key, pendingBody), 401, 'AUTH_REQUIRED');

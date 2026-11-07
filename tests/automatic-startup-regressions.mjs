@@ -30,7 +30,7 @@ try {
   const selectedSuites =
     selection === 'harness'
       ? [['HARNESS-CHECKPOINT', 'harness-checkpoint.test.mjs']]
-      : pattern
+      : pattern || selection === 'scheduling'
         ? suites.slice(0, 1)
         : suites;
   for (const [id, file] of selectedSuites) {
@@ -113,7 +113,8 @@ try {
       (process.argv.includes('--health-only') ||
       process.argv.includes('--only=identity') ||
       process.argv.includes('--only=drain') ||
-      process.argv.includes('--only=harness')
+      process.argv.includes('--only=harness') ||
+      process.argv.includes('--only=scheduling')
         ? 1
         : 2) && results.every((item) => item.status === 'PASS');
   console.log(

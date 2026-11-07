@@ -152,6 +152,7 @@ try {
       'package-fixture',
       'admission',
       'harness',
+      'scheduling',
     ].includes(mode),
     'explicit bounded checkpoint selection',
   );
@@ -163,11 +164,13 @@ try {
             'tests/automatic-startup-package.mjs',
             ...(mode === 'package-fixture' ? ['--fixture-only'] : []),
           ]
-        : ['regressions', 'health', 'identity', 'drain', 'harness'].includes(mode)
+        : ['regressions', 'health', 'identity', 'drain', 'harness', 'scheduling'].includes(mode)
           ? [
               'tests/automatic-startup-regressions.mjs',
               ...(mode === 'health' ? ['--health-only'] : []),
-              ...(['identity', 'drain', 'harness'].includes(mode) ? [`--only=${mode}`] : []),
+              ...(['identity', 'drain', 'harness', 'scheduling'].includes(mode)
+                ? [`--only=${mode}`]
+                : []),
             ]
           : mode === 'dispatcher'
             ? ['--test', '--test-reporter=tap', '/workspace/tests/automatic-startup-cli.test.mjs']
