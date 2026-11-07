@@ -13,8 +13,9 @@ The product MUST supply a reusable Proceed skill and README instructions for pro
 #### Scenario: Install and load in a consuming project
 
 - **GIVEN** a consuming project without the skill and an OpenCode V2 agent permitted to load it
-- **WHEN** the operator follows the README to obtain the supplied artifact, install it at the documented path, and request `@proceed`
+- **WHEN** the operator follows the README to obtain the supplied artifact, install it at the documented path, and explicitly request loading through the agent's `skill` tool with `id: proceed` or through `@proceed`
 - **THEN** the skill is registered as `proceed` and its instructions can be loaded
+- **AND** real host discovery and returned installed instructions are observed through the chosen loading route. Either route satisfies this scenario without requiring a separate demonstration of the other route
 - **AND** the README identifies the artifact source and distinguishes skill installation from MCP server installation and connection.
 
 #### Scenario: Explain discovery limits

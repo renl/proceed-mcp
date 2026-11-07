@@ -14,7 +14,7 @@ Problem: No installable usage skill. This change supplies reusable guidance for 
 ## What Changes
 
 - Deliver a reusable Proceed usage skill, discoverable by its description and explicitly loadable as `proceed` in OpenCode V2.
-- Add README guidance for copying the supplied skill into a consuming project's `.opencode/skills/proceed/SKILL.md` and loading it with `@proceed`. This is the minimum supported installation path, not a new installer or catalog.
+- Add README guidance for copying the supplied skill into a consuming project's `.opencode/skills/proceed/SKILL.md` and explicitly loading it through the agent's `skill` tool with `id: proceed` or through `@proceed`. Either loading route satisfies acceptance. This is the minimum supported installation path, not a new installer or catalog.
 - Cover when to request human approval or instructions, the existing prepare/wait/acknowledge interaction, truthful outcomes, private authority retention, and retrieval after a lost waiting call.
 - Provide a harmless first-use procedure and actionable guidance for missing tools, setup, permissions, or retained authority.
 
