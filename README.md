@@ -6,12 +6,13 @@ Review your MCP agent's approval requests from Telegram.
 Reject, or Respond with instructions, and the waiting MCP call receives your decision. Only an
 explicit Approve grants approval. The server records the outcome. It does not execute the action.
 
-To get started, install the package, pair your Telegram chat, and connect your MCP client using the
-steps below.
+This guide is for operators connecting a local MCP client to Telegram approval.
 
-> **Preview:** `@meshimize/proceed-mcp@0.1.0-preview.1` is published on npm and listed in the
-> official MCP Registry. Pin the exact version. MCP Events, automatic continuation after a timeout,
-> `doctor`, and `retry` are not implemented in this preview.
+> **Release status:** `@meshimize/proceed-mcp@0.1.0-preview.1` is published on npm and listed in the
+> official MCP Registry. It requires a manual foreground broker and does **not** include automatic
+> startup. The automatic-startup setup below describes the unpublished `0.1.0-preview.2` candidate,
+> not that npm version. MCP Events, automatic continuation after a timeout, `doctor`, and delivery
+> retry remain unavailable.
 
 ## Distribution
 
@@ -23,7 +24,7 @@ adapter and the broker run on your machine. The broker listens only on `127.0.0.
 - npm: [@meshimize/proceed-mcp](https://www.npmjs.com/package/@meshimize/proceed-mcp)
 - MCP Registry: [io.github.renl/proceed-mcp](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.renl%2Fproceed-mcp)
 
-The current version is `0.1.0-preview.1`. Both the `preview` and `latest` dist-tags point to it, so
+The published version is `0.1.0-preview.1`. Both the `preview` and `latest` dist-tags point to it, so
 pin the exact version rather than relying on either tag. Publishing automation is planned but not
 implemented.
 
@@ -37,7 +38,12 @@ implemented.
   POSIX, the state directory must support owner-only mode bits.
 - No build tool, native addon, or postinstall script is required.
 
-## Install
+Recorded synthetic startup checks use Ubuntu 24.04 with Node 24.22.2. Installed-package and live
+Telegram first-use verification remain pending for this candidate. Windows protected provisioning,
+detached startup and helper cleanup qualification also remain outstanding.
+Protection and secure-channel checks refuse operation when they cannot establish the required safety.
+
+## Install the published preview (manual broker only)
 
 Install the exact preview version globally:
 
@@ -54,7 +60,37 @@ npx --yes --package @meshimize/proceed-mcp@0.1.0-preview.1 -- proceed-mcp --help
 
 The scoped package installs the same `proceed-mcp` command.
 
-## Set up the broker and Telegram
+For this published version, create state and an owner as in steps 1-2 below, then create the bot.
+Supply `PROCEED_TELEGRAM_BOT_TOKEN` privately to the foreground broker's own process environment
+from a trusted operator-controlled source. Do not type the token into a command or MCP configuration.
+Run `proceed-mcp serve --state-dir <absolute-state-dir>` and leave that terminal open. In another
+terminal, run `proceed-mcp pair --state-dir <absolute-state-dir>` and complete the private-chat
+pairing in step 5. Connect the published adapter with:
+
+```console
+npx --yes --package @meshimize/proceed-mcp@0.1.0-preview.1 -- proceed-mcp mcp --owner <owner-id> --state-dir <absolute-state-dir>
+```
+
+Keep both broker and adapter on preview.1 for this legacy HTTP mode. The new provisioning,
+`--secure-local` and `stop` commands below are not available in preview.1.
+
+## One-time setup for automatic startup (unreleased candidate)
+
+Use the candidate's CLI for every step, not the published preview command. From the candidate
+checkout, replace `proceed-mcp` in the commands below with `node bin/proceed-mcp.js`. An installed
+candidate package can use its own `proceed-mcp` command. The package metadata identifies this
+candidate as `0.1.0-preview.2`. It is not published on npm or listed in the MCP Registry.
+
+### Existing setup: stop the old broker once
+
+Do not run `init` or add an existing owner again. Stop a running legacy HTTP broker with Ctrl+C in
+its original foreground terminal and wait for it to exit cleanly. Preserve the state, journal and
+pairing. Upgraded `mcp`, `pair`, `status` and `stop` refuse legacy brokers before sending private
+credentials. Old clients cannot use the new secure broker.
+
+Then provision the token in step 4 and connect the candidate adapter. Existing pairing does not
+need repeating. Alternatively, use secure foreground mode below without saving a token file.
+This is a one-time stop/restart, not a recurring terminal requirement for automatic startup.
 
 ### 1. Create protected state
 
@@ -76,7 +112,7 @@ proceed-mcp owner add <owner-id> --label "<display-label>" --state-dir <absolute
 ```
 
 `<owner-id>` must match `[a-z0-9_-]{1,64}`. The label is display-only and appears in Telegram. Run
-this before the first `serve`, because `owner add` refuses while a broker ownership record exists.
+this before `pair`, `mcp` or `serve` can start the broker. `owner add` refuses while a broker ownership record exists.
 Owner records and credentials are immutable.
 
 ### 3. Create a dedicated Telegram bot
@@ -84,41 +120,57 @@ Owner records and credentials are immutable.
 Create a new bot with @BotFather and keep its token private. Use this bot only for this broker. Do
 not configure a webhook for it and do not run another poller against it. `proceed-mcp` never deletes
 a webhook and never rewinds or drops pending updates. If Telegram reports a competing consumer,
-Telegram processing stops with a diagnostic, and you must repair the bot and restart `serve`.
+Telegram processing stops with a diagnostic. Repair the bot and restart the broker through your chosen mode.
 
-### 4. Start the broker in the foreground
+### 4. Provision the broker-only token
 
-Put the token only in the broker's own process environment.
+Run provisioning yourself in a trusted local shell, not through an agent or MCP tool. Pipe one
+token from an operator-controlled secret source into this command's stdin:
 
-PowerShell:
-
-```powershell
-$env:PROCEED_TELEGRAM_BOT_TOKEN = '<bot-token>'
-proceed-mcp serve --state-dir 'C:\absolute\path\to\proceed-state'
+```console
+proceed-mcp telegram provision --token-stdin --state-dir <absolute-state-dir>
 ```
 
-POSIX:
+This command alone is not an interactive prompt. It refuses terminal stdin. The source must send
+one nonempty ASCII token line, with no whitespace within the token, then close stdin within
+60 seconds. Input is limited to 4096 token bytes, optionally followed by LF or CRLF. Never put the
+token in command arguments, shell history, exported variables, MCP configuration or tool messages.
+Disable shell tracing, transcription and session recording before handling secrets.
 
-```sh
-export PROCEED_TELEGRAM_BOT_TOKEN='<bot-token>'
-proceed-mcp serve --state-dir /absolute/path/to/proceed-state
+For example, in an interactive **Bash** shell, this hidden operator prompt pipes the token using
+shell builtins. Replace the state path and use the candidate CLI as described above:
+
+```bash
+(
+  set +x
+  set +a
+  unset proceed_token
+  IFS= read -r -s -p 'Telegram bot token: ' proceed_token || exit 1
+  builtin printf '\n' >&2
+  builtin printf '%s\n' "$proceed_token" | proceed-mcp telegram provision --token-stdin --state-dir /absolute/path/to/proceed-state
+)
 ```
 
-Wait for `proceed-mcp: broker ready on http://127.0.0.1:43189` and the state directory line. Leave
-this terminal open.
+Do not paste Bash syntax into PowerShell. On other shells, use a trusted secret source that writes
+only the token line to the command's stdin without putting it in arguments or the process environment.
 
-The token is read only from the broker process environment. It is never stored in the state
-directory, the journal, Telegram, or the request history. The product does not read `.env` files.
-Never put the token in the MCP adapter's environment or in the MCP client configuration.
+Success prints the credential path, not its value. Provisioning does not contact Telegram, start
+the broker or pair anyone. It creates a separate owner-only file at
+`<home>/.proceed-mcp-credentials/<state-key>/telegram.token`. The key is derived from the canonical
+absolute state path, so keep that state path stable.
 
-If the token is missing or empty, the broker still starts locally and prints a warning. A request
-cannot be created until a human is paired, so complete Telegram setup before testing. If the token is
-rejected, or another consumer owns the bot, Telegram processing stops with a diagnostic while the
-local broker keeps running. Fix the bot and restart `serve`.
+The file is not encrypted. Other processes using the same OS account, administrators and backups
+can access it. Only the broker loads it for use. It is not saved in product state, the journal or
+request history. The product does not read `.env` files.
+
+For another dedicated location, add `--telegram-token-file <absolute-file>` to provisioning and
+repeat the same option for `pair` and `mcp`. Keep it outside all repositories, product state and MCP
+settings. Network paths, redirected paths and unverifiable permissions are refused. Existing files
+are never overwritten or repaired. There is no force, rotation or deletion command.
 
 ### 5. Pair the private chat
 
-In a second terminal:
+Run:
 
 ```console
 proceed-mcp pair --state-dir <absolute-state-dir>
@@ -130,6 +182,9 @@ nothing. A bot-suffixed or malformed command does not pair. The code is one-use,
 minutes, and is not stored in plaintext.
 
 Only the first pairing succeeds. There is no in-chat re-pair or identity change.
+
+In the candidate, `pair` starts or securely reuses the shared broker. No separate broker terminal
+is needed. Issuing a code is not proof that pairing or Telegram delivery has succeeded.
 
 ### 6. Connect an MCP client
 
@@ -146,12 +201,8 @@ Add a local server under `mcp.servers` in `opencode.jsonc`. This shape follows t
       "proceed": {
         "type": "local",
         "command": [
-          "npx",
-          "--yes",
-          "--package",
-          "@meshimize/proceed-mcp@0.1.0-preview.1",
-          "--",
-          "proceed-mcp",
+          "node",
+          "/absolute/path/to/candidate/bin/proceed-mcp.js",
           "mcp",
           "--owner",
           "<owner-id>",
@@ -169,9 +220,10 @@ Replace `<owner-id>` and the state path. On Windows, escape backslashes or use f
 the JSON string. `codemode: false` exposes the tools directly. OpenCode reloads MCP configuration
 after a save. Check the connection with `opencode mcp list`.
 
-The `--package` argument selects the scoped npm package, and the argument after `--` is the
-`proceed-mcp` command from that package. If you installed the package globally, start the `command`
-array with `proceed-mcp` and keep the same `mcp --owner ... --state-dir ...` arguments.
+This example selects the unreleased candidate by absolute path. Use an absolute Node executable
+path too if your client cannot resolve `node`. If using an installed candidate package, start the
+`command` array with its `proceed-mcp` executable and keep the same arguments. Do not substitute
+the published preview.1 npx command and expect automatic startup.
 
 With this server name, OpenCode exposes the tools as `proceed_prepare_approval`,
 `proceed_request_approval`, `proceed_get_approval`, `proceed_cancel_approval`, and
@@ -189,14 +241,13 @@ Use this command in any client that can start a local stdio server:
 proceed-mcp mcp --owner <owner-id> --state-dir <absolute-state-dir>
 ```
 
-To run the published version without a global install:
-
-```console
-npx --yes --package @meshimize/proceed-mcp@0.1.0-preview.1 -- proceed-mcp mcp --owner <owner-id> --state-dir <absolute-state-dir>
-```
-
 The adapter needs no OpenCode API, password, provider credential, or proprietary session metadata.
-It connects only to the local broker. Keep `serve` running.
+It connects only to the local broker. The candidate starts a safely stopped broker or securely reuses
+a matching instance. Provisioning is required for cold startup, not reuse of a secure foreground broker.
+
+Startup-dependent calls wait up to 150 seconds for verified local readiness. Your MCP host may
+time out sooner. Local readiness does not prove Telegram availability, completed pairing, human
+receipt or approval. A startup error is never a human decision.
 
 The server advertises MCP protocol `2025-11-25` and exposes five tools: `prepare_approval`,
 `request_approval`, `get_approval`, `cancel_approval`, and `acknowledge_approval`.
@@ -256,11 +307,20 @@ for the discovery and loading contract.
 
 ### Try one harmless approval
 
-Starting from empty state? First [install the runtime](#install), then follow
-[Set up the broker and Telegram](#set-up-the-broker-and-telegram), including
-[adding an owner](#2-add-one-owner), [pairing the private chat](#5-pair-the-private-chat), and
-[connecting your MCP client](#6-connect-an-mcp-client). Keep the foreground broker running.
-Installing the skill alone does not configure or connect the MCP server.
+Choose the setup for your runtime before trying the skill:
+
+- **Published preview.1:** [install the published preview](#install-the-published-preview-manual-broker-only)
+  and follow that section's manual setup and adapter instructions. Keep its foreground broker running.
+- **Unpublished preview.2 candidate:** follow [One-time setup for automatic startup](#one-time-setup-for-automatic-startup-unreleased-candidate)
+  using the candidate CLI, not the published npm command. For empty state, complete all six steps,
+  including [adding an owner](#2-add-one-owner), [private token provisioning](#4-provision-the-broker-only-token),
+  [pairing the private chat](#5-pair-the-private-chat), and [connecting your MCP client](#6-connect-an-mcp-client).
+  For existing state, first follow [Existing setup: stop the old broker once](#existing-setup-stop-the-old-broker-once).
+  After provisioning, the candidate runtime starts or securely reuses the broker without a separate
+  terminal. [Optional foreground mode](#optional-foreground-mode) remains available without saving a token file.
+
+Follow the linked token privacy requirements. Installing the skill alone does not configure or
+connect the MCP server or implement automatic startup.
 
 Once setup is complete, use the installed skill in a new agent session:
 
@@ -283,7 +343,7 @@ receipt naming the request_id and outcome without the request_capability.
 
 These are expected results to check, not a claim that your installation has been verified.
 Rejection, Respond instructions, pending status, expiry, cancellation, and errors are not approval.
-For additional manual outcome checks, see [First manual test](#first-manual-test).
+For additional manual outcome checks, see [Optional approval example](#optional-approval-example).
 
 ### If something is missing
 
@@ -374,11 +434,11 @@ automatic session reattachment. An approval records an outcome. It does not exec
 - `unavailable`: automatic delivery is unavailable. Retrieve with the retained capability.
 - `blocked`: delivery is blocked. Check `proceed-mcp status`.
 
-## First manual test
+## Optional approval example
 
 Use a harmless action. The product never executes it.
 
-1. Keep `serve` running and the MCP client connected.
+1. Connect the MCP client after completing setup. The candidate needs no manual `serve` terminal.
 2. In a new agent session, ask for `prepare_approval`, then `request_approval` with
    `client_request_id` `manual-approve-1`, action `Report the text PROCEED TEST`, context
    `Harmless first-use check. Do not modify files.`, and `expires_in_seconds` 300.
@@ -402,23 +462,50 @@ If a waiting call times out before you choose, the request stays pending until i
 `get_approval` with the retained `request_id` and `request_capability` in a later turn. Retrieval
 will not wake the agent.
 
-Finish by pressing Ctrl+C once in the broker terminal and waiting for `proceed-mcp: broker stopped`.
+Closing the client does not stop the shared broker. Use the stop command below when you want to
+stop it explicitly.
 
-## Commands
+## Optional foreground mode
 
-| Command                                              | Purpose                                                                          |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `init --state-dir <dir>`                             | Create protected empty state. Refuses to overwrite existing state.               |
-| `owner add <id> --label <label> --state-dir <dir>`   | Add an immutable owner and its credential. Requires a stopped broker.            |
-| `serve --state-dir <dir>`                            | Run the foreground broker. Reads the Telegram token from the broker environment. |
-| `pair --state-dir <dir>`                             | Ask the running broker for a one-use five-minute pairing code.                   |
-| `mcp --owner <id> --state-dir <dir>`                 | Run the stdio MCP adapter for one owner.                                         |
-| `status --state-dir <dir> [--request <id>] [--json]` | Show requests, resolution, Telegram and delivery state, and the next action.     |
-| `retry <request_id> --state-dir <dir>`               | Report that request retry is unavailable in this preview.                        |
+To avoid saving the Telegram token, supply it privately only to the foreground broker's own
+`PROCEED_TELEGRAM_BOT_TOKEN` environment from a trusted operator-controlled secret source. Do not
+type the token into a command or let the MCP client inherit it. Then run the candidate:
+
+```console
+proceed-mcp serve --secure-local --state-dir <absolute-state-dir>
+```
+
+Leave that terminal open. Candidate clients reuse this secure broker without a token file.
+Alternatively, `serve --telegram-token-file <absolute-file> --state-dir <absolute-state-dir>` runs
+secure foreground mode with an already provisioned file. Do not combine a file option with a
+nonempty environment token. Without either new option, `serve` retains legacy HTTP/environment
+mode for old clients only, not secure reuse by upgraded clients.
+
+A foreground broker without a token can become locally ready but cannot process Telegram approval.
+If Telegram rejects the token or reports another consumer, repair the cause, stop the broker and
+restart it through the chosen mode.
+
+## Candidate commands
+
+| Command                                              | Purpose                                                                         |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `init --state-dir <dir>`                             | Create protected empty state. Refuses to overwrite existing state.              |
+| `owner add <id> --label <label> --state-dir <dir>`   | Add an immutable owner and its credential. Requires a stopped broker.           |
+| `telegram provision --token-stdin --state-dir <dir>` | Create the separate protected token file from non-TTY stdin.                    |
+| `serve --state-dir <dir> [--secure-local]`           | Run foreground environment mode. The flag selects the secure channel.           |
+| `pair --state-dir <dir>`                             | Start or reuse the secure broker and obtain a one-use five-minute pairing code. |
+| `mcp --owner <id> --state-dir <dir>`                 | Run the stdio adapter and start or reuse the secure shared broker.              |
+| `stop --state-dir <dir>`                             | Request an authenticated clean stop and wait up to 30 seconds for confirmation. |
+| `status --state-dir <dir> [--request <id>] [--json]` | Show requests, resolution, Telegram and delivery state, and the next action.    |
+| `retry <request_id> --state-dir <dir>`               | Report that request retry is unavailable in this preview.                       |
 
 `doctor` is not implemented and fails as an unknown command. The older `origin add` command in the
 help output belongs to the retired origin-based configuration and refuses this state. Use owner
 mode.
+
+`telegram provision`, `pair`, `mcp` and `serve` accept `--telegram-token-file <absolute-file>`.
+For `serve`, this selects secure file mode. `status` does not start a stopped broker. State selection
+is `--state-dir`, then `PROCEED_STATE_DIR`, then `<home>/.proceed-mcp`.
 
 Exit codes are `0` for completion, `2` for invalid arguments or configuration, `3` for an unavailable
 prerequisite, and `4` for a storage or integrity failure. Diagnostics go to stderr. MCP stdout
@@ -426,13 +513,13 @@ carries protocol frames only.
 
 ## State, privacy, and shutdown
 
-| Path                                 | Contents                                                                    |
-| ------------------------------------ | --------------------------------------------------------------------------- |
-| `config.json`                        | Schema version 2: Telegram token variable name, broker port, owner records. |
-| `credentials/control.token`          | Local control credential for pairing, status, and other control operations. |
-| `credentials/owner.<owner-id>.token` | Per-owner credential for MCP request routes.                                |
-| `journal.log`                        | Append-only transaction journal. The only mutable product state.            |
-| `broker.lock`                        | Ownership record written by a running broker and removed on a clean stop.   |
+| Path                                 | Contents                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------------ |
+| `config.json`                        | Schema version 2: Telegram token variable name, broker port, owner records.    |
+| `credentials/control.token`          | Local control credential for pairing, status, and other control operations.    |
+| `credentials/owner.<owner-id>.token` | Per-owner credential for MCP request routes.                                   |
+| `journal.log`                        | Append-only transaction journal for durable product state.                     |
+| `broker.lock`                        | Running-instance ownership record. Secure mode includes a private channel key. |
 
 The state directory and its files are restricted to the current OS account. `init`, `owner add`, and
 `serve` verify that protection and fail rather than continue if it cannot be established. The
@@ -446,24 +533,60 @@ state directory. This preview has no history deletion or compaction.
 Request capabilities are stored only as SHA-256 verifiers. The plaintext capability exists in the
 tool result and in your retention. Credential and token values are never printed by a command.
 
+The separate Telegram credential file is not part of this state directory. Keep it protected too.
+Secure local connections authenticate the broker before sending private request credentials.
+Processes able to read protected state can impersonate that local channel. Owner-only protection
+does not isolate processes running under the same account.
+
 The broker binds only `127.0.0.1`, requires a credential on every route, and rejects browser origins.
 There is no public broker listener and no remote broker hosting.
 
-Stop the broker with Ctrl+C and wait for `proceed-mcp: broker stopped`. A clean stop releases the
-ownership record. If shutdown fails or the process is killed, `broker.lock` may remain and the next
-`serve` refuses to start. Preserve the protected state directory and do not delete the lock or the
-journal. There is no automatic stale-lock recovery in this preview.
+The automatically started broker survives closing one or all MCP clients. It has no idle-stop timer
+and is not a system service or login-startup installation. Survival across logout, reboot or host
+process-container shutdown is not promised. Distinct owners can share it. Competing adapters using
+the same owner still follow the existing `OWNER_IN_USE` registration rules.
+
+To stop the candidate's secure broker explicitly:
+
+```console
+proceed-mcp stop --state-dir <absolute-state-dir>
+```
+
+Success prints `Broker stopped.` after confirming shutdown, or reports that no broker is running.
+A timeout means stop is unconfirmed, not complete. Foreground secure mode also supports Ctrl+C and
+prints `proceed-mcp: broker stopped` after clean shutdown. Pending requests are not cancelled by a
+clean stop. Recorded decisions and request identities survive restart under the existing expiry rules.
+
+An already connected adapter does not automatically restart an explicitly stopped broker. Start a
+new adapter to make a new startup attempt. There is no periodic restart supervisor.
+
+A clean stop releases the ownership record. If shutdown fails or a process is killed, `broker.lock`
+may remain. Preserve the protected state directory and do not delete the lock or journal. Automatic
+startup never takes over uncertain ownership or kills an unrelated process. There is no automatic
+stale-lock recovery.
 
 ## Common failures
 
-- `BROKER_UNAVAILABLE`: start `serve`, or check that the adapter and the broker use the same
-  `--state-dir`.
+- `BROKER_UNAVAILABLE`: check initialized state, owner setup and matching `--state-dir`. For the
+  candidate, follow the accompanying startup classification, repair the prerequisite, then start a
+  new adapter. For published preview.1, keep its manual `serve` running.
+- `TELEGRAM_CREDENTIAL_UNAVAILABLE`: provision the token or select the correct protected file.
+  Never put the token in the adapter environment.
+- `TELEGRAM_CREDENTIAL_EXISTS`: provisioning is create-only. Choose another dedicated safe
+  destination and use its file option consistently. No overwrite is performed.
+- `PROTECTION_UNVERIFIED`: use dedicated protected storage or explicitly repair its protection.
+  Do not weaken checks or move the token into product state or MCP settings.
+- `BROKER_INSTANCE_CONFLICT`: verify the state and port. Stop a conflicting service through its own
+  interface. For a legacy broker, use its foreground Ctrl+C, then secure foreground mode or
+  provisioned automatic startup. Do not delete its lock.
+- `STATE_NOT_OWNED` or `BROKER_STARTUP_TIMEOUT`: preserve state and investigate ownership or the
+  startup failure before a new attempt. A timeout does not establish safe cleanup.
 - `NOT_PAIRED`: complete `/pair` before creating a request.
 - `NOT_FOUND`: wrong owner or state directory, an unused handle, or a request capability that does
   not match.
 - `DECISION_MISMATCH`: the request is not terminal, or the `decision_id` does not match.
-- Telegram processing stopped: check the bot token and confirm no webhook or second poller owns the
-  bot. Restart `serve` after repair.
+- Telegram processing stopped: check the bot token privately and confirm no webhook or second poller
+  owns the bot. Stop the broker and restart through your chosen mode after repair.
 
 ## Limits
 
