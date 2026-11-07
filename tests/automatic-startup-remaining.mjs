@@ -434,6 +434,63 @@ export async function remainingCases(h) {
     );
   }
 
+  await check(
+    'AUTO-READINESS-SHARED-TLS-HTTP-DEADLINE',
+    async () => {
+      const setup = await setupState('shared-probe-deadline');
+      const lock = await syntheticLock(setup);
+      const received = [];
+      const endpoint = lifecyclePeer(lock, 'SYNTHETIC_AUTHORITY', received, () => delay(650));
+      const upstreams = new Set();
+      const pending = new Set();
+      try {
+        await listen(endpoint, 0);
+        const relay = c.ownServer(
+          net.createServer((socket) => {
+            // Delay actual TLS establishment, then independently delay the HTTP
+            // response. Neither phase alone exceeds the one probe budget.
+            socket.pause();
+            const timer = setTimeout(() => {
+              pending.delete(timer);
+              if (socket.destroyed) return;
+              const upstream = net.connect({ host: '127.0.0.1', port: endpoint.address().port });
+              upstreams.add(upstream);
+              upstream.on('error', () => socket.destroy());
+              socket.on('error', () => upstream.destroy());
+              socket.once('close', () => upstream.destroy());
+              upstream.once('close', () => upstreams.delete(upstream));
+              socket.pipe(upstream).pipe(socket);
+              socket.resume();
+            }, 650);
+            pending.add(timer);
+          }),
+        );
+        await listen(relay, lock.port);
+        const start = performance.now();
+        let adopted = false;
+        try {
+          await awaitSecureAvailability({
+            lockFile: lock.path,
+            port: lock.port,
+            token: 'SYNTHETIC_AUTHORITY',
+            budgetMs: 1000,
+          });
+          adopted = true;
+        } catch (error) {
+          assert.equal(error.code, 'BROKER_STARTUP_TIMEOUT');
+        }
+        assert.equal(adopted, false, 'expired TLS plus HTTP attempt must not adopt readiness');
+        assert.ok(performance.now() - start <= 1100, 'one absolute budget includes TLS and HTTP');
+      } finally {
+        for (const timer of pending) clearTimeout(timer);
+        for (const socket of upstreams) socket.destroy();
+        await c.closeServers();
+        await removeSynthetic(lock);
+      }
+    },
+    independent,
+  );
+
   const telegram = await telegramFixture();
   c.telegram = telegram;
   await writeFile(join(c.directory, 'telegram-port'), new URL(telegram.address).port);
