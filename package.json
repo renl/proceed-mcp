@@ -16,6 +16,9 @@
   "bin": {
     "proceed-mcp": "bin/proceed-mcp.js"
   },
+  "exports": {
+    "./tui": "./src/harness/tui-entry.js"
+  },
   "files": [
     "bin",
     "src",

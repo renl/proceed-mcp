@@ -249,7 +249,12 @@ export async function runMcpServer({
       return {
         jsonrpc: '2.0',
         id: message.id,
-        result: await execute(name, message.params?.arguments, { signal }),
+        result: await execute(name, message.params?.arguments, {
+          signal,
+          // Transport metadata is an input to the adapter's routing decision, never
+          // a model argument or a substitute for request authority.
+          meta: message.params?._meta,
+        }),
       };
     }
     if (typeof message.id === 'undefined') return null;

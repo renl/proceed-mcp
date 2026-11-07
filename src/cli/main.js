@@ -36,6 +36,7 @@ import { createToolExecutor } from '../mcp/execution.js';
 import { createRegistrationBinding } from '../mcp/registration.js';
 import { runMcpServer } from '../mcp/server.js';
 import { createOperatorKeyFile, validateOperatorKeyFileOption } from '../harness/operator-key.js';
+import { harnessIdProblem } from '../harness/identifiers.js';
 import { startPortableRuntime } from '../broker/portable-runtime.js';
 import {
   defaultCredentialFile,
@@ -68,7 +69,7 @@ const USAGE = [
   '  proceed-mcp harness keygen --operator-key-file <absolute-file> [--state-dir <directory>]',
   '  proceed-mcp serve [--state-dir <directory>] [--secure-local] [--telegram-token-file <absolute-file>]',
   '  proceed-mcp pair [--state-dir <directory>] [--telegram-token-file <absolute-file>]',
-  '  proceed-mcp mcp --owner <owner_id> [--state-dir <directory>] [--telegram-token-file <absolute-file>]',
+  '  proceed-mcp mcp --owner <owner_id> [--harness-id <harness_id>] [--state-dir <directory>] [--telegram-token-file <absolute-file>]',
   '  proceed-mcp stop [--state-dir <directory>]',
   '  proceed-mcp status [--request <request_id>] [--json] [--state-dir <directory>]',
   '  proceed-mcp retry <request_id> [--state-dir <directory>]',
@@ -602,10 +603,19 @@ async function runPair(argv, { stdout, env }) {
 // broker child; it never opens that file.
 async function runMcp(argv, { env }) {
   const { positionals, options } = parseArguments(argv, {
-    valueOptions: ['state-dir', 'owner', TOKEN_FILE_OPTION],
+    valueOptions: ['state-dir', 'owner', 'harness-id', TOKEN_FILE_OPTION],
   });
   noPositionals(positionals, 'mcp');
   requireOptions(options, ['owner']);
+
+  // Opting this adapter into the configured host namespace is explicit: the
+  // harness identity is validated here and only transport metadata may name the
+  // session route. Omission keeps Telegram-only behavior.
+  const harnessId = options.get('harness-id');
+  if (harnessId !== undefined) {
+    const problem = harnessIdProblem(harnessId);
+    if (problem !== null) throw invalidArgument(problem);
+  }
 
   // The one availability attempt starts at adapter launch: prerequisites, launch
   // and adoption all share this original budget.
@@ -672,6 +682,7 @@ async function runMcp(argv, { env }) {
     client,
     waitClient,
     registration: createRegistrationBinding({ client }),
+    harnessId: harnessId ?? null,
   });
   try {
     await runMcpServer({
