@@ -24,6 +24,7 @@ export default Plugin.define({
       text?: string;
     }) => appendFileSync(evidence, `${JSON.stringify(event)}\n`);
     record({ phase: 'setup', version: context.app.version });
+    context.ui.toast.show({ message: 'Proceed platform ready', duration: 60000 });
     context.keymap.layer(() => ({
       mode: 'global',
       commands: [
