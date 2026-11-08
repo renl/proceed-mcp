@@ -1,5 +1,59 @@
 # Tasks
 
+## Authorized single corrected product-picker capture - consumed, FAIL
+
+Exactly one `node tests/run-harness-host.mjs --product-picker-capture-run` executed with a 310000 ms outer timeout including teardown. Evidence HEAD `73570f64e2a39461a6ebdcfc885b8208901147ac`, reviewed executable `930f5d13beb0d8de8b228703c86675b53cdeba40`. Before launch, HEAD/branch, empty index, ancestry and tasks-only committed delta passed. Only README/status overlays were dirty and remain untouched/unselected. All 17 current per-path hashes, taking the latest superseding entry for each path, passed. Ordered 95/3/59-file manifests matched `49585cb8d7973b706e8ea82c53513bc8cfb3590222844cca91eb8c79a845dd64`, `52a34079f1a0ebc2636dc1df4af5f39f6462aeddee5db5eb84c2c95d305e06c0` and `ecf3bf969a09ecd10fd387625a444e6733d004c0ab9c8828a4ec03a841d33bfc`. Supplied independent static/offline review and 111 native/static assertions were reused without replay. No supported product metadata-preflight alias exists, so none was guessed.
+
+Image admission reused `sha256:a8302764b5f4896690dcba9cdbe27755f6c0f4f88db92974a029f8499f3700cb` without pull/build. Actual policy records network none, private PID namespace, init true and one exact read-only payload mount. Maintained policy validation preceded start/release. Recorded staged and outer manifests match the frozen inputs. Evidence root: `.scratch/harness-host/run-linux-U2kSEx/`.
+
+### Maintained outcome and admitted observation
+
+**FAIL**, exit 1, `COMPOSITION_CONTROL_FAILURE`, inner `PHASE_DEADLINE` at `exact-product-PluginCleanup`. Outer completion/verdict 34860 ms, inner diagnostic 32149 ms. This is a cleanup-phase deadline, not the prior readiness failure. Historical outcome `5439ce15291958a7ef19587134df3602d502e85b` remains FAIL. No retry, repair, refreeze, fallback, qualification or profile installation occurred.
+
+Fresh command eligibility is recorded as `FRESH_SAME_GENERATION`. The retained last loop sample admitted every guard operand with no failed checks: running host, supported completed host frame, matching run/setup/session/generation/request sequence and exact frame offset 23354. Prefix SHA-256 `8546dd8fab8274785b42e4c514f488c492ed8b4588ba57be6bb15f17904ac3b1`, request sequence 3, request age 53 ms, response age 0 ms and original remaining deadline 58688 ms. The maintained final admission path issued one Ctrl+G. No separate final-guard journal is in the four detailed exports. The failure-time guard explicitly uses `LAST_LOOP_SAMPLE_NOT_CURRENT`, with ages 15197/15111 ms, not a current cleanup-time host/readiness assertion. `currentScreen` remains `UNPROVEN`.
+
+The independent public snapshot actually contains two equal-title sessions. Both source-layout observations are supported, reason NONE, screen generation 1, geometry 120x40, resize sequence 0. Rows retain snapshot order, zero-based positions (16,34) and (17,34), and ordinal-plus-truncated-preview labels. No preview is treated as identity. Initial update count 12 changes to 13 after one maintained Down. At both rows, selected style is foreground `index:232`, background `index:216`, bold true. Inactive style is foreground `index:255`, background `index:233`, bold false. Those roles transfer from Session 1 to Session 2 with fixed positions and unchanged snapshot/bindings. This is emitted-style identity only, not palette RGB, contrast or qualified navigation.
+
+| Bound prefix | Bytes | SHA-256                                                            |
+| ------------ | ----: | ------------------------------------------------------------------ |
+| Initial      | 34106 | `58f1a010d553b0e50ad872a31c5474bfb7097b296a7d5b177707dfc0cd8fbcfe` |
+| Moved        | 34466 | `c8c2a433bc639a5182ad7129ffe705d1734ef56b65c5d3d5ef5fe441a815cc23` |
+
+Both prefix hashes were independently compared to the admitted complete transcript. The moved observation links the initial hash. Execution bindings and snapshots are exactly equal across both observations. Interval result: `emittedTransfer: true`, `UNQUALIFIED`, `MISSING_SEMANTIC_BINDING`, profile null. Actual executable SHA-256 `8d060e1d2fbb9bb44cf09ae6ed1f3f6a7cff070b5227e2f90970132b23a92050`, package `98e699328a024a1b983194aaf984ffe3350d11ae22135d3c0d5f342de3bb5b82`, config `c8f1362f65bd68b92fc0f9145f86c30b1b0cfefc2f73a8cb64fae62e89875184`, wrapper `54ba63a1d09623c5513fd38ccfcdaabc527f24928e3722cd0414b9faa9ac1920`. Runtime host 2.2.5, Bun 1.4.4, Node 26.3.0. Source pins remain image-provenance bindings, not runtime source accessors. Resolved theme/design mode/effective depth remain null/UNKNOWN.
+
+Recorded keys: Ctrl+G 1, Enter 0, exit Ctrl+C 1. The maintained capture path performed one Down and Escape dismissal before exit. Down/Escape have no separate exported counters, so their physical receipt is not independently counted. Empty product API stream and capture-only controls establish no pending/decision exchange. No identity acceptance, approval request, model/provider, real Telegram, external network or existing user credentials were used. Disposable synthetic broker/key/pairing/enrollment/listeners were confined to this run.
+
+### Complete scan and five-transfer admission
+
+Scan PASS covers all PRODUCT surfaces `tui`, `telegram`, `journal`, `diagnostics`, `evidence`, `api`, using all distinct generated synthetic authorities and unchanged budgeted descriptor-safe reads. The reviewed producer normalizes eleven role/base entries to five distinct authorities. That count is source/control evidence, not an independently exported runtime counter. API hash is SHA-256 of empty bytes. The maintained five separately bounded TAR transfers passed before detail retention. No fallback, extraction workaround, exclusion, truncation, limit/deadline/logging change or second transfer attempt occurred.
+
+Fresh local complete-set length/hash verification passed before any detail interpretation, using the maintained verifier and bounded regular-file/no-link descriptor reads. Total 112642 bytes, below 262144. Marker and all four detail bindings:
+
+| Export                          | Retained path                   | Bytes | SHA-256                                                            |
+| ------------------------------- | ------------------------------- | ----: | ------------------------------------------------------------------ |
+| `scan-pass.json`                | `scan-pass.json`                |  1027 | `544cb82ebd284a7025c972a019ddb9b38c75a8ef57ba3901ffc84044df4ed1b7` |
+| `composition-observations.json` | `composition-observations.json` | 52230 | `09ca1f36ff81408d5641aeba738f1306e37895bb39608022d322659c300dafb3` |
+| `transcript.ansi`               | `transcript.ansi`               | 35185 | `285c4f4ab91ab77d659a11055ec6115196bf0db57c5b7c72c4a4fd083f78e0b8` |
+| `plugin-diagnostics.log`        | `plugin-diagnostics.log`        | 23762 | `b9c09762c9f1fdd337016def7f27d927fc63bead274760a760c60f8fc20289d6` |
+| `progress.jsonl`                | `inner-progress.jsonl`          |   438 | `ea5700f1b35416aed9c6ddf949a235b6ec31cfa965ab503f0fe9cbce788a247a` |
+
+Outer mutable `progress.jsonl` supplies lifecycle metadata only and is never substituted for retained inner evidence. Closed `composition-diagnostic.json` is 2805 bytes, SHA-256 `ef0a46eb5f219c5291ec4c59c1b5d4dde633713d25c816236f05ebd7e0b02ac3`. It reports the frozen cleanup deadline and explicitly labeled last-sample provenance.
+
+### Cleanup and remaining gates
+
+| Check                                        | Actual result                                                                                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Timely exact product PluginCleanup           | FAIL, PHASE_DEADLINE. Later evidence records productCleanup OBSERVED, not a timely PASS.                                                         |
+| Host exit / stream closure                   | PASS, exitObserved true and closeObserved true, termination SIGTERM_REQUESTED. Not graceful Ctrl+C-only proof.                                   |
+| Owned container / descendant containment     | PASS, exact container absent and private PID namespace destroyed. Absence is confined to that owned namespace, not host-wide helper enumeration. |
+| Separate graceful broker/helper cleanup      | UNKNOWN. Container destruction is not graceful component cleanup proof.                                                                          |
+| Pre-exposure qualification / product success | UNQUALIFIED, null profile. No approval decision, original waiting-call or release proof.                                                         |
+| Post-deploy / deferred useful workflow       | UNRUN, deployment unauthorized. Maintainer/coordination owns a separately authorized next disposition.                                           |
+
+Founder-visible success remains a genuine paired human decision returned to its exact original waiting call. This picker-only observation is a proxy and does not deliver that outcome. Estimated 100% of the bounded single-attempt reporting package is complete, not feature acceptance. Authorization is consumed. Stop at report, with no follow-on runtime. Test engineering retains worktree `.worktree/add-harness-approval-channel`, branch/change `add-harness-approval-channel`, status retained/cleanup pending verified landing. Owned runtime resources are absent, and ignored admitted evidence is preserved. Next action belongs to coordination for cleanup-deadline disposition and missing semantic bindings, with no correction attempted here. Final evidence delta is tasks-only and leaves all executable inputs unchanged.
+
+Tasks-only finalization checks: repository-scoped Prettier write/check, selected `git diff --check` and telemetry-disabled strict OpenSpec validation PASS, exit 0 within 30000 ms. These are document checks, not a rerun or override of the maintained runtime FAIL.
+
 ## Consolidated product decoder correction 1 - U+2299 and exact trailing fallback
 
 **Frozen executable/review candidate:** `930f5d13beb0d8de8b228703c86675b53cdeba40`, parent `54c0c3f16856205adf002aeddd73911b4081944f`. Native 111/111 PASS on Windows Node v26.13.0, exit 0 within 60000 ms, no failures/skips/cancellations. Four syntax checks, scoped Prettier, selected whitespace and telemetry-disabled strict OpenSpec structural validation PASS within their bounds. Exact saved-byte replay and all frozen hashes below bind the final formatted code. This completion increment changes tasks only. Code/tests/dependencies/configuration/baseline are unchanged after those assertions. README/status overlays remain unselected. Estimated 100% of the bounded static correction, replay and frozen review brief is delivered, not independent acceptance or product readiness. Next: independent consolidated review, with no new runtime authority.
