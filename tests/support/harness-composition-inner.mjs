@@ -57,6 +57,8 @@ import {
   productPickerObservation,
   productPickerDismissal,
   issueProductPickerExit,
+  assertProductPickerDeadline,
+  readProductPickerClock,
 } from './harness-navigation-observation.mjs';
 import {
   stageQualification,
@@ -445,7 +447,9 @@ try {
           },
         });
         if (pickerCapture) {
-          const pickerEnd = performance.now() + Math.min(5000, Math.max(0, end - Date.now()));
+          const pickerEnd =
+            readProductPickerClock(() => performance.now()) +
+            Math.min(5000, Math.max(0, end - Date.now()));
           const initialLive = readObservation('composition-live.json');
           const snapshot = structuredClone(initialLive.snapshot);
           const captureBinding = {
@@ -456,7 +460,8 @@ try {
             geometry: structuredClone(initialLive.geometry),
           };
           productExitSnapshot = () => {
-            assert.ok(performance.now() < pickerEnd && !exited && !overflow);
+            assertProductPickerDeadline(() => performance.now(), pickerEnd);
+            assert.ok(!exited && !overflow);
             const live = readObservation('composition-live.json');
             assert.ok(live?.live && live.run === run && live.generation === binding.generation);
             assert.deepEqual(live.geometry, captureBinding.geometry);

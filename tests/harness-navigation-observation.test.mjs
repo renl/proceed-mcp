@@ -14,6 +14,8 @@ import {
   captureProductPicker,
   productPickerDismissal,
   issueProductPickerExit,
+  assertProductPickerDeadline,
+  readProductPickerClock,
 } from './support/harness-navigation-observation.mjs';
 import {
   compositionCurrentFrame,
@@ -310,20 +312,55 @@ test('actual composition final-exit closure refuses live replacement, deadline a
   assert.ok(exitStart > finish && exitFinish > exitStart);
   const exitClosure = source.slice(exitStart + 'const ownedExit = '.length, exitFinish) + '\n}';
   const { moved } = productPair();
-  for (const mutation of [
-    'none',
-    'deadline',
-    'validation-before',
-    'validation-exact',
-    'validation-late',
-    'exit',
-    'overflow',
-    'run',
-    'setup',
-    'resize',
-    'snapshot',
-    'partial',
-  ]) {
+  const unsafe = [
+    ['infinity', Infinity],
+    ['negative-infinity', -Infinity],
+    ['nan', NaN],
+    ['string', '4'],
+    [
+      'object',
+      {
+        valueOf() {
+          throw Error('coercion must not run');
+        },
+      },
+    ],
+    ['null', null],
+    ['undefined', undefined],
+  ];
+  const cases = [
+    ...[
+      'none',
+      'deadline',
+      'validation-before',
+      'validation-exact',
+      'validation-late',
+      'exit',
+      'overflow',
+      'run',
+      'setup',
+      'resize',
+      'snapshot',
+      'partial',
+    ].map((mutation) => ({ mutation })),
+    { mutation: 'fractional', deadline: 5.125, initial: 4.25, final: 5.124 },
+    ...['initial', 'final', 'deadline'].flatMap((stage) =>
+      unsafe.map(([name, value]) => ({
+        mutation: `${stage}-${name}`,
+        stage,
+        value: stage === 'deadline' && name === 'string' ? '50' : value,
+      })),
+    ),
+    ...['initial', 'final'].flatMap((stage) =>
+      ['throwing', 'accessor', 'missing', 'noncallable'].map((kind) => ({
+        mutation: `${stage}-${kind}`,
+        stage,
+        kind,
+      })),
+    ),
+  ];
+  for (const scenario of cases) {
+    const { mutation, stage, value, kind } = scenario;
     const live = {
       live: true,
       run: productBinding.run,
@@ -334,7 +371,8 @@ test('actual composition final-exit closure refuses live replacement, deadline a
     const keys = { exit: 0 };
     const writes = [];
     const events = [];
-    let tick = mutation === 'deadline' ? 5 : 4;
+    let tick = mutation === 'deadline' ? 5 : (scenario.initial ?? 4);
+    let clockStage = 'initial';
     let validationReads = 0;
     const previous = { ...moved };
     // This operand is read by the actual dismissal validator after snapshot
@@ -342,6 +380,8 @@ test('actual composition final-exit closure refuses live replacement, deadline a
     Object.defineProperty(previous, 'screen', {
       get() {
         validationReads++;
+        clockStage = 'final';
+        if (mutation === 'fractional') tick = scenario.final;
         if (mutation.startsWith('validation-')) {
           tick = { 'validation-before': 4.999, 'validation-exact': 5, 'validation-late': 6 }[
             mutation
@@ -353,8 +393,23 @@ test('actual composition final-exit closure refuses live replacement, deadline a
     const context = {
       assert,
       Buffer,
-      performance: { now: () => tick },
-      pickerEnd: 5,
+      assertProductPickerDeadline,
+      performance: {
+        get now() {
+          if (stage === clockStage) {
+            if (kind === 'accessor') throw Error('private-clock-detail');
+            if (kind === 'throwing')
+              return () => {
+                throw Error('private-clock-detail');
+              };
+            if (kind === 'missing') return undefined;
+            if (kind === 'noncallable') return 4;
+            return () => value;
+          }
+          return () => tick;
+        },
+      },
+      pickerEnd: stage === 'deadline' ? value : (scenario.deadline ?? 5),
       exited: mutation === 'exit',
       overflow: mutation === 'overflow',
       readObservation: () => live,
@@ -379,20 +434,47 @@ test('actual composition final-exit closure refuses live replacement, deadline a
     const snapshot = runInNewContext('(' + closure + ')', context, { timeout: 100 });
     const exit = runInNewContext('(' + exitClosure + ')', context, { timeout: 100 });
     const execute = () => issueProductPickerExit({ snapshot, exitCount: () => keys.exit, exit });
-    const admitted = mutation === 'none' || mutation === 'validation-before';
+    const admitted = ['none', 'validation-before', 'fractional'].includes(mutation);
     if (admitted) {
       execute();
       assert.throws(execute); // No second key or retry, even before cutoff.
-    } else if (mutation.startsWith('validation-')) assert.throws(execute, /deadline elapsed/);
+    } else if (stage)
+      assert.throws(execute, (error) => {
+        assert.match(error.message, /picker (deadline|clock)/);
+        assert.equal(error.message.includes('private-clock-detail'), false);
+        return true;
+      });
+    else if (mutation.startsWith('validation-')) assert.throws(execute, /deadline elapsed/);
     else assert.throws(execute);
     assert.equal(keys.exit, admitted ? 1 : 0);
     assert.deepEqual(writes, admitted ? ['\x03'] : []);
     assert.deepEqual(events, admitted ? ['EXIT_KEY'] : []);
     if (mutation.startsWith('validation-')) assert.equal(validationReads, 1);
+    if (stage === 'final') assert.equal(validationReads, 1);
+    if (stage === 'initial' || stage === 'deadline') assert.equal(validationReads, 0);
   }
   assert.match(source, /allowExit: !pickerCapture \|\| dismissalAdmitted/);
   assert.match(source, /pickerEvidence.dismissal = issueProductPickerExit\(/);
-  assert.match(source, /const pickerEnd = performance.now\(\) \+ Math.min\(5000,/);
+  const deadlineStart = source.indexOf('const pickerEnd =');
+  const deadlineEnd = source.indexOf(';', deadlineStart);
+  const deadlineExpression = source.slice(deadlineStart + 'const pickerEnd ='.length, deadlineEnd);
+  assert.match(deadlineExpression, /readProductPickerClock\(\(\) => performance.now\(\)\)/);
+  assert.match(deadlineExpression, /Math.min\(5000,/);
+  for (const [name, tick] of [...unsafe, ['fractional', 4.25]]) {
+    const evaluate = () =>
+      runInNewContext(
+        deadlineExpression,
+        {
+          readProductPickerClock,
+          performance: { now: () => tick },
+          end: 10000,
+          Date: { now: () => 6000 },
+        },
+        { timeout: 100 },
+      );
+    if (name === 'fractional') assert.equal(evaluate(), 4004.25);
+    else assert.throws(evaluate, /picker clock invalid/);
+  }
 });
 
 test('capture-only actual dispatch has no Enter, identity or decision capability and requires dismissal before returning', async () => {

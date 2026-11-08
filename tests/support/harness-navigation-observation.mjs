@@ -159,13 +159,30 @@ export function productPickerDismissal(raw, binding, previous, hostFrame) {
   }
 }
 
+export function readProductPickerClock(now) {
+  let current;
+  try {
+    current = now();
+  } catch {
+    assert.fail('picker clock unavailable');
+  }
+  assert.ok(typeof current === 'number' && Number.isFinite(current), 'picker clock invalid');
+  return current;
+}
+
+export function assertProductPickerDeadline(now, deadline) {
+  assert.ok(typeof deadline === 'number' && Number.isFinite(deadline), 'picker deadline invalid');
+  const current = readProductPickerClock(now);
+  assert.ok(current < deadline, 'picker deadline elapsed during final validation');
+}
+
 export function issueProductPickerExit({ snapshot, exit, exitCount }) {
   assert.equal(exitCount(), 0);
   const { raw, binding, previous, hostFrame, now, deadline } = snapshot();
   const dismissal = productPickerDismissal(raw, binding, previous, hostFrame);
   assert.equal(dismissal.supported, true, 'dismissal unproven');
   // Hashing/decoding can consume the remaining budget even without an await.
-  assert.ok(now() < deadline, 'picker deadline elapsed during final validation');
+  assertProductPickerDeadline(now, deadline);
   exit(); // Only bounded key accounting follows admission, never more observation.
   return dismissal;
 }
