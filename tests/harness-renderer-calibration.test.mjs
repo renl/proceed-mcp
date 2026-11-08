@@ -239,6 +239,9 @@ test('maintained diagnostic wiring keeps qualification, scan/export and lifecycl
   );
   assert.match(inner, /if \(!diagnosticMode\)/);
   assert.match(inner, /hostExit = exited && closed && !!hostPid/);
+  assert.match(inner, /\['state', statePaths\],[\s\S]*\['evidence', evidencePaths\]/);
+  assert.match(inner, /rendererSize\(collection, bytes.length, false, surface\)/);
+  assert.ok(inner.indexOf('rendererSize(collection, bytes.length') < inner.indexOf('entries.push'));
   assert.ok(
     runner.indexOf(
       'assertRendererExport(',
@@ -443,14 +446,11 @@ test('synthetic renderer emission preserves RGB/default/bold and never installs 
   );
 });
 test('collection size, missing logs and stream overflow retain distinct closed facts', () => {
-  for (const [size, total, stage] of [
-    [4194305, false, 'PER_FILE_SIZE'],
-    [16777217, true, 'TOTAL_SIZE'],
-  ]) {
-    const state = {};
-    assert.throws(() => rendererSize(state, size, total));
-    assert.deepEqual(state, { stage, reason: 'OVERFLOW' });
-  }
+  const total = {};
+  rendererSize(total, 16777216, true);
+  assert.deepEqual(total, { stage: 'TOTAL_SIZE', reason: 'NONE' });
+  assert.throws(() => rendererSize(total, 16777217, true));
+  assert.deepEqual(total, { stage: 'TOTAL_SIZE', reason: 'OVERFLOW' });
   const state = {};
   assert.throws(() => rendererDiagnostics(state, []));
   assert.deepEqual(state, { stage: 'NO_DIAGNOSTICS', reason: 'INCOMPLETE' });
@@ -459,6 +459,42 @@ test('collection size, missing logs and stream overflow retain distinct closed f
   assert.deepEqual(state, { stage: 'MOVED_WAIT', reason: 'CAPTURE' });
   assert.throws(() => rendererCaptureCheck(state, false, true));
   assert.deepEqual(state, { stage: 'MOVED_WAIT', reason: 'IO' });
+});
+test('per-file exact bound accepts, first overflow retains only explicit root and exact bytes', () => {
+  for (const surface of ['state', 'evidence']) {
+    const state = {};
+    for (const bytes of [0, 4194304]) {
+      rendererSize(state, bytes, false, surface);
+      assert.deepEqual(state, { stage: 'PER_FILE_SIZE', reason: 'NONE' });
+    }
+    assert.throws(() => rendererSize(state, 4194305, false, surface));
+    assert.deepEqual(state, {
+      stage: 'PER_FILE_SIZE',
+      reason: 'OVERFLOW',
+      overflow: { surface, bytes: 4194305 },
+    });
+    assert.throws(() =>
+      rendererSize(state, 9000000, false, surface === 'state' ? 'evidence' : 'state'),
+    );
+    assert.deepEqual(state.overflow, { surface, bytes: 4194305 });
+  }
+  for (const [bytes, surface, total = false] of [
+    [4194305, undefined],
+    [4194305, '/private/state'],
+    [4194305, 'diagnostics'],
+    [undefined, 'state'],
+    [-1, 'state'],
+    [NaN, 'state'],
+    [Infinity, 'state'],
+    [Number.MAX_SAFE_INTEGER + 1, 'state'],
+    [4194305.5, 'evidence'],
+    ['4194305', 'state'],
+    [4194305, 'state', 'false'],
+  ]) {
+    const state = {};
+    assert.throws(() => rendererSize(state, bytes, total, surface));
+    assert.equal(Object.hasOwn(state, 'overflow'), false);
+  }
 });
 test('native injected read/write/parse/scan/export failures retain stage without inspecting exceptions', async () => {
   const secret = 'cap_' + 'a'.repeat(64);
@@ -561,6 +597,59 @@ test('extended diagnostic schema rejects unsafe values, accessors, exception obj
     styles: rendererStyleFacts(),
   };
   assert.deepEqual(safeRendererDiagnostic(value), value);
+  // Historical closed records without operands remain valid. New operands are
+  // optional for compatibility, never reconstructed from names or exceptions.
+  const withOverflow = (overflow, collection = {}, patch = {}) => ({
+    ...value,
+    scanReason: 'OVERFLOW',
+    ...patch,
+    collection: { ...value.collection, overflow, ...collection },
+  });
+  for (const surface of ['state', 'evidence']) {
+    for (const bytes of [4194305, Number.MAX_SAFE_INTEGER]) {
+      const record = withOverflow({ surface, bytes });
+      assert.deepEqual(safeRendererDiagnostic(record), record);
+      assert.deepEqual(JSON.parse(JSON.stringify(record)).collection.overflow, { surface, bytes });
+    }
+  }
+  let operandAccessed = false;
+  const operandAccessor = Object.defineProperty({ bytes: 4194305 }, 'surface', {
+    enumerable: true,
+    get() {
+      operandAccessed = true;
+      return 'state';
+    },
+  });
+  for (const overflow of [
+    operandAccessor,
+    new Error('private'),
+    null,
+    {},
+    { surface: '/private/state', bytes: 4194305 },
+    { surface: 'diagnostics', bytes: 4194305 },
+    { surface: 'state', bytes: 4194305, path: '/private' },
+    { surface: 'evidence', bytes: 4194305, content: 'private' },
+    ...[
+      undefined,
+      -1,
+      4194304,
+      4194305.5,
+      Infinity,
+      NaN,
+      Number.MAX_SAFE_INTEGER + 1,
+      '4194305',
+    ].map((bytes) => ({ surface: 'state', bytes })),
+  ])
+    assert.throws(() => safeRendererDiagnostic(withOverflow(overflow)));
+  assert.equal(operandAccessed, false);
+  for (const collection of [{ stage: 'TOTAL_SIZE' }, { stage: 'READ_FILE' }, { reason: 'NONE' }])
+    assert.throws(() =>
+      safeRendererDiagnostic(withOverflow({ surface: 'state', bytes: 4194305 }, collection)),
+    );
+  for (const patch of [{ status: 'PASS' }, { scanReason: 'NONE' }])
+    assert.throws(() =>
+      safeRendererDiagnostic(withOverflow({ surface: 'state', bytes: 4194305 }, {}, patch)),
+    );
   let accessed = false;
   const accessor = Object.defineProperty({ ...value }, 'phase', {
     enumerable: true,

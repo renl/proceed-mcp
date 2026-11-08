@@ -315,9 +315,14 @@ export function rendererStyleFacts(before = {}, after = {}) {
     }),
   );
 }
-export function rendererSize(state, size, total = false) {
+export function rendererSize(state, size, total = false, surface) {
   rendererCheckpoint(state, total ? 'TOTAL_SIZE' : 'PER_FILE_SIZE', 'OVERFLOW');
-  assert.ok(Number.isSafeInteger(size) && size >= 0 && size <= (total ? 16777216 : 4194304));
+  assert.equal(typeof total, 'boolean');
+  assert.ok(Number.isSafeInteger(size) && size >= 0);
+  assert.ok(total ? surface === undefined : ['state', 'evidence'].includes(surface));
+  if (!total && size > 4194304 && !Object.hasOwn(state, 'overflow'))
+    state.overflow = { surface, bytes: size };
+  assert.ok(size <= (total ? 16777216 : 4194304));
   state.reason = 'NONE';
 }
 export function rendererDiagnostics(state, entries) {
@@ -481,9 +486,24 @@ export function safeRendererDiagnostic(value) {
       ['operation', operationStages],
       ['collection', collectionStages],
     ]) {
-      assert.deepEqual(Object.keys(value[field]).sort(), ['reason', 'stage']);
+      const operands = field === 'collection' && Object.hasOwn(value[field], 'overflow');
+      assert.deepEqual(Object.keys(value[field]).sort(), [
+        ...(operands ? ['overflow'] : []),
+        'reason',
+        'stage',
+      ]);
       assert.ok(stages.includes(value[field].stage));
       assert.ok(rendererReasons.includes(value[field].reason));
+      if (operands) {
+        const { overflow } = value[field];
+        assert.equal(value[field].stage, 'PER_FILE_SIZE');
+        assert.equal(value[field].reason, 'OVERFLOW');
+        assert.equal(value.status, 'FAIL');
+        assert.equal(value.scanReason, 'OVERFLOW');
+        assert.deepEqual(Object.keys(overflow).sort(), ['bytes', 'surface']);
+        assert.ok(['state', 'evidence'].includes(overflow.surface));
+        assert.ok(Number.isSafeInteger(overflow.bytes) && overflow.bytes > 4194304);
+      }
     }
     assert.deepEqual(Object.keys(value.cursor).sort(), ['present', 'value']);
     assert.equal(typeof value.cursor.present, 'boolean');

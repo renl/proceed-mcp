@@ -438,10 +438,15 @@ try {
         files(evidence, collection),
       );
     const entries = [];
-    for (const path of [...statePaths, ...evidencePaths]) {
-      const bytes = await rendererStep(collection, 'READ_FILE', 'IO', () => readFile(path));
-      rendererSize(collection, bytes.length);
-      entries.push({ path, bytes });
+    for (const [surface, paths] of [
+      ['state', statePaths],
+      ['evidence', evidencePaths],
+    ]) {
+      for (const path of paths) {
+        const bytes = await rendererStep(collection, 'READ_FILE', 'IO', () => readFile(path));
+        rendererSize(collection, bytes.length, false, surface);
+        entries.push({ path, bytes });
+      }
     }
     rendererSize(
       collection,
