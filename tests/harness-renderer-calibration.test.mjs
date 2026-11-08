@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { compositionCurrentFrame } from './support/harness-composition-readiness.mjs';
+import {
+  compositionCurrentFrame,
+  compositionSourceFrame,
+} from './support/harness-composition-readiness.mjs';
 import {
   rendererScan,
   rendererSurfaces,
@@ -1112,6 +1115,220 @@ const decorated = (a, b, absolute = false) =>
   `\x1b[3;1H${a}${marker} ${absolute ? '\x1b[3;3H' : ''}${alpha}` +
   `\x1b[4;1H${b}  ${beta}` +
   end;
+
+test('finite source layout preserves indexed identity, asymmetric inactive styles and RGB compatibility', () => {
+  const indexedSelected = '\x1b[0;1;38;5;232;48;5;216m';
+  const indexedCurrent = '\x1b[0;38;5;216;48;5;233m';
+  const indexedOrdinary = '\x1b[0;38;5;255;48;5;233m';
+  const raw = '\x1b[?1049h' + decorated(indexedSelected, indexedOrdinary);
+  const observe = (s, previous) => rendererCells(s, previous, undefined, { sourceLayout: true });
+  const before = observe(raw);
+  const after = observe(raw + decorated(indexedCurrent, indexedSelected), before);
+  assert.deepEqual(before.labels[alpha], {
+    fg: 'index:232',
+    bg: 'index:216',
+    bold: true,
+    supported: true,
+  });
+  assert.deepEqual(after.labels[beta], before.labels[alpha]);
+  assert.equal(before.labels[beta].fg, 'index:255');
+  assert.equal(after.labels[alpha].fg, 'index:216');
+  assert.equal(after.labels[alpha].bold, false);
+  assert.deepEqual(after.markers, before.markers);
+  assert.equal(after.generation, 1);
+  assert.equal(before.profileInstalled, false);
+  assert.deepEqual(
+    compositionSourceFrame(initialCells).styles,
+    compositionCurrentFrame(initialCells, { styled: true }).styles,
+  );
+  const rgb = compositionSourceFrame(begin + '\x1b[1;1H\x1b[38;2;232;232;232mX' + end);
+  assert.notEqual(rgb.styles[0][0].fg, before.labels[alpha].fg);
+  for (const bad of [raw, raw.replace('ALPHA', 'CHANGED')])
+    assert.throws(() => observe(bad, before), /STALE_UPDATE|TRANSCRIPT_REPLACED/);
+  assert.throws(
+    () =>
+      observe(raw + '\x1b[?1049l\x1b[?1049h' + decorated(indexedCurrent, indexedSelected), before),
+    /GENERATION_RESET/,
+  );
+  // The opt-in model does not silently teach the RGB navigation/readiness path indexed colors.
+  assert.equal(compositionCurrentFrame(raw, { styled: true, sourceMarkerCells: true }), '');
+});
+
+test('source scalar support is finite and rejects clusters rather than ignoring them', () => {
+  const glyphs = '\u00b7\u2026\u2503\u2579\u2580\u2584\u2588\u25cf';
+  const paint = (s) => begin + '\x1b[1;1H' + s + end;
+  const decoded = compositionSourceFrame(paint(glyphs + 'Z'));
+  assert.equal(decoded.supported, true);
+  assert.equal(decoded.text, glyphs + 'Z');
+  assert.deepEqual(decoded.cursor, { row: 0, col: 9 });
+  for (const bad of [
+    '\u25cf\ufe0f',
+    '\u2588\u200d\u2588',
+    'e\u0301',
+    '\u4e00',
+    '\ufffd',
+    '\ud800',
+    '\x80',
+    '\n',
+  ])
+    assert.equal(compositionSourceFrame(paint(bad)).reason, 'UNSUPPORTED_GLYPH');
+});
+
+test('exact query payloads and explicit phase policy refuse opaque substitutions', () => {
+  const paint = begin + '\x1b[1;1HX' + end;
+  const queries = [
+    '\x1bP+q4d73\x1b\\',
+    '\x1b_Gi=31337,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\',
+    '\x1b]99;i=opentui-notifications:p=?;\x1b\\',
+    '\x1b]1337;Capabilities\x1b\\',
+    '\x1b]7501;?\x1b\\',
+    '\x1b]10;?\x07',
+    '\x1b]11;?\x07',
+    '\x1b[>0q',
+    '\x1b[6n',
+    '\x1b[?u',
+    '\x1b[c',
+    '\x1b[14t',
+    ...[1004, 1016, 2004, 2026, 2027, 2031].map((n) => `\x1b[?${n}$p`),
+  ];
+  for (const query of queries) {
+    assert.equal(compositionSourceFrame(query + paint).supported, true);
+    assert.equal(compositionSourceFrame(paint + query).supported, true);
+    assert.equal(
+      compositionSourceFrame(begin + query + '\x1b[1;1HX' + end).reason,
+      'UNSAFE_QUERY_PHASE',
+    );
+  }
+  for (const bad of [
+    queries[0].replace('73', '74'),
+    queries[1].replace('a=q', 'a=t'),
+    queries[1].replace('AAAA', 'AAAB'),
+    queries[2].replace('p=?', 'p=1'),
+    queries[3].replace('Capabilities', 'CapabilitieX'),
+    '\x1b]7501;X\x1b\\',
+    '\x1b]66;w=2; \x1b\\',
+    '\x1b]22;opaque\x1b\\',
+    '\x1b]0;bad\x1b[2J\x07',
+  ])
+    assert.equal(compositionSourceFrame(bad + paint).supported, false);
+});
+
+test('space probes invalidate paint and cursor until a clear or new generation', () => {
+  for (const probe of ['\x1b]66;w=1; \x1b\\', '\x1b]66;s=2; \x1b\\']) {
+    const paint = begin + '\x1b[1;1HX' + end;
+    assert.equal(compositionSourceFrame(probe + paint).reason, 'UNKNOWN_PAINT_POSITION');
+    assert.equal(compositionSourceFrame(probe + '\x1b[?1049h' + paint).supported, true);
+    assert.equal(compositionSourceFrame(probe + '\x1b[2J' + paint).supported, true);
+    assert.equal(compositionSourceFrame(probe + begin + end).reason, 'UNRESYNCHRONIZED_PAINT');
+    for (const prefix of [begin, paint, '\x1b[?1049h'])
+      assert.equal(compositionSourceFrame(prefix + probe + paint).reason, 'UNSAFE_PROBE_PHASE');
+  }
+});
+
+test('cursor register preserves unknown coordinates and repeated saves, not a default home or stack', () => {
+  const paint = (body) => begin + body + end;
+  assert.equal(
+    compositionSourceFrame('\x1b[s\x1b[H\x1b[u' + paint('X')).reason,
+    'UNKNOWN_PAINT_POSITION',
+  );
+  assert.equal(compositionSourceFrame('\x1b[u' + paint('\x1b[HX')).reason, 'UNMATCHED_RESTORE');
+  const decoded = compositionSourceFrame('\x1b[2;3H\x1b[s\x1b[H\x1b[u\x1b[s' + paint('X'));
+  assert.equal(decoded.supported, true);
+  assert.equal(decoded.text.split('\n')[1], '  X');
+  assert.deepEqual(decoded.cursor, { row: 1, col: 3 });
+  assert.equal(
+    compositionSourceFrame('\x1b[s\x1b[?1049h\x1b[u' + paint('X')).reason,
+    'UNMATCHED_RESTORE',
+  );
+  assert.equal(
+    compositionSourceFrame('\x1b[?1049h' + paint('X') + '\x1b[?1049l').reason,
+    'NO_CURRENT_FRAME',
+  );
+  assert.equal(compositionSourceFrame('\x1b[?1049h\x1b[?1049h').reason, 'UNSAFE_GENERATION');
+});
+
+test('finite control operands keep cursor/input metadata distinct from palette/cell paint', () => {
+  const paint = begin + '\x1b[1;1HX' + end;
+  for (const t of [
+    '\x1b[?25h',
+    '\x1b[?25l',
+    '\x1b[0 q',
+    '\x1b[6 q',
+    '\x1b]12;#abcdef\x07',
+    '\x1b]112\x07',
+    '\x1b]22;default\x1b\\',
+    '\x1b]22;\x1b\\',
+    '\x1b]0;title\x07',
+  ]) {
+    const value = compositionSourceFrame(begin + t + '\x1b[1;1HX' + end);
+    assert.equal(value.supported, true);
+    assert.equal(value.text, 'X');
+  }
+  for (const t of [
+    '\x1b[?2031h',
+    '\x1b[?2004h',
+    '\x1b[>4;1m',
+    '\x1b[>4;0m',
+    '\x1b[>5u',
+    '\x1b[<u',
+    ...[1000, 1002, 1003, 1006].flatMap((n) => [`\x1b[?${n}h`, `\x1b[?${n}l`]),
+  ]) {
+    assert.equal(compositionSourceFrame(t + paint).supported, true);
+    assert.equal(compositionSourceFrame(begin + t + end).reason, 'UNSAFE_INPUT_PHASE');
+  }
+  assert.equal(compositionSourceFrame('\x1b[?2027h' + paint).supported, true);
+  assert.equal(compositionSourceFrame(paint + '\x1b[?2027h').reason, 'UNSAFE_UNICODE_PHASE');
+  for (const t of ['\x1b]4;0;?;255;?\x07', '\x1b]4;216;?\x07'])
+    assert.equal(compositionSourceFrame(paint + t).supported, true);
+  for (const t of [
+    '\x1b]4;256;?\x07',
+    '\x1b]4;1;rgb:ff/ff/ff\x07',
+    '\x1b]11;#000000\x07',
+    '\x1b[?9999h',
+    '\x1b[7 q',
+    '\x1b[38;5;256m',
+    '\x1b[38;5m',
+    '\x1b[3m',
+    '\x1b[38;2;1;2m',
+    '\x1b[0;;1m',
+    '\x1b[>6u',
+    '\x1b[?2027l',
+    '\x1b[0;1H',
+    '\x1b[41;1H',
+    '\x1b[1;121H',
+  ])
+    assert.equal(compositionSourceFrame(t + paint).supported, false);
+});
+
+test('source frames require completed balanced updates and reject all truncated query frames', () => {
+  for (const [raw, reason] of [
+    [end, 'UNMATCHED_UPDATE'],
+    [begin + begin, 'NESTED_UPDATE'],
+    [begin + '\x1b[HX', 'INCOMPLETE_UPDATE'],
+    [begin + '\x1b[HX' + end + begin, 'INCOMPLETE_UPDATE'],
+    ['\x1b[HX', 'UNSYNCHRONIZED_PAINT'],
+  ])
+    assert.equal(compositionSourceFrame(raw).reason, reason);
+  const query = '\x1b_Gi=31337,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\';
+  for (let n = 1; n < query.length; n++)
+    assert.equal(compositionSourceFrame(query.slice(0, n)).supported, false);
+  assert.equal(compositionSourceFrame(begin + '\x1b[1;120HXY' + end).reason, 'GEOMETRY');
+});
+
+test('closed source refusal preserves byte offsets without returning opaque payload or raw exception', () => {
+  const prefix = begin + '\x1b[1;1H\u25cf' + end;
+  const payload = '\x1b]7501;private-not-a-query\x1b\\';
+  const refusal = compositionSourceFrame(prefix + payload);
+  assert.deepEqual(refusal, {
+    supported: false,
+    reason: 'UNSUPPORTED_OSC_PAYLOAD',
+    byteOffset: Buffer.byteLength(prefix),
+    operation: 7501,
+  });
+  assert.doesNotMatch(JSON.stringify(refusal), /private|\u25cf/);
+  assert.equal(compositionSourceFrame(null).reason, 'CAPTURE_LIMIT');
+  assert.equal(compositionSourceFrame(' '.repeat(1048577)).reason, 'CAPTURE_LIMIT');
+});
 
 test('bare current marker has a separate source-cell region, never selection authority', () => {
   for (const absolute of [false, true]) {

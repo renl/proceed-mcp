@@ -5,7 +5,10 @@ import { isDeepStrictEqual } from 'node:util';
 import { lstat, open, opendir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { posix } from 'node:path';
-import { compositionCurrentFrame } from './harness-composition-readiness.mjs';
+import {
+  compositionCurrentFrame,
+  compositionSourceFrame,
+} from './harness-composition-readiness.mjs';
 
 export const rendererSurfaces = Object.freeze([
   'tui',
@@ -741,7 +744,12 @@ export function rendererDiagnosticAnalysis(result, scanPassed) {
 
 // Reparse ASCII title spans plus the explicitly pinned bare-current-marker model.
 // No lexical emission (including a new copy elsewhere) can replace current cells.
-export function rendererCells(raw, previous, geometry = { rows: 40, columns: 120 }) {
+export function rendererCells(
+  raw,
+  previous,
+  geometry = { rows: 40, columns: 120 },
+  { sourceLayout = false } = {},
+) {
   assert.equal(typeof raw, 'string');
   assert.ok(Buffer.byteLength(raw) <= 1048576, 'CAPTURE_LIMIT');
   assert.deepEqual(geometry, { rows: 40, columns: 120 }, 'RESIZED');
@@ -779,7 +787,10 @@ export function rendererCells(raw, previous, geometry = { rows: 40, columns: 120
       'GENERATION_RESET',
     );
   }
-  const frame = compositionCurrentFrame(raw, { styled: true, sourceMarkerCells: true });
+  const frame = sourceLayout
+    ? compositionSourceFrame(raw)
+    : compositionCurrentFrame(raw, { styled: true, sourceMarkerCells: true });
+  if (sourceLayout) assert.equal(frame.supported, true, frame.reason);
   assert.ok(frame && typeof frame.text === 'string', 'UNSUPPORTED_OR_INCOMPLETE');
   const rows = frame.text.split('\n');
   assert.ok(
@@ -837,15 +848,18 @@ export function rendererCells(raw, previous, geometry = { rows: 40, columns: 120
     labels,
     positions,
     markers,
-    cellModel: Object.keys(markers).length
-      ? 'OPENTUI_0_8_0_BARE_25CF_SOURCE_LAYOUT_NOT_TERMINAL_WIDTH'
-      : 'ASCII_ONLY',
+    cellModel: sourceLayout
+      ? 'OPENTUI_0_8_0_EIGHT_LONE_SCALARS_SOURCE_LAYOUT_NOT_TERMINAL_WIDTH'
+      : Object.keys(markers).length
+        ? 'OPENTUI_0_8_0_BARE_25CF_SOURCE_LAYOUT_NOT_TERMINAL_WIDTH'
+        : 'ASCII_ONLY',
     geometry: { ...geometry },
     frames,
     frameEnd,
     offset: raw.length,
     byteEnd: Buffer.byteLength(raw),
     transcriptHash: digest(raw),
+    ...(sourceLayout ? { generation: frame.generation, cursor: frame.cursor } : {}),
     profileInstalled: false,
   };
 }

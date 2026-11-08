@@ -1,5 +1,213 @@
 // TEST ONLY. Render evidence, not process-alive or fixture-callback readiness.
 export const productReadyText = 'Proceed harness ready for qualification (owner shared).';
+// Opt-in offline source-layout observer, not a terminal emulator or RGB profile.
+// OpenTUI 738067f47e940dcec3f5aab74868908574335c6c, native/src/ansi.zig
+// and terminal.zig queryTerminalSend. Phase restrictions here are decoder policy,
+// not a claim about cross-function emitter ordering. No opaque string is ignored.
+export function compositionSourceFrame(ansi) {
+  const refuse = (reason, byteOffset = 0, operation = null) => ({
+    supported: false,
+    reason,
+    byteOffset,
+    operation,
+  });
+  if (typeof ansi !== 'string' || new TextEncoder().encode(ansi).length > 1048576)
+    return refuse('CAPTURE_LIMIT');
+  const tokens =
+    ansi.match(
+      /\x1b[P_](?:[^\x1b]|\x1b(?!\\))*\x1b\\|\x1b\](?:[^\x07\x1b]|\x1b(?!\\))*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|[^\x1b]/gu,
+    ) ?? [];
+  if (tokens.join('') !== ansi) return refuse('INCOMPLETE_ESCAPE');
+  // Exact query constants. In particular APC is only a=q, never transmit/delete.
+  const queries = new Set([
+    '\x1bP+q4d73\x1b\\',
+    '\x1b_Gi=31337,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\',
+    '\x1b]99;i=opentui-notifications:p=?;\x1b\\',
+    '\x1b]1337;Capabilities\x1b\\',
+    '\x1b]7501;?\x1b\\',
+    '\x1b]10;?\x07',
+    '\x1b]11;?\x07',
+    '\x1b[>0q',
+    '\x1b[6n',
+    '\x1b[?u',
+    '\x1b[c',
+    '\x1b[14t',
+    ...[1004, 1016, 2004, 2026, 2027, 2031].map((n) => `\x1b[?${n}$p`),
+  ]);
+  let rows = [],
+    styles = [],
+    row = null,
+    col = null,
+    saved,
+    style = { fg: null, bg: null, bold: false },
+    syncing = false,
+    frames = 0,
+    generation = 0,
+    alt = false,
+    tainted = false,
+    frame = null,
+    offset = 0;
+  const reset = () => {
+    rows = [];
+    styles = [];
+    frame = null;
+    tainted = false;
+    generation++;
+  };
+  for (const token of tokens) {
+    const start = offset;
+    offset += new TextEncoder().encode(token).length;
+    const bad = (reason, operation = null) => refuse(reason, start, operation);
+    if (token === '\x1b[?2026h') {
+      if (syncing) return bad('NESTED_UPDATE');
+      syncing = true;
+      continue;
+    }
+    if (token === '\x1b[?2026l') {
+      if (!syncing) return bad('UNMATCHED_UPDATE');
+      if (tainted) return bad('UNRESYNCHRONIZED_PAINT');
+      syncing = false;
+      frames++;
+      frame = {
+        text: rows.map((r) => r.join('')).join('\n'),
+        styles: styles.map((r) => r.slice()),
+        generation,
+        frames,
+        cursor: { row, col },
+      };
+      continue;
+    }
+    if (queries.has(token)) {
+      // Queries may recur between frames. Do not allow new probes inside paint.
+      if (syncing) return bad('UNSAFE_QUERY_PHASE');
+      continue;
+    }
+    if (token === '\x1b]66;w=1; \x1b\\' || token === '\x1b]66;s=2; \x1b\\') {
+      // A probe may paint background spaces and move the cursor. Its endpoint
+      // depends on terminal support. Only a full clear/new generation recovers.
+      if (syncing || frames || alt) return bad('UNSAFE_PROBE_PHASE', 66);
+      tainted = true;
+      frame = null;
+      row = col = null;
+      continue;
+    }
+    if (token.startsWith('\x1b]')) {
+      const op = /^\x1b\](\d+)/.exec(token)?.[1];
+      if (/^\x1b\]4;(?:\d{1,3};\?)(?:;\d{1,3};\?)*\x07$/.test(token)) {
+        const indices = token
+          .slice(4, -1)
+          .split(';')
+          .filter((_, i) => i % 2 === 0);
+        if (syncing || indices.some((n) => +n > 255)) return bad('UNSAFE_PALETTE_QUERY', 4);
+        continue;
+      }
+      // Finite source-defined cursor/pointer/title forms, not terminal palette.
+      if (
+        /^\x1b\]12;#[0-9a-fA-F]{6}\x07$/.test(token) ||
+        token === '\x1b]112\x07' ||
+        token === '\x1b]22;default\x1b\\' ||
+        token === '\x1b]22;\x1b\\' ||
+        /^\x1b\]0;[\x20-\x7e]{0,256}\x07$/.test(token)
+      )
+        continue;
+      return bad('UNSUPPORTED_OSC_PAYLOAD', op && +op <= 9999 ? +op : null);
+    }
+    if (token.startsWith('\x1bP') || token.startsWith('\x1b_'))
+      return bad('UNSUPPORTED_STRING_PAYLOAD');
+    if (token === '\x1b[?1049h' || token === '\x1b[?1049l') {
+      if (syncing || alt === token.endsWith('h')) return bad('UNSAFE_GENERATION');
+      alt = token.endsWith('h');
+      reset();
+      saved = undefined;
+      // Entering the cleared alternate screen starts at home. Exit discards it.
+      row = alt ? 0 : null;
+      col = alt ? 0 : null;
+      continue;
+    }
+    if (token === '\x1b[2J') {
+      reset();
+      continue;
+    }
+    if (token === '\x1b[s') {
+      // CSI s/u stores coordinates, not a stack. A later un-restored save is
+      // meaningful and valid. Unknown initial coordinates remain unknown.
+      saved = { row, col, generation };
+      continue;
+    }
+    if (token === '\x1b[u') {
+      if (!saved || saved.generation !== generation) return bad('UNMATCHED_RESTORE');
+      ({ row, col } = saved);
+      continue;
+    }
+    const position = /^\x1b\[(\d*);?(\d*)H$/.exec(token);
+    if (position) {
+      row = +(position[1] || 1) - 1;
+      col = +(position[2] || 1) - 1;
+      if (row < 0 || row >= 40 || col < 0 || col >= 120) return bad('GEOMETRY');
+      if (!syncing) frame = null;
+      continue;
+    }
+    if (/^\x1b\[\?25[hl]$/.test(token) || /^\x1b\[[0-6] q$/.test(token)) continue;
+    if (
+      /^\x1b\[\?(?:1000|1002|1003|1006|2004|2031)[hl]$/.test(token) ||
+      ['\x1b[>4;1m', '\x1b[>4;0m', '\x1b[>5u', '\x1b[<u'].includes(token)
+    ) {
+      if (syncing) return bad('UNSAFE_INPUT_PHASE');
+      continue;
+    }
+    if (token === '\x1b[?2027h') {
+      // Only the eight lone scalars below are modeled under all width methods.
+      if (syncing || frames) return bad('UNSAFE_UNICODE_PHASE');
+      continue;
+    }
+    if (/^\x1b\[[0-9;]*m$/.test(token)) {
+      if (token !== '\x1b[m' && token.slice(2, -1).split(';').includes(''))
+        return bad('UNSUPPORTED_SGR');
+      const codes = token
+        .slice(2, -1)
+        .split(';')
+        .map((v) => Number(v || 0));
+      for (let i = 0; i < codes.length; i++) {
+        const n = codes[i],
+          key = n === 38 ? 'fg' : 'bg';
+        if (n === 0) style = { fg: null, bg: null, bold: false };
+        else if (n === 1 || n === 22) style = { ...style, bold: n === 1 };
+        else if (n === 39 || n === 49) style = { ...style, [n === 39 ? 'fg' : 'bg']: null };
+        else if ((n === 38 || n === 48) && codes[i + 1] === 5) {
+          const index = codes[i + 2];
+          if (!Number.isInteger(index) || index < 0 || index > 255) return bad('UNSUPPORTED_SGR');
+          style = { ...style, [key]: `index:${index}` };
+          i += 2;
+        } else if ((n === 38 || n === 48) && codes[i + 1] === 2) {
+          const rgb = codes.slice(i + 2, i + 5);
+          if (rgb.length !== 3 || rgb.some((v) => !Number.isInteger(v) || v < 0 || v > 255))
+            return bad('UNSUPPORTED_SGR');
+          style = { ...style, [key]: rgb.join(',') };
+          i += 4;
+        } else return bad('UNSUPPORTED_SGR');
+      }
+      continue;
+    }
+    if (token.startsWith('\x1b')) return bad('UNSUPPORTED_CONTROL');
+    // Source map ranges and exhaustive utf8_test:2047-2063 at the pinned SHA.
+    // No cluster, combining/variation selector, C1 or unknown scalar is skipped.
+    if (!/^[\x20-\x7e\u00b7\u2026\u2503\u2579\u2580\u2584\u2588\u25cf]$/.test(token))
+      return bad('UNSUPPORTED_GLYPH');
+    if (tainted || row === null || col === null) return bad('UNKNOWN_PAINT_POSITION');
+    if (!syncing) return bad('UNSYNCHRONIZED_PAINT');
+    if (row >= 40 || col >= 120) return bad('GEOMETRY');
+    rows[row] ??= [];
+    styles[row] ??= [];
+    while (rows[row].length < col) rows[row].push(' ');
+    rows[row][col] = token;
+    styles[row][col] = Object.freeze({ ...style });
+    col++;
+  }
+  if (syncing) return refuse('INCOMPLETE_UPDATE', offset);
+  if (!frame) return refuse('NO_CURRENT_FRAME', offset);
+  return { supported: true, ...frame };
+}
+
 // Small, fail-closed projection of the pinned host's synchronized cell updates.
 // Only completed frames count. Repainting cells replaces old text, never appends it.
 export function compositionCurrentFrame(ansi, { styled = false, sourceMarkerCells = false } = {}) {
