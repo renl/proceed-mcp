@@ -3,6 +3,118 @@
 // A source-verified theme profile is mandatory. Synthetic profiles prove only
 // observer logic, never actual host rendering or active theme identity.
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { compositionSourceFrame } from './harness-composition-readiness.mjs';
+
+const rgb = (v) =>
+  typeof v === 'string' &&
+  /^(?:\d{1,3},){2}\d{1,3}$/.test(v) &&
+  v.split(',').every((n) => +n <= 255);
+const indexed = (v) =>
+  typeof v === 'string' && /^index:(?:0|[1-9]\d{0,2})$/.test(v) && +v.slice(6) <= 255;
+function validStyle(s, color) {
+  return (
+    s &&
+    Object.keys(s).sort().join(',') === 'bg,bold,fg' &&
+    typeof s.bold === 'boolean' &&
+    ['fg', 'bg'].every((k) => color(s[k]))
+  );
+}
+function selectedLabel(rows, profile) {
+  const selected = [];
+  const seen = new Set();
+  for (const { label, cells, current } of rows) {
+    assert.equal(typeof current, 'boolean', 'unknown row role');
+    assert.equal(seen.has(label), false, 'duplicate label');
+    seen.add(label);
+    assert.equal(cells?.length, label.length, 'missing styled cells');
+    const matches = (expected) =>
+      cells.every(
+        (s) =>
+          validStyle(s, (v) => v === null || rgb(v) || indexed(v)) &&
+          s.fg === expected.fg &&
+          s.bg === expected.bg &&
+          s.bold === expected.bold,
+      );
+    if (matches(profile.selected)) selected.push(label);
+    else
+      assert.ok(
+        matches(profile.inactive[current ? 'current' : 'ordinary']),
+        'unknown/ambiguous row style',
+      );
+  }
+  assert.equal(selected.length, 1, 'missing/ambiguous live normal selection');
+  return selected[0];
+}
+
+// Private offline fixture adapter. This is not product-profile qualification.
+// confirmRenderedNavigation never supplies an offline context.
+function fixtureHighlightedLabel(raw, labels, profile, binding) {
+  assert.equal(profile?.scope, 'fixture-only');
+  assert.equal(profile.renderer, 'normal');
+  assert.deepEqual(profile.binding, binding, 'fixture binding mismatch');
+  assert.deepEqual(
+    Object.keys(binding).sort(),
+    ['host', 'theme', 'geometry', 'generation', 'transcriptHash', 'bytes', 'frames'].sort(),
+  );
+  for (const key of ['host', 'theme'])
+    assert.ok(typeof binding[key] === 'string' && binding[key].length > 0);
+  assert.match(binding.transcriptHash, /^[a-f0-9]{64}$/);
+  for (const key of ['generation', 'bytes', 'frames'])
+    assert.ok(Number.isSafeInteger(binding[key]) && binding[key] > 0);
+  assert.equal(typeof raw, 'string');
+  assert.ok(Buffer.byteLength(raw) <= 1048576);
+  assert.equal(Buffer.byteLength(raw), binding.bytes, 'fixture byte binding mismatch');
+  assert.equal(
+    createHash('sha256').update(raw).digest('hex'),
+    binding.transcriptHash,
+    'fixture prefix mismatch',
+  );
+  const { rows: height, columns: width } = binding.geometry;
+  // The reused finite source decoder projects only this admitted geometry.
+  assert.deepEqual(binding.geometry, { rows: 40, columns: 120 });
+  const frame = compositionSourceFrame(raw);
+  assert.equal(frame.supported, true);
+  assert.equal(frame.generation, binding.generation, 'fixture generation mismatch');
+  assert.equal(frame.frames, binding.frames, 'fixture update mismatch');
+  assert.ok(Array.isArray(frame.styles));
+  assert.equal(frame.text.includes('Open Proceed question?'), false, 'stale/overlapping dialog');
+  const lines = frame.text.split('\n');
+  assert.ok(lines.length <= height && lines.every((s) => s.length <= width));
+  assert.ok(Array.isArray(labels) && labels.length >= 2 && labels.length <= height);
+  assert.equal(new Set(labels).size, labels.length, 'duplicate label');
+  assert.deepEqual(Object.keys(profile.inactive).sort(), ['current', 'ordinary']);
+  const styles = [profile.selected, profile.inactive.current, profile.inactive.ordinary];
+  assert.ok(styles.every((s) => validStyle(s, (v) => v === null || indexed(v))));
+  for (const s of styles.slice(1)) {
+    assert.notEqual(profile.selected.bg, null, 'default is not indexed selection');
+    assert.notEqual(profile.selected.bg, s.bg, 'bold/current marker alone is insufficient');
+  }
+  let markers = 0;
+  const rows = labels.map((label) => {
+    assert.match(label, /^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/);
+    const occurrences = [];
+    lines.forEach((line, row) => {
+      for (let col = line.indexOf(label); col >= 0; col = line.indexOf(label, col + 1))
+        occurrences.push({ row, col });
+    });
+    assert.equal(occurrences.length, 1, 'missing/duplicate label');
+    const { row, col } = occurrences[0];
+    const prefix = lines[row].slice(0, col);
+    assert.match(prefix, /^ *(?:\u25cf +)?$/, 'unknown/ambiguous row role');
+    assert.match(lines[row].slice(col + label.length), /^ *$/, 'overlapping label');
+    const current = prefix.includes('\u25cf');
+    if (current) markers++;
+    return { label, cells: frame.styles[row]?.slice(col, col + label.length), current };
+  });
+  assert.equal(markers, 1, 'missing/ambiguous current role');
+  assert.equal(
+    [...frame.text].filter((c) => c === '\u25cf').length,
+    markers,
+    'unassociated current marker',
+  );
+  return selectedLabel(rows, profile);
+}
 
 const titleLabel = /^(?:Session )?title:\s*$/i;
 const idLabel = /^(?:Exact )?(?:session )?ID:\s*$/i;
@@ -37,24 +149,21 @@ export function assertIdentityMessage(message, session) {
   return lines.length;
 }
 
-export function highlightedOrdinal(frame, profile) {
+export function highlightedOrdinal(frame, profile, { offlineFixture } = {}) {
+  if (offlineFixture) {
+    return fixtureHighlightedLabel(frame, offlineFixture.labels, profile, offlineFixture.binding);
+  }
   assert.ok(frame && typeof frame.text === 'string' && Array.isArray(frame.styles));
   assert.ok(profile && profile.renderer === 'normal', 'unknown renderer/theme profile');
-  const valid = (s) =>
-    s &&
-    typeof s.bold === 'boolean' &&
-    ['fg', 'bg'].every(
-      (k) =>
-        typeof s[k] === 'string' &&
-        /^(?:\d{1,3},){2}\d{1,3}$/.test(s[k]) &&
-        s[k].split(',').every((v) => +v <= 255),
-    );
-  assert.ok(valid(profile.selected) && valid(profile.normal));
+  // Preserve the legacy RGB boundary. Offline indexed/historical evidence is
+  // intentionally not a new route to a live Enter, even with forged metadata.
+  assert.deepEqual(Object.keys(profile).sort(), ['normal', 'renderer', 'selected']);
+  assert.ok(validStyle(profile.selected, rgb) && validStyle(profile.normal, rgb));
   assert.notEqual(profile.selected.bg, profile.normal.bg, 'bold/focus alone is insufficient');
   const lines = frame.text.split('\n');
   assert.equal(lines.filter((s) => s.includes('Select the Proceed session')).length, 1);
   assert.equal(frame.text.includes('Open Proceed question?'), false, 'stale/overlapping dialog');
-  const selected = [];
+  const rows = [];
   const seen = new Set();
   for (let row = 0; row < lines.length; row++) {
     const match = /^\s*(Session \d+)\b/.exec(lines[row]);
@@ -64,15 +173,12 @@ export function highlightedOrdinal(frame, profile) {
     const start = lines[row].indexOf(match[1]);
     const cells = frame.styles[row]?.slice(start, start + match[1].length);
     assert.equal(cells?.length, match[1].length, 'missing styled cells');
-    const matches = (expected) =>
-      cells.every(
-        (s) => s && s.fg === expected.fg && s.bg === expected.bg && s.bold === expected.bold,
-      );
-    if (matches(profile.selected)) selected.push(match[1]);
-    else assert.ok(matches(profile.normal), 'unknown/ambiguous row style');
+    rows.push({ label: match[1], cells, current: false });
   }
-  assert.equal(selected.length, 1, 'missing/ambiguous live normal selection');
-  return selected[0];
+  return selectedLabel(rows, {
+    selected: profile.selected,
+    inactive: { ordinary: profile.normal },
+  });
 }
 
 export function assertCurrentIdentityFrame(frame, session, { width, height }) {

@@ -1,13 +1,17 @@
 // TEST ONLY. Scripted frames prove observer refusal, not actual host rendering.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import {
   assertIdentityMessage,
   highlightedOrdinal,
   assertCurrentIdentityFrame,
   confirmRenderedNavigation,
 } from './support/harness-navigation-observation.mjs';
-import { compositionCurrentFrame } from './support/harness-composition-readiness.mjs';
+import {
+  compositionCurrentFrame,
+  compositionSourceFrame,
+} from './support/harness-composition-readiness.mjs';
 
 // Synthetic RGB operands, NOT evidence of the pinned host's actual theme.
 const profile = {
@@ -49,6 +53,228 @@ const geometry = { width: 100, height: 50, resizeSequence: 0 };
 const frame = (s = session) =>
   ['Open Proceed question?', message(s), '', 'Open question   Cancel'].join('\n');
 const picker = styledPicker().text;
+
+// Indexed operands from the admitted fixture, not a product theme/profile.
+const fixtureStyles = {
+  selected: { fg: 'index:232', bg: 'index:216', bold: true },
+  inactive: {
+    current: { fg: 'index:216', bg: 'index:233', bold: false },
+    ordinary: { fg: 'index:255', bg: 'index:233', bold: false },
+  },
+};
+const indexSgr = (s) => `\x1b[0;38;5;${s.fg.slice(6)};48;5;${s.bg.slice(6)}${s.bold ? ';1' : ''}m`;
+function fixtureCase({
+  selected = 0,
+  current = 0,
+  labels = ['Session 1', 'Session 2'],
+  styles = fixtureStyles,
+} = {}) {
+  const raw =
+    '\x1b[?1049h\x1b[?2026h\x1b[HSelect the Proceed session' +
+    labels
+      .map(
+        (label, n) =>
+          `\x1b[${n + 3};3H` +
+          (n === current ? '\u25cf ' : '  ') +
+          indexSgr(
+            n === selected
+              ? styles.selected
+              : styles.inactive[n === current ? 'current' : 'ordinary'],
+          ) +
+          label,
+      )
+      .join('') +
+    '\x1b[?2026l';
+  return boundFixture(raw, labels, styles);
+}
+function boundFixture(raw, labels, styles = fixtureStyles) {
+  const binding = {
+    host: 'synthetic-host-not-qualified',
+    theme: 'synthetic-indexed-not-qualified',
+    geometry: { rows: 40, columns: 120 },
+    generation: 1,
+    transcriptHash: createHash('sha256').update(raw).digest('hex'),
+    bytes: Buffer.byteLength(raw),
+    frames: 1,
+  };
+  return {
+    raw,
+    labels,
+    binding,
+    profile: {
+      renderer: 'normal',
+      scope: 'fixture-only',
+      ...structuredClone(styles),
+      binding: structuredClone(binding),
+    },
+  };
+}
+const fixtureSelection = (c) =>
+  highlightedOrdinal(c.raw, c.profile, {
+    offlineFixture: { labels: c.labels, binding: c.binding },
+  });
+
+test('indexed fixture selection follows style, not marker or label, with asymmetric inactive roles', () => {
+  for (const labels of [
+    ['Session 1', 'Session 2'],
+    ['OTHER', 'UNRELATED'],
+  ])
+    for (const selected of [0, 1])
+      for (const current of [0, 1])
+        assert.equal(
+          fixtureSelection(fixtureCase({ selected, current, labels })),
+          labels[selected],
+        );
+  // The observer compares supplied finite identities, not pinned palette operands.
+  const styles = structuredClone(fixtureStyles);
+  styles.selected = { fg: 'index:0', bg: 'index:7', bold: false };
+  assert.equal(fixtureSelection(fixtureCase({ selected: 1, styles })), 'Session 2');
+});
+
+test('indexed fixture profiles refuse role/style ambiguity, missing/duplicate labels and mixed/default/RGB identities', () => {
+  for (const mutate of [
+    (c) => {
+      c.labels.push(c.labels[0]);
+    },
+    (c) => {
+      c.labels[1] = 'absent';
+    },
+    (c) => {
+      c.profile.inactive.current = c.profile.inactive.ordinary;
+    },
+    (c) => {
+      c.profile.inactive.ordinary = c.profile.selected;
+    },
+    (c) => {
+      delete c.profile.inactive.current;
+    },
+    (c) => {
+      c.profile.selected.bg = c.profile.inactive.current.bg;
+    },
+    (c) => {
+      c.profile.selected.fg = 'index:256';
+    },
+    (c) => {
+      c.profile.selected.fg = 'index:0232';
+    },
+    (c) => {
+      c.profile.selected.fg = '232,232,232';
+    },
+    (c) => {
+      c.profile.selected.fg = null;
+    },
+    (c) => {
+      c.profile.selected.bg = null;
+    },
+    (c) => {
+      c.profile.selected.italic = true;
+    },
+    (c) => {
+      c.profile.inactive.unknown = c.profile.inactive.current;
+    },
+  ]) {
+    const c = fixtureCase({ selected: 1 });
+    mutate(c);
+    assert.throws(() => fixtureSelection(c));
+  }
+  const c = fixtureCase();
+  for (const raw of [
+    c.raw.replace('\u25cf ', '  '),
+    c.raw.replace('Session 2', 'Session 1'),
+    c.raw.replace('Session 1', 'Session 1\u25cf'),
+    c.raw.replace('Session 2', '\u25cf Session 2'),
+    c.raw.replace('Session 1', 'Sess\x1b[0mion 1'),
+    c.raw.replace(indexSgr(fixtureStyles.inactive.ordinary), indexSgr(fixtureStyles.selected)),
+    c.raw.replace(indexSgr(fixtureStyles.selected), indexSgr(fixtureStyles.inactive.current)),
+    c.raw.replace('Session 1', '\x1b[3mSession 1'),
+    c.raw.replace('Session 1', '\x1b[38;2;232;232;232mSession 1'),
+    c.raw.replace('Select the Proceed session', 'Open Proceed question?'),
+  ])
+    assert.throws(() => fixtureSelection(boundFixture(raw, c.labels)));
+});
+
+test('fixture prefix/host/theme/geometry/generation bindings and incomplete/reset updates refuse', () => {
+  for (const key of [
+    'host',
+    'theme',
+    'geometry',
+    'generation',
+    'transcriptHash',
+    'bytes',
+    'frames',
+  ]) {
+    const c = fixtureCase();
+    c.binding[key] = key === 'geometry' ? { rows: 41, columns: 120 } : 'changed';
+    assert.throws(() => fixtureSelection(c));
+  }
+  for (const mutate of [
+    (c) => {
+      c.raw += '\x1b[?2026h';
+    },
+    (c) => {
+      c.raw += '\x1b[';
+    },
+    (c) => {
+      c.raw += '\x1b[?1049h';
+    },
+    (c) => {
+      c.raw += '\x1b[2J';
+    },
+    (c) => {
+      c.binding.generation = c.profile.binding.generation = 2;
+    },
+    (c) => {
+      c.binding.frames = c.profile.binding.frames = 2;
+    },
+    (c) => {
+      c.binding.geometry = c.profile.binding.geometry = { rows: 41, columns: 120 };
+    },
+    (c) => {
+      c.binding.geometry = c.profile.binding.geometry = { rows: 24, columns: 80 };
+      c.raw = c.raw.replace('[3;3H', '[30;3H');
+    },
+  ]) {
+    const c = fixtureCase();
+    mutate(c);
+    // Rebinding bytes cannot make an incomplete/reset/stale generation valid.
+    c.binding.bytes = c.profile.binding.bytes = Buffer.byteLength(c.raw);
+    c.binding.transcriptHash = c.profile.binding.transcriptHash = createHash('sha256')
+      .update(c.raw)
+      .digest('hex');
+    assert.throws(() => fixtureSelection(c));
+  }
+});
+
+test('historical/forged indexed fixture profiles cannot authorize a live navigation Enter', async () => {
+  const c = fixtureCase();
+  const styledFrame = compositionSourceFrame(c.raw);
+  const picked = { frame: styledFrame.text, styledFrame, token: 10, geometry };
+  for (const selectionProfile of [
+    c.profile,
+    { ...c.profile, scope: 'live' },
+    { renderer: 'normal', selected: c.profile.selected, normal: c.profile.inactive.ordinary },
+    { ...profile, binding: c.binding },
+    null,
+  ]) {
+    const writes = [];
+    await assert.rejects(
+      confirmRenderedNavigation(
+        {
+          selectionProfile,
+          offlineFixture: { labels: c.labels, binding: c.binding },
+          stdin: { write: (s) => writes.push(s) },
+          waitHighlightedSession: async () => picked,
+          currentNavigationFrame: async () => structuredClone(picked),
+          waitIdentityConfirmation: async () => {
+            throw Error('must not enter');
+          },
+        },
+        session,
+      ),
+    );
+    assert.deepEqual(writes, []);
+  }
+});
 
 test('lossless labelled blocks reconstruct full title and exact ID, not prefix/includes', () => {
   assert.ok(assertIdentityMessage(message(), session) > 0);
