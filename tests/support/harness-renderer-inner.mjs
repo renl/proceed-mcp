@@ -31,6 +31,9 @@ import {
   assertRendererCursor,
   rendererDiagnosticSequence,
   rendererDiagnosticAnalysis,
+  rendererMetadataInventory,
+  incompleteInventory,
+  encodeRendererInventory,
 } from './harness-renderer-observation.mjs';
 
 const started = Date.now(),
@@ -55,7 +58,9 @@ let cleanup = false,
 let hostPid;
 const counts = { ctrlG: 0, arrowDown: 0, observe: 0, escape: 0, enter: 0 };
 const samples = {};
-const diagnosticMode = process.argv[2] === '--diagnostic-capture';
+const inventoryMode = process.argv[2] === '--metadata-inventory';
+const diagnosticMode = process.argv[2] === '--diagnostic-capture' || inventoryMode;
+let inventoryResult = incompleteInventory();
 const diagnosticSamples = {};
 let diagnosticAnalysis = 'UNPROVEN';
 const operation = { stage: 'POLICY', reason: 'ASSERT' };
@@ -307,7 +312,9 @@ try {
   // Read the isolated database without introducing sessions, credentials or work.
   let credentialTables = 0;
   mark('CREDENTIALS');
-  for (const path of (await files(env.XDG_DATA_HOME)).filter((p) => p.endsWith('.db'))) {
+  for (const path of inventoryMode
+    ? []
+    : (await files(env.XDG_DATA_HOME)).filter((p) => p.endsWith('.db'))) {
     const db = new DatabaseSync(path, { readOnly: true });
     try {
       if (
@@ -320,7 +327,7 @@ try {
       db.close();
     }
   }
-  assert.ok(credentialTables > 0);
+  if (!inventoryMode) assert.ok(credentialTables > 0);
   operation.reason = 'NONE';
 } catch {
   failure =
@@ -404,7 +411,10 @@ try {
   try {
     // Freeze every run-owned state/evidence byte after host close, before export.
     rendererCheckpoint(collection, 'HOST_EXIT', 'INCOMPLETE');
-    assert.ok(hostExit, 'INCOMPLETE');
+    assert.ok(
+      hostExit && (!inventoryMode || (cleanup && closed && failure === 'NONE')),
+      'INCOMPLETE',
+    );
     await rendererStep(collection, 'WRITE_TRANSCRIPT', 'IO', () =>
       writeFile(join(evidence, 'transcript.ansi'), Buffer.concat(rawBuffers)),
     );
@@ -432,66 +442,79 @@ try {
         }),
       ),
     );
-    const statePaths = await rendererStep(collection, 'ENUMERATE_STATE', 'IO', () =>
-        files(root, collection),
-      ),
-      evidencePaths = await rendererStep(collection, 'ENUMERATE_EVIDENCE', 'IO', () =>
-        files(evidence, collection),
-      );
-    const entries = [];
-    let collectedBytes = 0;
-    for (const [surface, paths] of [
-      ['state', statePaths],
-      ['evidence', evidencePaths],
-    ]) {
-      for (const path of paths) {
-        const bytes = await rendererReadFile(collection, path, surface, collectedBytes);
-        collectedBytes += bytes.length;
-        entries.push({ path, bytes });
+    if (inventoryMode) {
+      // No progress/event writer or content collector runs during these passes.
+      const inventoryEnd = Math.min(end, Date.now() + 30000);
+      // A stuck filesystem syscall must not extend the phase or teardown endpoint.
+      // Process exit closes OS descriptors. Missing output becomes fixed incomplete.
+      const watchdog = setTimeout(() => process.exit(1), Math.max(0, inventoryEnd - Date.now()));
+      try {
+        inventoryResult = await rendererMetadataInventory({ state: root, evidence }, inventoryEnd);
+      } finally {
+        clearTimeout(watchdog);
       }
+    } else {
+      const statePaths = await rendererStep(collection, 'ENUMERATE_STATE', 'IO', () =>
+          files(root, collection),
+        ),
+        evidencePaths = await rendererStep(collection, 'ENUMERATE_EVIDENCE', 'IO', () =>
+          files(evidence, collection),
+        );
+      const entries = [];
+      let collectedBytes = 0;
+      for (const [surface, paths] of [
+        ['state', statePaths],
+        ['evidence', evidencePaths],
+      ]) {
+        for (const path of paths) {
+          const bytes = await rendererReadFile(collection, path, surface, collectedBytes);
+          collectedBytes += bytes.length;
+          entries.push({ path, bytes });
+        }
+      }
+      rendererSize(
+        collection,
+        entries.reduce((n, e) => n + e.bytes.length, 0),
+        true,
+      );
+      const at = (p) => entries.find((e) => e.path === join(evidence, p))?.bytes;
+      const diagnostics = rendererDiagnostics(collection, entries);
+      rendererCheckpoint(collection, 'BUILD_CAPTURE', 'INCOMPLETE');
+      const capture = {
+        tui: Buffer.concat(rawBuffers),
+        diagnostics: Buffer.concat(diagnostics.map((e) => e.bytes)),
+        fixture: at('fixture.jsonl'),
+        inventory: at('inventory.json'),
+        state: Buffer.concat(
+          entries
+            .filter((e) => e.path.startsWith(root + '/'))
+            .flatMap((e) => [Buffer.from(e.path), e.bytes]),
+        ),
+        evidence: Buffer.concat(
+          entries
+            .filter((e) => e.path.startsWith(evidence + '/'))
+            .flatMap((e) => [Buffer.from(e.path), e.bytes]),
+        ),
+      };
+      scanReason = 'SCAN_REFUSED';
+      const scan = await rendererStep(collection, 'SCAN', overflow ? 'OVERFLOW' : 'REFUSED', () =>
+        rendererScan(capture, canaries, hostExit && diagnostics.length > 0, overflow),
+      );
+      scan.files = entries.map((e) => ({
+        path: e.path,
+        sha256: digest(e.bytes),
+        bytes: e.bytes.length,
+      }));
+      await rendererStep(collection, 'EXPORT_DIAGNOSTICS', 'IO', () =>
+        writeFile(join(evidence, 'diagnostics.log'), capture.diagnostics),
+      );
+      await rendererStep(collection, 'EXPORT_SCAN', 'IO', () =>
+        writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(scan)),
+      );
+      scanReason = 'NONE';
+      // Parsing is deliberately downstream of frozen complete-surface privacy proof.
+      if (diagnosticMode) diagnosticAnalysis = rendererDiagnosticAnalysis(diagnosticSamples, true);
     }
-    rendererSize(
-      collection,
-      entries.reduce((n, e) => n + e.bytes.length, 0),
-      true,
-    );
-    const at = (p) => entries.find((e) => e.path === join(evidence, p))?.bytes;
-    const diagnostics = rendererDiagnostics(collection, entries);
-    rendererCheckpoint(collection, 'BUILD_CAPTURE', 'INCOMPLETE');
-    const capture = {
-      tui: Buffer.concat(rawBuffers),
-      diagnostics: Buffer.concat(diagnostics.map((e) => e.bytes)),
-      fixture: at('fixture.jsonl'),
-      inventory: at('inventory.json'),
-      state: Buffer.concat(
-        entries
-          .filter((e) => e.path.startsWith(root + '/'))
-          .flatMap((e) => [Buffer.from(e.path), e.bytes]),
-      ),
-      evidence: Buffer.concat(
-        entries
-          .filter((e) => e.path.startsWith(evidence + '/'))
-          .flatMap((e) => [Buffer.from(e.path), e.bytes]),
-      ),
-    };
-    scanReason = 'SCAN_REFUSED';
-    const scan = await rendererStep(collection, 'SCAN', overflow ? 'OVERFLOW' : 'REFUSED', () =>
-      rendererScan(capture, canaries, hostExit && diagnostics.length > 0, overflow),
-    );
-    scan.files = entries.map((e) => ({
-      path: e.path,
-      sha256: digest(e.bytes),
-      bytes: e.bytes.length,
-    }));
-    await rendererStep(collection, 'EXPORT_DIAGNOSTICS', 'IO', () =>
-      writeFile(join(evidence, 'diagnostics.log'), capture.diagnostics),
-    );
-    await rendererStep(collection, 'EXPORT_SCAN', 'IO', () =>
-      writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(scan)),
-    );
-    scanReason = 'NONE';
-    // Parsing is deliberately downstream of frozen complete-surface privacy proof.
-    if (diagnosticMode) diagnosticAnalysis = rendererDiagnosticAnalysis(diagnosticSamples, true);
   } catch {
     scanReason =
       collection.reason === 'OVERFLOW'
@@ -500,48 +523,61 @@ try {
           ? 'SCAN_REFUSED'
           : 'COLLECTION_OR_INCOMPLETE';
   }
-  if (scanReason !== 'NONE' && failure === 'NONE') failure = 'SCAN_REFUSED';
-  // Only closed categories, numeric counters and normalized versions bypass scan.
-  try {
-    await writeFile(
-      join(evidence, 'renderer-diagnostic.json'),
-      JSON.stringify(
-        safeRendererDiagnostic({
-          status: failure === 'NONE' ? 'PASS' : 'FAIL',
-          failure,
-          phase: failedPhase,
-          scanReason,
-          frames: diagnosticMode
-            ? (raw.match(/\x1b\[\?2026l/g) ?? []).length
-            : emittedLabels(raw).frames,
-          bytes: Buffer.byteLength(raw),
-          counts,
-          runtime: {
-            host: /^(?:opencode v)?2\.2\.5$/.test(runtime.host) ? '2.2.5' : 'UNKNOWN',
-            bun: runtime.bun,
-          },
-          cleanup,
-          hostExit,
-          operation: failedOperation,
-          collection,
-          cursor,
-          styles,
-          ...(diagnosticMode
-            ? {
-                diagnostic: {
-                  capture: failure === 'NONE' ? 'DIAGNOSTIC_CAPTURE_PASS' : 'FAIL',
-                  analysis: diagnosticAnalysis,
-                  profile: 'UNPROVEN',
-                  ALPHA: diagnosticSamples.ALPHA ?? { present: false, value: 'NONE' },
-                  BETA: diagnosticSamples.BETA ?? { present: false, value: 'NONE' },
-                },
-              }
-            : {}),
-        }),
-      ),
-    );
-  } catch {
-    failure = 'CONTROL_OR_IO'; /* No unfiltered stack on diagnostic write failure. */
+  if (inventoryMode) {
+    // Inventory never writes renderer diagnostics, scan markers or detailed exports.
+    try {
+      await writeFile(
+        join(evidence, 'renderer-inventory.json'),
+        encodeRendererInventory(inventoryResult),
+      );
+    } catch {
+      inventoryResult = incompleteInventory();
+    }
+    process.exitCode = inventoryResult.complete ? 0 : 1;
+  } else {
+    if (scanReason !== 'NONE' && failure === 'NONE') failure = 'SCAN_REFUSED';
+    // Only closed categories, numeric counters and normalized versions bypass scan.
+    try {
+      await writeFile(
+        join(evidence, 'renderer-diagnostic.json'),
+        JSON.stringify(
+          safeRendererDiagnostic({
+            status: failure === 'NONE' ? 'PASS' : 'FAIL',
+            failure,
+            phase: failedPhase,
+            scanReason,
+            frames: diagnosticMode
+              ? (raw.match(/\x1b\[\?2026l/g) ?? []).length
+              : emittedLabels(raw).frames,
+            bytes: Buffer.byteLength(raw),
+            counts,
+            runtime: {
+              host: /^(?:opencode v)?2\.2\.5$/.test(runtime.host) ? '2.2.5' : 'UNKNOWN',
+              bun: runtime.bun,
+            },
+            cleanup,
+            hostExit,
+            operation: failedOperation,
+            collection,
+            cursor,
+            styles,
+            ...(diagnosticMode
+              ? {
+                  diagnostic: {
+                    capture: failure === 'NONE' ? 'DIAGNOSTIC_CAPTURE_PASS' : 'FAIL',
+                    analysis: diagnosticAnalysis,
+                    profile: 'UNPROVEN',
+                    ALPHA: diagnosticSamples.ALPHA ?? { present: false, value: 'NONE' },
+                    BETA: diagnosticSamples.BETA ?? { present: false, value: 'NONE' },
+                  },
+                }
+              : {}),
+          }),
+        ),
+      );
+    } catch {
+      failure = 'CONTROL_OR_IO'; /* No unfiltered stack on diagnostic write failure. */
+    }
+    process.exitCode = failure === 'NONE' ? 0 : 1;
   }
-  process.exitCode = failure === 'NONE' ? 0 : 1;
 }

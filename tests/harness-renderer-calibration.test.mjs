@@ -22,7 +22,444 @@ import {
   rendererCells,
   rendererDiagnosticSequence,
   rendererDiagnosticAnalysis,
+  rendererMetadataInventory,
+  inventoryLimits,
+  incompleteInventory,
+  safeRendererInventory,
+  encodeRendererInventory,
+  parseRendererInventory,
+  parseInventoryArchive,
+  inventoryAdmit,
 } from './support/harness-renderer-observation.mjs';
+
+const metadataRoots = { state: '/run/proceed/state', evidence: '/run/proceed/evidence' };
+const requiredInventoryNames = [
+  'binding.json',
+  'observations.json',
+  'fixture.jsonl',
+  'inventory.json',
+  'transcript.ansi',
+  'progress.jsonl',
+];
+
+test('shared admission invariant tests every approved bigint ceiling exactly and above without conversion', () => {
+  for (const ceiling of [
+    16384n,
+    32768n,
+    16382n,
+    64n,
+    4096n,
+    4194304n,
+    8388608n,
+    9007199254740991n,
+  ]) {
+    assert.doesNotThrow(() => inventoryAdmit(ceiling, ceiling));
+    assert.throws(() => inventoryAdmit(ceiling + 1n, ceiling));
+    assert.throws(() => inventoryAdmit(-1n, ceiling));
+    assert.throws(() => inventoryAdmit(Number(ceiling), ceiling));
+  }
+  assert.equal(inventoryLimits.entries, 16384n);
+  assert.equal(inventoryLimits.visits, 32768n);
+  assert.equal(inventoryLimits.files, 16382n);
+  assert.equal(inventoryLimits.depth, 64n);
+  assert.equal(inventoryLimits.path, 4096n);
+  assert.equal(inventoryLimits.paths, 4194304n);
+  assert.equal(inventoryLimits.retained, 8388608n);
+  assert.equal(inventoryLimits.milliseconds, 30000);
+  assert.equal(inventoryLimits.output, 8192);
+});
+function metadataFixture(hook = () => {}) {
+  const nodes = new Map(
+    Object.values(metadataRoots).map((p) => [p, { directory: true, size: 0n }]),
+  );
+  for (const [i, name] of [...requiredInventoryNames, 'host.log'].entries())
+    nodes.set(metadataRoots.evidence + '/' + name, { size: BigInt(i + 1) });
+  let active = 0,
+    opened = 0,
+    closed = 0,
+    pass = 0,
+    reads = 0;
+  const snapshot = (path) => {
+    const node = nodes.get(path);
+    if (!node) throw new Error('synthetic missing');
+    return {
+      dev: 1n,
+      ino: 2n,
+      mtimeNs: 3n,
+      ctimeNs: 4n,
+      size: node.size,
+      isFile: () => !node.directory && !node.special,
+      isDirectory: () => !!node.directory,
+      isSymbolicLink: () => !!node.link,
+      ...node.metadata,
+    };
+  };
+  const acquire = () => {
+    assert.equal(active++, 0, 'one descriptor at a time');
+    opened++;
+  };
+  const close = async () => {
+    assert.equal(active--, 1);
+    closed++;
+  };
+  const io = {
+    flags: { O_RDONLY: 0, O_NOFOLLOW: 131072, O_NONBLOCK: 2048 },
+    async lstat(path, options) {
+      assert.deepEqual(options, { bigint: true });
+      if (path === metadataRoots.state) pass++;
+      hook('lstat', path, nodes, pass);
+      return snapshot(path);
+    },
+    async open(path, flags) {
+      assert.equal(flags, 133120);
+      hook('open', path, nodes, pass);
+      acquire();
+      return {
+        async stat(options) {
+          assert.deepEqual(options, { bigint: true });
+          hook('fstat', path, nodes, pass);
+          return snapshot(path);
+        },
+        read() {
+          reads++;
+          throw new Error('CONTENT_READ_FORBIDDEN');
+        },
+        close,
+      };
+    },
+    async opendir(path, options) {
+      assert.equal(options.bufferSize, 1);
+      hook('opendir', path, nodes, pass);
+      acquire();
+      const names = [...nodes.keys()].filter(
+        (p) => p.startsWith(path + '/') && !p.slice(path.length + 1).includes('/'),
+      );
+      let index = 0;
+      return {
+        async read() {
+          hook('dirread', path, nodes, pass);
+          return index < names.length ? { name: names[index++].slice(path.length + 1) } : null;
+        },
+        close,
+      };
+    },
+    readFile() {
+      reads++;
+      throw new Error('CONTENT_READ_FORBIDDEN');
+    },
+  };
+  return {
+    nodes,
+    io,
+    async run(limits = inventoryLimits, clock = () => 0, endpoint = 30000) {
+      const result = await rendererMetadataInventory(metadataRoots, endpoint, io, limits, clock);
+      assert.equal(active, 0);
+      assert.equal(opened, closed);
+      assert.equal(reads, 0);
+      return result;
+    },
+  };
+}
+
+test('metadata inventory has two complete stable passes, no content reads and faithful duplicate projections', async () => {
+  let statePasses = 0;
+  const f = metadataFixture((op, path) => {
+    if (op === 'opendir' && path === metadataRoots.state) statePasses++;
+  });
+  const result = await f.run();
+  assert.equal(result.complete, true);
+  assert.equal(statePasses, 2);
+  assert.deepEqual(result.roots.state, { entries: 1, files: 0, bytes: 0, maxSize: 0 });
+  assert.deepEqual(result.roots.evidence, { entries: 8, files: 7, bytes: 28, maxSize: 7 });
+  assert.deepEqual(result.requiredLogs, { count: 1, bytes: 7 });
+  const paths = [...f.nodes.keys()],
+    files = paths.filter((p) => !f.nodes.get(p).directory);
+  assert.equal(
+    result.totalPathBytes,
+    paths.reduce((n, p) => n + Buffer.byteLength(p), 0),
+  );
+  assert.equal(result.projections.tui, 5);
+  assert.equal(result.projections.fixture, 3);
+  assert.equal(result.projections.inventory, 4);
+  assert.equal(result.projections.diagnostics, 7);
+  assert.equal(result.projections.state, 0);
+  assert.equal(
+    result.projections.evidence,
+    28 + files.reduce((n, p) => n + Buffer.byteLength(p), 0),
+  );
+  const scan = {
+    status: 'PASS',
+    scope: 'renderer-only',
+    surfaces: rendererSurfaces,
+    hashes: Object.fromEntries(rendererSurfaces.map((s) => [s, '0'.repeat(64)])),
+    absentByDesign: ['broker', 'journal', 'telegram', 'approval-api'],
+    productSixSurfaceGate: 'NOT_APPLICABLE_NOT_PASSED',
+    files: files.map((path) => ({
+      path,
+      sha256: '0'.repeat(64),
+      bytes: Number(f.nodes.get(path).size),
+    })),
+  };
+  assert.equal(result.projections.detailedExport, 21 + 7 + Buffer.byteLength(JSON.stringify(scan)));
+  assert.equal(JSON.stringify(result).includes('/run/'), false);
+  assert.equal(JSON.stringify(result).includes('PASS'), false);
+});
+
+test('inventory entry/visit/file/depth ceilings admit exact values and refuse above', async () => {
+  for (const [key, exact] of [
+    ['entries', 9n],
+    ['visits', 18n],
+    ['files', 7n],
+    ['depth', 1n],
+  ]) {
+    assert.equal(
+      (await metadataFixture().run({ ...inventoryLimits, [key]: exact })).complete,
+      true,
+      key,
+    );
+    if (exact > 1n)
+      assert.deepEqual(
+        await metadataFixture().run({ ...inventoryLimits, [key]: exact - 1n }),
+        incompleteInventory(),
+        key,
+      );
+  }
+  for (const depth of [64, 65]) {
+    const f = metadataFixture();
+    let path = metadataRoots.state;
+    for (let n = 0; n < depth; n++) {
+      path += '/d';
+      f.nodes.set(path, { directory: true, size: 0n });
+    }
+    assert.equal((await f.run()).complete, depth === 64);
+  }
+  for (const bytes of [4096, 4097]) {
+    const f = metadataFixture();
+    const path = metadataRoots.state + '/' + 'x'.repeat(bytes - metadataRoots.state.length - 1);
+    f.nodes.set(path, { size: 0n });
+    assert.equal((await f.run()).complete, bytes === 4096);
+  }
+});
+
+test('inventory explicit path and serialized-bookkeeping budgets have deterministic exact cutoffs', async () => {
+  for (const key of ['paths', 'retained']) {
+    let low = 1n,
+      high = inventoryLimits[key];
+    while (low < high) {
+      const mid = (low + high) / 2n;
+      if ((await metadataFixture().run({ ...inventoryLimits, [key]: mid })).complete) high = mid;
+      else low = mid + 1n;
+    }
+    assert.ok(low > 100n);
+    assert.equal((await metadataFixture().run({ ...inventoryLimits, [key]: low })).complete, true);
+    assert.deepEqual(
+      await metadataFixture().run({ ...inventoryLimits, [key]: low - 1n }),
+      incompleteInventory(),
+    );
+  }
+});
+
+test('metadata rejects missing evidence/logs, unsafe bigint metadata and all observed instability', async () => {
+  for (const fault of [
+    'missing',
+    'logs',
+    'link',
+    'special',
+    'negative',
+    'unsafe',
+    'number',
+    'unavailable',
+    'growth',
+    'replacement',
+    'rewrite',
+    'membership',
+    'directory',
+    'unreadable',
+    'traversal',
+  ]) {
+    let changed = false,
+      passes = 0;
+    const target = metadataRoots.evidence + '/host.log';
+    const f = metadataFixture((op, path, nodes) => {
+      if (op === 'opendir' && path === metadataRoots.state) passes++;
+      if (op === 'fstat' && path === target && !changed) {
+        changed = true;
+        if (fault === 'growth') nodes.get(path).size++;
+        if (fault === 'replacement') nodes.get(path).metadata = { ino: 9n };
+        if (fault === 'rewrite') nodes.get(path).metadata = { mtimeNs: 9n };
+      }
+      if (
+        passes === 2 &&
+        op === 'opendir' &&
+        path === metadataRoots.evidence &&
+        fault === 'membership'
+      )
+        nodes.set(metadataRoots.evidence + '/new', { size: 0n });
+      if (
+        passes === 2 &&
+        op === 'lstat' &&
+        path === metadataRoots.evidence &&
+        fault === 'directory'
+      )
+        nodes.get(path).metadata = { ctimeNs: 9n };
+      if (op === 'open' && fault === 'unreadable') throw new Error('private');
+      if (op === 'dirread' && fault === 'traversal') throw new Error('private');
+    });
+    if (fault === 'missing') f.nodes.delete(metadataRoots.evidence + '/observations.json');
+    if (fault === 'logs') f.nodes.delete(target);
+    if (fault === 'link') f.nodes.get(target).link = true;
+    if (fault === 'special') f.nodes.get(target).special = true;
+    if (fault === 'negative') f.nodes.get(target).size = -1n;
+    if (fault === 'unsafe') f.nodes.get(target).size = 9007199254740992n;
+    if (fault === 'number') f.nodes.get(target).size = 1;
+    if (fault === 'unavailable') f.nodes.get(target).metadata = { mtimeNs: undefined };
+    assert.deepEqual(await f.run(), incompleteInventory(), fault);
+  }
+  const f = metadataFixture();
+  for (const name of requiredInventoryNames)
+    f.nodes.get(metadataRoots.evidence + '/' + name).size = 2000000000000000n;
+  assert.deepEqual(await f.run(), incompleteInventory(), 'aggregate bigint overflow');
+});
+
+test('inventory shared deadline and output budget refuse without extension and close open resources', async () => {
+  for (const expiredAt of [1, 4, 10, 30, 70, 150]) {
+    let calls = 0;
+    const f = metadataFixture();
+    assert.deepEqual(
+      await f.run(inventoryLimits, () => (++calls < expiredAt ? 0 : 30000)),
+      incompleteInventory(),
+    );
+  }
+  assert.deepEqual(await metadataFixture().run(inventoryLimits, () => 1, 1), incompleteInventory());
+  const result = await metadataFixture().run();
+  const exact = Buffer.byteLength(JSON.stringify(result));
+  assert.equal((await metadataFixture().run({ ...inventoryLimits, output: exact })).complete, true);
+  assert.deepEqual(
+    await metadataFixture().run({ ...inventoryLimits, output: exact - 1 }),
+    incompleteInventory(),
+  );
+});
+
+test('inventory closed schema rejects accessors, hooks, unknown fields and unsafe output values', async () => {
+  const good = await metadataFixture().run();
+  assert.deepEqual(parseRendererInventory(Buffer.from(encodeRendererInventory(good))), good);
+  for (const mutate of [
+    (v) => {
+      v.path = 'private';
+    },
+    (v) => {
+      v.toJSON = () => {
+        throw new Error('must not run');
+      };
+    },
+    (v) => {
+      v.projections.state = 9007199254740992;
+    },
+    (v) => {
+      v.projections.state = -1;
+    },
+    (v) => {
+      v.projections.state = NaN;
+    },
+    (v) => {
+      v.projections.state = 1.5;
+    },
+    (v) => {
+      Object.defineProperty(v, 'complete', {
+        get() {
+          assert.fail('accessor');
+        },
+      });
+    },
+    (v) => {
+      Object.defineProperty(v.roots.state, 'bytes', {
+        enumerable: true,
+        get() {
+          assert.fail('accessor');
+        },
+      });
+    },
+    (v) => {
+      v[Symbol('private')] = 1;
+    },
+    (v) => {
+      v.projections = v;
+    },
+  ]) {
+    const bad = structuredClone(good);
+    mutate(bad);
+    assert.throws(() => safeRendererInventory(bad));
+    assert.equal(encodeRendererInventory(bad), JSON.stringify(incompleteInventory()));
+  }
+  for (const bytes of [
+    Buffer.alloc(8193),
+    Buffer.from('{'),
+    Buffer.from('{"complete":false,"reason":"private"}'),
+  ])
+    assert.deepEqual(parseRendererInventory(bytes), incompleteInventory());
+  assert.deepEqual(parseRendererInventory(Buffer.from(JSON.stringify(good).padEnd(8192))), good);
+});
+
+function inventoryArchive(payload, declared = payload.length) {
+  const header = Buffer.alloc(512);
+  header.write('renderer-inventory.json');
+  header.write(declared.toString(8).padStart(11, '0') + '\0', 124);
+  header[156] = 48;
+  header.fill(32, 148, 156);
+  const sum = header.reduce((a, b) => a + b, 0);
+  header.write(sum.toString(8).padStart(6, '0') + '\0 ', 148);
+  return Buffer.concat([
+    header,
+    payload,
+    Buffer.alloc(Math.ceil(payload.length / 512) * 512 - payload.length + 1024),
+  ]);
+}
+test('outer bounded TAR envelope refuses oversize, extra members, bad headers and invalid results before retention', async () => {
+  const good = await metadataFixture().run();
+  const payload = Buffer.from(JSON.stringify(good).padEnd(8192));
+  assert.deepEqual(parseInventoryArchive(inventoryArchive(payload)), good);
+  for (const archive of [
+    inventoryArchive(Buffer.alloc(8193)),
+    inventoryArchive(payload, 8193),
+    Buffer.concat([inventoryArchive(payload), Buffer.from('private')]),
+    inventoryArchive(Buffer.from('{')),
+    Buffer.alloc(12289),
+  ])
+    assert.deepEqual(parseInventoryArchive(archive), incompleteInventory());
+  for (const index of [0, 124, 148, 156, 157, 345]) {
+    const archive = inventoryArchive(payload);
+    archive[index] = 120;
+    assert.deepEqual(parseInventoryArchive(archive), incompleteInventory());
+  }
+});
+
+test('inventory runtime branch has no scan/detail/profile fallback and skips database content inspection', async () => {
+  const inner = await readFile(
+    new URL('./support/harness-renderer-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const runner = await readFile(
+    new URL('./support/harness-linux-runner.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(inner, /inventoryMode\s*\?\s*\[\]\s*:/);
+  const inventoryBranch = inner.slice(
+    inner.indexOf('if (inventoryMode) {\n      // No progress'),
+    inner.indexOf('const statePaths ='),
+  );
+  assert.match(inventoryBranch, /rendererMetadataInventory/);
+  assert.doesNotMatch(inventoryBranch, /readFile|rendererScan|digest|progress\(/);
+  const outerBranch = runner.slice(
+    runner.indexOf('if (rendererInventory) {\n      let inventory'),
+    runner.indexOf('} else if (renderer) {\n      await command'),
+  );
+  assert.match(outerBranch, /parseInventoryArchive/);
+  assert.doesNotMatch(
+    outerBranch,
+    /scan-pass|diagnostics\.log|renderer-diagnostic|transcript\.ansi/,
+  );
+  assert.match(runner, /privacy: 'UNPROVEN'/);
+});
 const alpha = '1 SYNTHETIC ALPHA',
   beta = '2 SYNTHETIC BETA';
 const begin = '\x1b[?2026h',

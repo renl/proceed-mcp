@@ -20,6 +20,9 @@ import {
   rendererPayload,
   assertRendererExport,
   safeRendererDiagnostic,
+  parseInventoryArchive,
+  incompleteInventory,
+  inventoryLimits,
 } from './harness-renderer-observation.mjs';
 import {
   retainProgress,
@@ -52,11 +55,14 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       'composition',
       'renderer',
       'renderer-diagnostic',
+      'renderer-inventory',
     ].includes(mode),
   );
   const parent = mode === 'parent-process';
   const rendererDiagnostic = mode === 'renderer-diagnostic';
-  const renderer = mode === 'renderer' || rendererDiagnostic;
+  const rendererInventory = mode === 'renderer-inventory';
+  const renderer = mode === 'renderer' || rendererDiagnostic || rendererInventory;
+  if (rendererInventory) assert.equal(preflight, false);
   const composition = mode === 'composition';
   const helper = mode === 'helper-contract' || parent;
   if (helper && !parent) {
@@ -87,14 +93,15 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
   const started = Date.now();
   const end = started + hostBudgets.aggregate;
   const executionEnd = end - hostBudgets.teardownReserve;
-  const command = async (args, ceiling = 10000, cleanup = false) => {
+  const command = async (args, ceiling = 10000, cleanup = false, maxBuffer = 2 * 1024 * 1024) => {
     const timeout = Math.min(ceiling, (cleanup ? end : executionEnd) - Date.now());
     assert.ok(timeout > 0, 'aggregate deadline reached');
     return execute('docker', args, {
       cwd: root,
       timeout,
-      maxBuffer: 2 * 1024 * 1024,
+      maxBuffer,
       windowsHide: true,
+      ...(rendererInventory && args[0] === 'cp' ? { encoding: 'buffer' } : {}),
     });
   };
   for (const name of ['plugin', 'client']) {
@@ -153,6 +160,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         checks: 'PASS',
         payload,
         budgets: hostBudgets,
+        ...(rendererInventory
+          ? { purpose: 'METADATA_INVENTORY_ONLY', privacy: 'UNPROVEN', profile: 'UNPROVEN' }
+          : {}),
         ...(rendererDiagnostic
           ? {
               purpose: 'DIAGNOSTIC_CAPTURE_ONLY',
@@ -250,11 +260,14 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         {
           candidate,
           image: linuxImage,
+          ...(rendererInventory
+            ? { purpose: 'METADATA_INVENTORY_ONLY', privacy: 'UNPROVEN', profile: 'UNPROVEN' }
+            : {}),
           ...(rendererDiagnostic
             ? { purpose: 'DIAGNOSTIC_CAPTURE_ONLY', profile: 'UNPROVEN' }
             : {}),
           payload,
-          command: `node tests/run-harness-host.mjs ${rendererDiagnostic ? '--renderer-diagnostic-run' : renderer ? '--renderer-run' : composition ? '--composition-run' : parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
+          command: `node tests/run-harness-host.mjs ${rendererInventory ? '--renderer-inventory-run' : rendererDiagnostic ? '--renderer-diagnostic-run' : renderer ? '--renderer-run' : composition ? '--composition-run' : parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
         },
         null,
         2,
@@ -293,6 +306,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
                 : '/payload/tests/support/harness-linux-inner.mjs',
       ...(firstOnly ? ['--first-exchange-only'] : []),
       ...(rendererDiagnostic ? ['--diagnostic-capture'] : []),
+      ...(rendererInventory ? ['--metadata-inventory'] : []),
       ...(helper && !parent ? ['/payload/' + helperEntry] : []),
     ]);
     created = true;
@@ -329,7 +343,26 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
     await progress('evidence', {
       containerExit: /^\d{1,3}$/.test(observedExit) ? observedExit : 'UNLISTED_EXIT',
     });
-    if (renderer) {
+    if (rendererInventory) {
+      let inventory = incompleteInventory();
+      try {
+        // docker cp writes a TAR stream to stdout. Bound BEFORE parsing/copying.
+        // The exact fixed filename and 8192-byte payload cap are independently
+        // checked in the bounded envelope before JSON parsing or local retention.
+        const archive = await command(
+          ['cp', `${name}:/run/proceed/evidence/renderer-inventory.json`, '-'],
+          3000,
+          false,
+          inventoryLimits.output + 4096,
+        );
+        inventory = parseInventoryArchive(archive.stdout);
+      } catch {
+        /* Fixed incomplete only. No diagnostic/detail fallback or retry. */
+      }
+      await writeFile(join(run, 'renderer-inventory.json'), JSON.stringify(inventory));
+      assert.equal(waited.stdout.trim(), '0', 'INVENTORY_INCOMPLETE');
+      assert.equal(inventory.complete, true, 'INVENTORY_INCOMPLETE');
+    } else if (renderer) {
       await command([
         'cp',
         `${name}:/run/proceed/evidence/renderer-diagnostic.json`,
@@ -457,7 +490,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       assert.equal(result.status, 'PASS', result.failure);
     }
   } catch (error) {
-    if (renderer && created) {
+    if (rendererInventory) {
+      await writeFile(join(run, 'renderer-inventory.json'), JSON.stringify(incompleteInventory()));
+    } else if (renderer && created) {
       // Fixed metadata survives a missing scan or aborted outer wait. No raw fallback.
       let diagnostic = {
         status: 'FAIL',
@@ -602,6 +637,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           containerExit: progressState?.containerExit ?? 'UNRUN',
           elapsed: Date.now() - started,
           image: linuxImage,
+          ...(rendererInventory
+            ? { purpose: 'METADATA_INVENTORY_ONLY', privacy: 'UNPROVEN', profile: 'UNPROVEN' }
+            : {}),
           ...(rendererDiagnostic
             ? { purpose: 'DIAGNOSTIC_CAPTURE_ONLY', profile: 'UNPROVEN' }
             : {}),
@@ -618,6 +656,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           failure,
           cleanup,
           evidence: run,
+          ...(rendererInventory
+            ? { purpose: 'METADATA_INVENTORY_ONLY', privacy: 'UNPROVEN', profile: 'UNPROVEN' }
+            : {}),
           ...(rendererDiagnostic
             ? { purpose: 'DIAGNOSTIC_CAPTURE_ONLY', profile: 'UNPROVEN' }
             : {}),

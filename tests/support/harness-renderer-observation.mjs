@@ -2,8 +2,9 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { lstat, open } from 'node:fs/promises';
+import { lstat, open, opendir } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { posix } from 'node:path';
 import { compositionCurrentFrame } from './harness-composition-readiness.mjs';
 
 export const rendererSurfaces = Object.freeze([
@@ -23,6 +24,368 @@ export const rendererPayload = Object.freeze([
   'tests/support/harness-host-plan.mjs',
 ]);
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+// TEST ONLY. Metadata accounting is explicit serialized storage, not process RSS.
+export const inventoryLimits = Object.freeze({
+  entries: 16384n,
+  visits: 32768n,
+  files: 16382n,
+  depth: 64n,
+  path: 4096n,
+  paths: 4194304n,
+  retained: 8388608n,
+  milliseconds: 30000,
+  output: 8192,
+});
+export const incompleteInventory = () => ({ complete: false, reason: 'INCOMPLETE' });
+const safeBig = (n) => {
+  assert.ok(typeof n === 'bigint' && n >= 0n && n <= 9007199254740991n);
+  return n;
+};
+const inventoryNumber = (n) => Number(safeBig(n));
+export function inventoryAdmit(value, ceiling) {
+  assert.ok(safeBig(value) <= safeBig(ceiling));
+}
+const inventoryBytes = (s) => BigInt(Buffer.byteLength(s, 'utf8'));
+const inventoryRoot = (entries = 0, files = 0, bytes = 0, maxSize = 0) => ({
+  entries,
+  files,
+  bytes,
+  maxSize,
+});
+
+// Closed data-only schema. Accessors, symbols and serialization hooks never run.
+export function safeRendererInventory(value) {
+  const object = (v, keys) => {
+    assert.ok(
+      v && typeof v === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(v)),
+    );
+    assert.deepEqual(Reflect.ownKeys(v).sort(), [...keys].sort());
+    for (const key of keys) {
+      const d = Object.getOwnPropertyDescriptor(v, key);
+      assert.ok(d && 'value' in d && d.enumerable);
+    }
+  };
+  const number = (v) => assert.ok(Number.isSafeInteger(v) && v >= 0);
+  // Inspect complete's descriptor before selecting either shape.
+  const complete = Object.getOwnPropertyDescriptor(value ?? {}, 'complete');
+  assert.ok(complete && 'value' in complete && typeof complete.value === 'boolean');
+  if (!complete.value) {
+    object(value, ['complete', 'reason']);
+    assert.equal(value.reason, 'INCOMPLETE');
+  } else {
+    object(value, ['complete', 'reason', 'roots', 'totalPathBytes', 'requiredLogs', 'projections']);
+    assert.equal(value.reason, 'NONE');
+    object(value.roots, ['state', 'evidence']);
+    for (const root of Object.values(value.roots)) {
+      object(root, ['entries', 'files', 'bytes', 'maxSize']);
+      Object.values(root).forEach(number);
+      assert.ok(root.entries >= 1 && root.files < root.entries && root.maxSize <= root.bytes);
+    }
+    assert.ok(value.roots.state.entries + value.roots.evidence.entries <= 16384);
+    assert.ok(value.roots.state.files + value.roots.evidence.files <= 16382);
+    number(value.totalPathBytes);
+    assert.ok(value.totalPathBytes <= 4194304);
+    object(value.requiredLogs, ['count', 'bytes']);
+    Object.values(value.requiredLogs).forEach(number);
+    assert.ok(value.requiredLogs.count > 0 && value.requiredLogs.count <= 16382);
+    object(value.projections, [...rendererSurfaces, 'detailedExport']);
+    Object.values(value.projections).forEach(number);
+  }
+  assert.ok(Buffer.byteLength(JSON.stringify(value)) <= inventoryLimits.output);
+  return value;
+}
+export function encodeRendererInventory(value) {
+  try {
+    return JSON.stringify(safeRendererInventory(value));
+  } catch {
+    return JSON.stringify(incompleteInventory());
+  }
+}
+export function parseRendererInventory(bytes) {
+  try {
+    assert.ok(Buffer.isBuffer(bytes) && bytes.length <= inventoryLimits.output);
+    return safeRendererInventory(JSON.parse(bytes.toString('utf8')));
+  } catch {
+    return incompleteInventory();
+  }
+}
+
+// Accept only one ordinary fixed-name TAR member, no extensions or links.
+// Bounded docker cp stdout is never written as a quarantine/detail file.
+export function parseInventoryArchive(bytes) {
+  try {
+    assert.ok(
+      Buffer.isBuffer(bytes) &&
+        bytes.length <= inventoryLimits.output + 4096 &&
+        bytes.length >= 1536,
+    );
+    const header = bytes.subarray(0, 512);
+    assert.equal(
+      header.subarray(0, 100).toString('latin1').replace(/\0.*$/s, ''),
+      'renderer-inventory.json',
+    );
+    assert.ok([0, 48].includes(header[156]));
+    assert.ok(header.subarray(157, 257).every((b) => b === 0));
+    assert.ok(header.subarray(345, 500).every((b) => b === 0));
+    const octal = (field) => {
+      const text = field.toString('latin1').replace(/\0/g, '').trim();
+      assert.match(text, /^[0-7]{1,12}$/);
+      return BigInt('0o' + text);
+    };
+    const size = octal(header.subarray(124, 136));
+    assert.ok(size <= BigInt(inventoryLimits.output));
+    const sum = header.reduce((n, b, i) => n + (i >= 148 && i < 156 ? 32 : b), 0);
+    assert.equal(BigInt(sum), octal(header.subarray(148, 156)));
+    const length = Number(size);
+    const end = 512 + Math.ceil(length / 512) * 512;
+    assert.ok(bytes.length >= end + 1024 && bytes.subarray(512 + length).every((b) => b === 0));
+    return parseRendererInventory(bytes.subarray(512, 512 + length));
+  } catch {
+    return incompleteInventory();
+  }
+}
+
+// No read/readFile/hash/decoder/scanner is reachable through this collector.
+// io/limits/clock injection is native-test-only, never supplied by the runner.
+export async function rendererMetadataInventory(
+  roots,
+  endpoint,
+  io = { lstat, open, opendir, flags: constants },
+  limits = inventoryLimits,
+  clock = Date.now,
+) {
+  try {
+    for (const key of Object.keys(inventoryLimits)) {
+      assert.equal(typeof limits[key], typeof inventoryLimits[key]);
+      assert.ok(limits[key] > 0 && limits[key] <= inventoryLimits[key]);
+    }
+    assert.deepEqual(Object.keys(roots), ['state', 'evidence']);
+    assert.ok(Number.isSafeInteger(endpoint));
+    const deadline = Math.min(endpoint, clock() + limits.milliseconds);
+    const check = () => assert.ok(clock() < deadline);
+    const call = async (fn) => {
+      check();
+      const result = await fn();
+      check();
+      return result;
+    };
+    let visits = 0n,
+      // Fixed reserve: 8192 output, 2048 scan skeleton, 6144 scalar/projection
+      // bookkeeping and temporary metadata snapshots. No process-RSS claim.
+      retained = 16384n,
+      paths = 0n;
+    const charge = (path, extra = 0n) => {
+      const bytes = inventoryBytes(path);
+      assert.ok(posix.isAbsolute(path));
+      inventoryAdmit(bytes, limits.path);
+      // Charge before retention, including queue slots and comparison-map keys.
+      inventoryAdmit(paths + bytes, limits.paths);
+      inventoryAdmit(retained + bytes + extra, limits.retained);
+      paths += bytes;
+      retained += bytes + extra;
+      return bytes;
+    };
+    const release = (bytes, extra) => {
+      paths -= bytes;
+      retained -= bytes + extra;
+    };
+    for (const root of Object.values(roots)) charge(root, 64n);
+    const metadata = (s) => {
+      assert.equal(s.isSymbolicLink(), false);
+      const kind = s.isFile() ? 'file' : s.isDirectory() ? 'directory' : 'refused';
+      assert.notEqual(kind, 'refused');
+      const values = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].map((key) => safeBig(s[key]));
+      return [kind, ...values.map(String)];
+    };
+    const same = (a, b) => assert.deepEqual(a, b);
+    const passes = [];
+    for (let pass = 0; pass < 2; pass++) {
+      const entries = new Map();
+      let count = 0n,
+        files = 0n;
+      for (const [surface, root] of Object.entries(roots)) {
+        assert.equal(posix.normalize(root), root);
+        assert.ok(!root.startsWith(roots[surface === 'state' ? 'evidence' : 'state'] + '/'));
+        const queue = [];
+        const enqueue = (path, depth) => {
+          inventoryAdmit(depth, limits.depth);
+          // 64 accounts the serialized depth and queue index/slot bookkeeping.
+          const bytes = charge(path, 64n);
+          queue.push({ path, depth, bytes });
+        };
+        enqueue(root, 0n);
+        while (queue.length) {
+          check();
+          const item = queue.pop();
+          const { path, depth, bytes } = item;
+          count++;
+          visits++;
+          inventoryAdmit(count, limits.entries);
+          inventoryAdmit(visits, limits.visits);
+          const before = metadata(await call(() => io.lstat(path, { bigint: true })));
+          if (depth === 0n) assert.equal(before[0], 'directory');
+          assert.equal(entries.has(path), false);
+          const record = JSON.stringify({ surface, metadata: before });
+          const extra = 2n * inventoryBytes(record) + 256n;
+          charge(path, extra);
+          entries.set(path, { surface, metadata: before, record });
+          if (pass) {
+            const previous = passes[0].get(path);
+            assert.ok(previous);
+            assert.equal(record, previous.record);
+          }
+          if (before[0] === 'directory') {
+            let dir;
+            try {
+              dir = await io.opendir(path, { bufferSize: 1, encoding: 'utf8' });
+              check();
+              for (;;) {
+                const entry = await call(() => dir.read());
+                if (!entry) break;
+                assert.ok(
+                  typeof entry.name === 'string' &&
+                    entry.name.length > 0 &&
+                    !/[\/\0]/.test(entry.name) &&
+                    !['.', '..'].includes(entry.name),
+                );
+                // Pending queue entries count toward admission before another read.
+                inventoryAdmit(count + BigInt(queue.length) + 1n, limits.entries);
+                enqueue(posix.join(path, entry.name), depth + 1n);
+              }
+            } finally {
+              if (dir) await dir.close();
+            }
+            same(metadata(await call(() => io.lstat(path, { bigint: true }))), before);
+          } else {
+            files++;
+            inventoryAdmit(files, limits.files);
+            let handle;
+            try {
+              const flags = io.flags ?? constants;
+              assert.ok(flags.O_NOFOLLOW && flags.O_NONBLOCK);
+              handle = await io.open(path, flags.O_RDONLY | flags.O_NOFOLLOW | flags.O_NONBLOCK);
+              check();
+              same(metadata(await call(() => handle.stat({ bigint: true }))), before);
+              same(metadata(await call(() => io.lstat(path, { bigint: true }))), before);
+            } finally {
+              if (handle) await handle.close();
+            }
+          }
+          release(bytes, 64n);
+        }
+      }
+      if (pass) assert.equal(entries.size, passes[0].size);
+      passes.push(entries);
+    }
+    const result = {
+      complete: true,
+      reason: 'NONE',
+      roots: { state: inventoryRoot(), evidence: inventoryRoot() },
+      totalPathBytes: 0,
+      requiredLogs: { count: 0, bytes: 0 },
+      projections: Object.fromEntries([...rendererSurfaces, 'detailedExport'].map((s) => [s, 0])),
+    };
+    const totals = {
+      state: { entries: 0n, files: 0n, bytes: 0n, maxSize: 0n },
+      evidence: { entries: 0n, files: 0n, bytes: 0n, maxSize: 0n },
+    };
+    let logCount = 0n,
+      logBytes = 0n,
+      pathBytes = 0n,
+      markerRecords = 0n,
+      fileCount = 0n;
+    const sizes = new Map();
+    for (const [path, { surface, metadata: m }] of passes[0]) {
+      check();
+      const root = totals[surface],
+        size = BigInt(m[3]);
+      root.entries++;
+      pathBytes += inventoryBytes(path);
+      if (m[0] !== 'file') continue;
+      root.files++;
+      root.bytes = safeBig(root.bytes + size);
+      if (size > root.maxSize) root.maxSize = size;
+      if (/\.log(?:$|[.-])/.test(path)) {
+        logCount++;
+        logBytes = safeBig(logBytes + size);
+      }
+      if (surface === 'evidence') {
+        const name = posix.basename(path);
+        if (
+          [
+            'binding.json',
+            'observations.json',
+            'fixture.jsonl',
+            'inventory.json',
+            'transcript.ansi',
+            'progress.jsonl',
+          ].includes(name) &&
+          path === posix.join(roots.evidence, name)
+        ) {
+          charge(path, 64n);
+          sizes.set(name, size);
+        }
+      }
+      // JSON escaping can require six bytes per path byte. Reserve the worst
+      // case before materializing this one temporary serialization.
+      inventoryAdmit(retained + 6n * inventoryBytes(path) + 256n, limits.retained);
+      inventoryAdmit(paths + 6n * inventoryBytes(path), limits.paths);
+      const record = JSON.stringify({ path, sha256: '0'.repeat(64), bytes: inventoryNumber(size) });
+      // Temporary projection serialization is explicitly charged, then released.
+      const temporary = inventoryBytes(record) + 64n;
+      assert.ok(
+        retained + temporary <= limits.retained && paths + inventoryBytes(path) <= limits.paths,
+      );
+      markerRecords += inventoryBytes(record) + (fileCount++ ? 1n : 0n);
+    }
+    assert.equal(sizes.size, 6);
+    assert.ok(logCount > 0n);
+    const scan = {
+      status: 'PASS',
+      scope: 'renderer-only',
+      surfaces: rendererSurfaces,
+      hashes: Object.fromEntries(rendererSurfaces.map((s) => [s, '0'.repeat(64)])),
+      absentByDesign: ['broker', 'journal', 'telegram', 'approval-api'],
+      productSixSurfaceGate: 'NOT_APPLICABLE_NOT_PASSED',
+      files: [],
+    };
+    const projection = {
+      tui: sizes.get('transcript.ansi'),
+      diagnostics: logBytes,
+      fixture: sizes.get('fixture.jsonl'),
+      inventory: sizes.get('inventory.json'),
+      state: totals.state.bytes,
+      evidence: totals.evidence.bytes,
+    };
+    for (const [path, entry] of passes[0]) {
+      check();
+      if (entry.metadata[0] === 'file')
+        projection[entry.surface] = safeBig(projection[entry.surface] + inventoryBytes(path));
+    }
+    projection.detailedExport =
+      [...sizes.values()].reduce((a, b) => safeBig(a + b), 0n) +
+      logBytes +
+      inventoryBytes(JSON.stringify(scan)) +
+      markerRecords;
+    for (const [surface, root] of Object.entries(totals))
+      result.roots[surface] = Object.fromEntries(
+        Object.entries(root).map(([k, v]) => [k, inventoryNumber(v)]),
+      );
+    result.totalPathBytes = inventoryNumber(pathBytes);
+    result.requiredLogs = { count: inventoryNumber(logCount), bytes: inventoryNumber(logBytes) };
+    result.projections = Object.fromEntries(
+      Object.entries(projection).map(([k, v]) => [k, inventoryNumber(v)]),
+    );
+    check();
+    const output = safeRendererInventory(result);
+    assert.ok(Buffer.byteLength(JSON.stringify(output)) <= limits.output);
+    check();
+    return output;
+  } catch {
+    return incompleteInventory();
+  }
+}
 const calibrationLabels = ['1 SYNTHETIC ALPHA', '2 SYNTHETIC BETA'];
 
 // Collection has no dependency on the cell/style parser being investigated.
