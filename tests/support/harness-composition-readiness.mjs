@@ -18,6 +18,7 @@ export function compositionSourceFrame(ansi) {
       /\x1b[P_](?:[^\x1b]|\x1b(?!\\))*\x1b\\|\x1b\](?:[^\x07\x1b]|\x1b(?!\\))*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|[^\x1b]/gu,
     ) ?? [];
   if (tokens.join('') !== ansi) return refuse('INCOMPLETE_ESCAPE');
+  const lastCompleteUpdate = tokens.lastIndexOf('\x1b[?2026l');
   // Exact query constants. In particular APC is only a=q, never transmit/delete.
   const queries = new Set([
     '\x1bP+q4d73\x1b\\',
@@ -43,6 +44,7 @@ export function compositionSourceFrame(ansi) {
     syncing = false,
     frames = 0,
     generation = 0,
+    discardedFrameGeneration = null,
     alt = false,
     tainted = false,
     frame = null,
@@ -54,7 +56,7 @@ export function compositionSourceFrame(ansi) {
     tainted = false;
     generation++;
   };
-  for (const token of tokens) {
+  for (const [index, token] of tokens.entries()) {
     const start = offset;
     offset += new TextEncoder().encode(token).length;
     const bad = (reason, operation = null) => refuse(reason, start, operation);
@@ -93,6 +95,23 @@ export function compositionSourceFrame(ansi) {
     }
     if (token.startsWith('\x1b]')) {
       const op = /^\x1b\](\d+)/.exec(token)?.[1];
+      if (token === '\x1b]12;default\x07') {
+        // ansi.zig:309 resetCursorColorFallback at the pinned SHA. Distinct
+        // from OSC12 RGB assignment (:298) and OSC112 reset (:308).
+        // Observed AFTER alternate-screen discard, not before it. Restrict to
+        // trailing/outside-update, after the last completed update and discard.
+        // This is observer policy, not an emitter-order guarantee. No cell,
+        // coordinate, save register, generation or current frame is restored.
+        if (
+          syncing ||
+          alt ||
+          discardedFrameGeneration !== generation ||
+          !frames ||
+          index <= lastCompleteUpdate
+        )
+          return bad('UNSAFE_CURSOR_RESET_PHASE', 12);
+        continue;
+      }
       // session.zig:1163-1176 at the pin above emits non-cell program metadata.
       // Admit only the complete source-conformant variant verified in the bound
       // prefix. This is not a general status parser or permissive base64 decoder.
@@ -124,8 +143,10 @@ export function compositionSourceFrame(ansi) {
       return bad('UNSUPPORTED_STRING_PAYLOAD');
     if (token === '\x1b[?1049h' || token === '\x1b[?1049l') {
       if (syncing || alt === token.endsWith('h')) return bad('UNSAFE_GENERATION');
+      const discardingFrame = alt && frame?.generation === generation;
       alt = token.endsWith('h');
       reset();
+      discardedFrameGeneration = discardingFrame ? generation : null;
       saved = undefined;
       // Entering the cleared alternate screen starts at home. Exit discards it.
       row = alt ? 0 : null;
@@ -164,7 +185,7 @@ export function compositionSourceFrame(ansi) {
       continue;
     }
     if (token === '\x1b[?2027h') {
-      // Only the nine lone scalars below are modeled under all width methods.
+      // Only the ten lone scalars below are modeled under all width methods.
       if (syncing || frames) return bad('UNSAFE_UNICODE_PHASE');
       continue;
     }
@@ -200,10 +221,11 @@ export function compositionSourceFrame(ansi) {
     // Source map ranges and exhaustive utf8_test:2047-2063 at the pinned SHA.
     // No cluster, combining/variation selector, C1 or unknown scalar is skipped.
     // U+203A: tests/unicode-width-map.zon:13 (202F..205F), width 1.
+    // U+2299: tests/unicode-width-map.zon:16 (2190..2319), width 1.
     // tests/utf8_test.zig:2047-2063 checks every scalar in every WidthMethod.
     // utf8.zig charWidth/eawToWidth and GraphemeWidthState do not license
     // clusters here. VS16/ZWJ/combining scalars still refuse the whole prefix.
-    if (!/^[\x20-\x7e\u00b7\u2026\u203a\u2503\u2579\u2580\u2584\u2588\u25cf]$/.test(token))
+    if (!/^[\x20-\x7e\u00b7\u2026\u203a\u2299\u2503\u2579\u2580\u2584\u2588\u25cf]$/.test(token))
       return bad('UNSUPPORTED_GLYPH');
     if (tainted || row === null || col === null) return bad('UNKNOWN_PAINT_POSITION');
     if (!syncing) return bad('UNSYNCHRONIZED_PAINT');

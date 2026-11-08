@@ -28,13 +28,32 @@ const readyFrame = `2.2.5\nAsk anything\n┃  ${productReadyText}  ┃`;
 
 test('actual capture readiness route never substitutes the unstyled failure observer', async () => {
   const paint = (s) => '\x1b[?2026h\x1b[1;1H' + s + '\x1b[?2026l';
-  const prefix = paint('2.2.5 Ask anything \u203a');
-  assert.equal(compositionReadinessFrame(prefix, true), '2.2.5 Ask anything \u203a');
-  const unsafe = prefix + paint('\u203a\ufe0f');
+  const prefix = paint('2.2.5 Ask anything \u203a\u2299');
+  assert.equal(compositionReadinessFrame(prefix, true), '2.2.5 Ask anything \u203a\u2299');
+  const unsafe = prefix + paint('\u2299\ufe0f');
   assert.equal(compositionReadinessFrame(unsafe, true), '');
   assert.notEqual(compositionReadinessFrame(unsafe, false), '');
   assert.equal(compositionReadinessFrame(prefix + '\x1b[?2026h', true), '');
   assert.equal(compositionReadinessFrame(prefix + '\x1b[?1049l', true), '');
+  const alternate = '\x1b[?1049h' + prefix;
+  const liveFrame = compositionReadinessFrame(alternate, true);
+  assert.equal(compositionRenderEvidence(liveFrame).hostFrameSeen, true);
+  const unbound = compositionSnapshot({
+    frame: liveFrame,
+    frameToken: Buffer.byteLength(alternate),
+  });
+  assert.equal(unbound.checks.completedSupportedFrame, true);
+  assert.equal(unbound.checks.hostFrameSeen, true);
+  assert.equal(unbound.admitted, false);
+  assert.equal(unbound.checks.activationPresent, false);
+  assert.equal(unbound.checks.liveParsePresent, false);
+  assert.equal(unbound.checks.responseParsePresent, false);
+  const discarded = alternate + '\x1b[?1049l\x1b]12;default\x07\x1b]112\x07';
+  assert.equal(compositionReadinessFrame(discarded, true), '');
+  assert.equal(
+    compositionRenderEvidence(compositionReadinessFrame(discarded, true)).hostFrameSeen,
+    false,
+  );
   const inner = await readFile(
     new URL('support/harness-composition-inner.mjs', import.meta.url),
     'utf8',

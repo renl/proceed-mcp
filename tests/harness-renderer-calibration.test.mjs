@@ -1554,19 +1554,23 @@ test('finite source layout preserves indexed identity, asymmetric inactive style
 });
 
 test('source scalar support is finite and rejects clusters rather than ignoring them', () => {
-  const glyphs = '\u00b7\u2026\u203a\u2503\u2579\u2580\u2584\u2588\u25cf';
+  const glyphs = '\u00b7\u2026\u203a\u2299\u2503\u2579\u2580\u2584\u2588\u25cf';
   const paint = (s) => begin + '\x1b[1;1H' + s + end;
   const decoded = compositionSourceFrame(paint(glyphs + 'Z'));
   assert.equal(decoded.supported, true);
   assert.equal(decoded.text, glyphs + 'Z');
-  assert.deepEqual(decoded.cursor, { row: 0, col: 10 });
+  assert.deepEqual(decoded.cursor, { row: 0, col: 11 });
   for (const bad of [
     '\u25cf\ufe0f',
     '\u203a\ufe0f',
     '\u203a\u200d\u203a',
     '\u203a\u0301',
     '\u2039',
-    '\u2299',
+    '\u2299\ufe0f',
+    '\u2299\u200d\u2299',
+    '\u2299\u0301',
+    '\u2298',
+    '\u229a',
     '\u2588\u200d\u2588',
     'e\u0301',
     '\u4e00',
@@ -1576,6 +1580,64 @@ test('source scalar support is finite and rejects clusters rather than ignoring 
     '\n',
   ])
     assert.equal(compositionSourceFrame(paint(bad)).reason, 'UNSUPPORTED_GLYPH');
+});
+
+test('exact fallback reset is only trailing after discard and never revives current cells', () => {
+  const fallback = '\x1b]12;default\x07';
+  const paint = '\x1b[?1049h' + begin + '\x1b[HX\x1b[sY\x1b[uZ' + end;
+  const discard = '\x1b[?1049l';
+  const prefix = paint + discard;
+  const noFrame = compositionSourceFrame(prefix);
+  assert.equal(noFrame.reason, 'NO_CURRENT_FRAME');
+  // Non-cell presentation does not turn historical cells into a current frame.
+  for (const suffix of ['', '\x1b]112\x07', '\x1b[0 q\x1b[?25h'])
+    assert.deepEqual(compositionSourceFrame(prefix + fallback + suffix), {
+      ...noFrame,
+      byteOffset: Buffer.byteLength(prefix + fallback + suffix),
+    });
+  for (const before of [
+    '',
+    '\x1b[?1049h',
+    paint,
+    paint + begin,
+    '\x1b[?1049h' + discard,
+    prefix + '\x1b[2J',
+    prefix + '\x1b[?1049h',
+    '\x1b[2J\x1b[2J' + begin + '\x1b[HX' + end,
+  ]) {
+    const result = compositionSourceFrame(before + fallback);
+    assert.equal(result.reason, 'UNSAFE_CURSOR_RESET_PHASE');
+    assert.equal(result.byteOffset, Buffer.byteLength(before));
+    assert.equal(result.operation, 12);
+  }
+  // Even with prior completed paint, this may not license a later update.
+  assert.equal(
+    compositionSourceFrame(prefix + fallback + begin + end).reason,
+    'UNSAFE_CURSOR_RESET_PHASE',
+  );
+  // Save register and unknown position still belong to the discarded generation.
+  assert.equal(compositionSourceFrame(prefix + fallback + '\x1b[u').reason, 'UNMATCHED_RESTORE');
+  assert.equal(
+    compositionSourceFrame(prefix + fallback + '\x1b[s\x1b[uX').reason,
+    'UNKNOWN_PAINT_POSITION',
+  );
+  for (const token of [
+    fallback.replace('default', 'defaulX'), // Same length is not identity.
+    fallback.replace('\x07', '\x1b\\'),
+    '\x1b]12;?\x07',
+    '\x1b]12;DEFAULT\x07',
+    '\x1b]12;default;\x07',
+    '\x1b]113\x07',
+  ])
+    assert.equal(compositionSourceFrame(prefix + token).reason, 'UNSUPPORTED_OSC_PAYLOAD');
+  for (let i = 1; i < fallback.length; i++)
+    assert.equal(compositionSourceFrame(prefix + fallback.slice(0, i)).reason, 'INCOMPLETE_ESCAPE');
+  // Existing distinct source forms remain supported, without being synonyms.
+  const before = compositionSourceFrame(paint);
+  for (const token of ['\x1b]12;#aBc012\x07', '\x1b]112\x07'])
+    assert.deepEqual(compositionSourceFrame(paint + token), before);
+  for (const token of ['\x1b]12;#aBc01X\x07', '\x1b]112\x1b\\'])
+    assert.equal(compositionSourceFrame(paint + token).reason, 'UNSUPPORTED_OSC_PAYLOAD');
 });
 
 test('exact query payloads and explicit phase policy refuse opaque substitutions', () => {

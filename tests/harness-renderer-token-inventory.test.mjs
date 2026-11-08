@@ -15,7 +15,7 @@ const operations = (r) => r.tokens.map((t) => t.operation);
 
 test('complete lexical summary continues beyond decoder refusal and retains later phases and clusters without payloads', () => {
   const raw = bytes(
-    '\x1b[?1049h\x1b[?2026h\x1b[H\u2299\x1b[?2026l\x1b[?2027h\x1b[?2026hA\u0301\u203a\ufe0f\x1b]99;PRIVATE_SECRET\x1b\\\x1b[?2026l\x1b[?1049l',
+    '\x1b[?1049h\x1b[?2026h\x1b[H\u2298\x1b[?2026l\x1b[?2027h\x1b[?2026hA\u0301\u203a\ufe0f\x1b]99;PRIVATE_SECRET\x1b\\\x1b[?2026l\x1b[?1049l',
   );
   const r = completeLexicalSummary(raw);
   assert.equal(r.complete, true);
