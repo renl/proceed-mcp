@@ -1,5 +1,84 @@
 # Tasks
 
+## PRODUCT-EVIDENCE-RETAINED-MAPPING - correction 1 and complete offline inventory
+
+Entry HEAD `f58d47ec0a7d7448c43c5df2fad1e88bf6931469`, index empty, only README/status overlays dirty. Both overlays remain unselected. Scope is existing test-owned retention/inventory helpers, their existing native suites and this active tasks file. Runner, decoder, production, contracts, dependencies and frozen evidence are unchanged. Founder-visible success remains a genuine paired human decision on the exact request returned to its original waiting call. These controls, admission and lexical analysis are enabling proxies, not product proof.
+
+### Superseding complete-set admission
+
+The historical wrong-file comparison remains a FAILED check. It compared exported `progress.jsonl` with the mutable outer lifecycle journal, not the retained export. That does not establish mutation. The original invocation is unavailable, so no claim is made that a particular script/tool implementation selected the wrong path. Earlier diagnosis/replay statements are historical claims until reproduced below, not silently refreshed evidence.
+
+Fresh length/SHA-256 admission passed before any detail interpretation: marker 1027 bytes plus four mapped details 67509 bytes equals 68536 bytes. All five hashes exactly match the consumed-capture table below. The marker has PASS, the six PRODUCT surfaces and the same four ordered bindings. Explicit export-to-retained mapping is:
+
+| Export name                     | Retained path under `.scratch/harness-host/run-linux-xTk2c7/` |
+| ------------------------------- | ------------------------------------------------------------- |
+| `scan-pass.json`                | `scan-pass.json`                                              |
+| `composition-observations.json` | `composition-observations.json`                               |
+| `transcript.ansi`               | `transcript.ansi`                                             |
+| `plugin-diagnostics.log`        | `plugin-diagnostics.log`                                      |
+| `progress.jsonl`                | `inner-progress.jsonl`                                        |
+
+The separate 1078-byte outer `progress.jsonl` is NOT an export and never substitutes for evidence. Closed metadata checks independently matched the recorded ordered 95-file payload manifest `1dde1cf6dd67fda07efbb9f2ddad95013a04eebb4ca8b1b42ffdac39afc51f60` and 3-file outer manifest `65539ae18df4c0443d3cac749d99f033399cdc80750eae8536e5e44a0428f4a0`, using SHA-256 of UTF-8 `JSON.stringify` over ordered records. `candidate.json` binds capture HEAD `7d9b1d610ef49dc2a226340e663e7cfb4394072c`, pinned image, PRODUCT_PICKER_CAPTURE_ONLY, UNQUALIFIED and null profile. These are historical-run bindings, not a claim that corrected current helpers equal the old payload.
+
+`verifyRetainedProductCapture` validates the complete ordered five-name mapping before IO, canonical relative paths, case-insensitive uniqueness/no aliases, no traversal/absolute path/outer-journal substitution, bounded aggregate admission, pinned marker length/hash, exact marker file bindings and each detail length/hash. It returns copied details only after the complete set passes. The existing inventory helper owns the maintained `--admitted-product-capture` route, so no standalone verifier/framework was needed. Its bounded descriptor reader rejects directory/file links, non-regular files, product hardlinks, size/hash changes and descriptor/path identity or timestamp drift. No marker regeneration, raw rescan, restoration, resigning or overwrite occurred.
+
+### Retention-route controls and limits
+
+The existing calibration suite executes actual `productCaptureExport` -> `transferProductCapture` -> mapped verification with synthetic transports. It executes only the actual runner's destination/progress closures in a bounded VM with memory-only IO, not the runner entrypoint. Both success/failure retention-loop source anchors are checked. After five-file admission, the actual outer-progress closure appends teardown and replaces its own snapshot. The retained inner hash and fresh mapped admission remain unchanged. Source assertions separately require inner controls close, host stream closure and writer absence before collection/freeze/hash/export. Frozen-buffer mutation, every file's missing/length/hash substitution, manifest mismatch, alias/case/traversal/absolute/outer-journal mapping controls refuse. Source assertions and synthetic IO are not real TAR/process/filesystem teardown proof. No runner bug was established or runner edit made.
+
+### Complete lexical inventory and consolidated source gaps
+
+The maintained offline route freshly admits all five files before tokenizing the entire 20542-byte transcript. Result: 1580 contiguous tokens, 86 operation/framing classes, 91 non-text operation/phase groups, complete framing, 12 completed updates, zero balance errors, no open update, last completed byte 20419. No invalid/truncated UTF-8, C0/C1/DEL paint controls or multi-scalar grapheme clusters were found. Cluster enumeration is native `Intl.Segmenter` diagnostic evidence, not terminal width proof.
+
+| Scalar   | Count | First / last byte offset | Phase / current decoder      |
+| -------- | ----: | ------------------------ | ---------------------------- |
+| `U+00B7` |     1 | 17807 / 17807            | UPDATE, finite supported set |
+| `U+2026` |     1 | 13956 / 13956            | UPDATE, finite supported set |
+| `U+203A` |     1 | 8723 / 8723              | UPDATE, finite supported set |
+| `U+2299` |     1 | 17255 / 17255            | UPDATE, UNSUPPORTED_GLYPH    |
+| `U+2503` |    60 | 6471 / 19628             | UPDATE, finite supported set |
+| `U+2579` |     8 | 14691 / 19702            | UPDATE, finite supported set |
+| `U+2580` |   128 | 11741 / 14947            | UPDATE, finite supported set |
+| `U+2584` |     2 | 11556 / 11786            | UPDATE, finite supported set |
+| `U+2588` |    28 | 11738 / 12943            | UPDATE, finite supported set |
+
+Fresh original-byte replay reproduces all 12 prefix lengths/hashes in the earlier table. Prefixes 1-2 decode, without upgrading that to host-frame/product readiness. Prefixes 3-12 still refuse U+2299 at byte 17255. The lexical scan continues beyond that first failure, including the complete 123-byte tail.
+
+Control inventory retains every operation/count/offset/phase in the closed report. CSI includes cursor H/s/u, SGR reset/bold/indexed colors, synchronized updates, alternate screen, cursor visibility/shape, input modes and source query forms. Indexed FG operands are 8,15,60,67,68,69,73,75,168,234,235,237,238,240,255. BG operands are 232,234,235,238. No palette-to-RGB inference is made. Unicode-mode enable 2027 occurs six times, all STARTUP, offsets 280,341,357,373,401,417, not after completed frames. Opaque string classes are DCS at 40, APC at 174, OSC 99 at 108, 1337 at 143, 66 at 218/237, 7501 at 433, 22 at 6394, 0 at 6416 and 12 at 17725/20506. Payloads remain private.
+
+To audit later controls without inventing glyph widths, a separate control-only projection removes ALL paint tokens and calls the unchanged canonical decoder. All 12 projected completed prefixes pass its control policy. This is explicitly CONTROL_ONLY_NOT_CELL_PROOF. Full projection refuses OSC 12 at byte 20506, TRAILING, UNSUPPORTED_OSC_PAYLOAD. The refusal survey records that failure and explicitly excludes only that recorded token to inspect later controls. It then reaches NO_CURRENT_FRAME after alternate-screen discard, with no further control refusal. The original full result remains refused. This survey neither ignores the failure nor proves original cells, cursor advance or readiness.
+
+Consolidated next-owner brief, with no decoder repair authorized here:
+
+- U+2299 is the only newly unsupported paint scalar in this complete transcript. Exact public OpenTUI `738067f47e940dcec3f5aab74868908574335c6c`, `packages/native/src/tests/unicode-width-map.zon:16`, maps U+2190..U+2319 to width 1. This single exact-file fetch confirms lone-scalar source-layout grounding. Reuse the prior same-pin exhaustive `utf8_test.zig:2047-2063` and `utf8.zig` WidthMethod/cluster findings. No terminal-pixel or arbitrary-cluster claim follows.
+- Trailing OSC 12 at 20506 does not match the current decoder's finite accepted payload forms. Its source meaning and safe treatment remain UNKNOWN. Coordination must route exact pinned source/owner clarification together with the glyph disposition. Do not broaden OSC acceptance, ignore the token, infer reset semantics or claim full-transcript decoding. Its trailing position does not make it irrelevant to complete-transcript support.
+- Original readiness-failure root cause, missing loop-time operands/session snapshot/count, resolved theme/mode/depth and separate graceful broker/helper cleanup remain UNKNOWN. Observer mismatch and setup/reconciliation progress do not prove product startup/readiness or a human decision.
+
+Exclusive closed report: `.scratch/harness-host/run-linux-xTk2c7/product-token-inventory-4891fcdfd82324b449a8347195b1ae14da57fcf8c615e924c82a6fbbb0205978.json`, 18573 LF-terminated bytes, SHA-256 `4891fcdfd82324b449a8347195b1ae14da57fcf8c615e924c82a6fbbb0205978`. It contains escaped operation/codepoint identifiers, counts, offsets, phases, exact prefix bindings and closed refusals only. No raw session identities, OSC payloads, logs or secrets are published.
+
+### Checks, review and lifecycle
+
+Run order: owner-scoped Prettier with `--ignore-path .gitignore`, four syntax checks, finite native command below (60000 ms), mapped full offline inventory (10000 ms), selected whitespace and telemetry-disabled strict OpenSpec validation (30000 ms). No broad suite/preflight is invoked. Native Windows checks are representative for these pure private helpers and synthetic IO, not Linux/runtime proof.
+
+```text
+node --test --test-reporter=tap tests/harness-renderer-token-inventory.test.mjs tests/harness-renderer-calibration.test.mjs tests/harness-composition-preparation.test.mjs tests/harness-failure-retention.test.mjs tests/harness-navigation-observation.test.mjs
+node tests/support/harness-renderer-token-inventory.mjs --admitted-product-capture
+```
+
+Native controls passed 110/110 before final evidence freeze. New assertions test continuation beyond the first glyph/parser refusal, unsafe later phases, multiple recorded control exclusions, privacy, clusters, malformed framing and bounded refusal. The original full refusal is never rewritten as PASS. Final syntax/format/whitespace/strict results and candidate hashes are recorded in the completion increment.
+
+Decomposition checklist: 1 YES (retained mapping feeds inventory), 2 NO (frozen inputs preserved), 3 NO (no receiver/process), 4 YES (marker -> complete mapped admission -> lexical analysis), 5 NO (no split runtime setup). Request one combined Architect/test-only proof-chain review through coordination. No normative public/cross-component contract or new external integration is introduced. Existing real-boundary proof gates remain unchanged.
+
+| Stage                                          | State / owner / trigger                                                                                  |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Pre-merge bounded static controls              | Native 110/110 PASS. Final static checks pending completion increment. Test engineering owns correction. |
+| Fresh retained admission / lexical inventory   | PASS for the exact five mapped files and complete lexical coverage only. No new scan/runtime proof.      |
+| Independent correction acceptance              | UNRUN. Coordination routes the frozen candidate and the two consolidated source gaps.                    |
+| Pre-exposure product readiness / qualification | Historical FAIL, UNQUALIFIED/profile null. No waiver or new runtime authority.                           |
+| Post-deploy / deferred human-decision proof    | UNRUN. Maintainer/coordination owns separately authorized future work before exposure.                   |
+
+Review all four changed test-owned paths and this tasks brief against entry HEAD. Supporting read-only routes are `harness-linux-runner.mjs:189-195,638-649,688-741`, inner close/collect/export and the unchanged canonical decoder. Worktree path `.worktree/add-harness-approval-channel`, branch/change `add-harness-approval-channel`, owner test engineering, retained, cleanup pending verified landing. Next action is independent static review and consolidated source-gap disposition. No new runtime, host/container/broker/services, auth/provider/model/Telegram, credentials, external filesystem recovery, dependency/build/image, push/PR/archive/merge/deploy/publication, unrelated cleanup or nested agent occurred. The only network action was the authorized exact public width-map fetch.
+
 ## Static product-readiness observer correction 1 - review brief
 
 **Frozen executable/review candidate:** `379f1b2a62a766b35438cc978f75cfe6afc3b86c`, parent `5439ce15291958a7ef19587134df3602d502e85b`. Final native 100/100 PASS on Windows Node `v26.13.0`, no failures/skips/cancellations, exit 0 within 60000 ms. Six syntax checks, owner-scoped Prettier with `--ignore-path .gitignore`, selected whitespace and telemetry-disabled strict structural validation PASS within 30000 ms. The repository default formatter ignores test/engineering artifacts, so earlier default invocations were not formatting proof. The explicit owner-scoped write/check and final native run occurred before this freeze. Final U+2299 refusal control is included. All hashes below bind that final formatted candidate. The completion increment is tasks-only, with no executable, test, dependency, configuration or baseline change. Independent acceptance is still UNRUN. Estimated 100% of the bounded static correction/report preparation is complete, not feature/release readiness or closure of either gap.

@@ -26,6 +26,57 @@ export const productCaptureFiles = Object.freeze([
   'progress.jsonl',
 ]);
 
+// Export names are wire/archive identities, not retained basenames. The outer
+// progress.jsonl is a mutable lifecycle journal and is never admitted evidence.
+export const productRetainedPaths = Object.freeze({
+  'scan-pass.json': 'scan-pass.json',
+  'composition-observations.json': 'composition-observations.json',
+  'transcript.ansi': 'transcript.ansi',
+  'plugin-diagnostics.log': 'plugin-diagnostics.log',
+  'progress.jsonl': 'inner-progress.jsonl',
+});
+
+export async function verifyRetainedProductCapture({
+  read,
+  expected,
+  mapping = productRetainedPaths,
+}) {
+  const names = ['scan-pass.json', ...productCaptureFiles];
+  assert.deepEqual(Object.keys(mapping), names);
+  assert.deepEqual(Object.keys(expected), names);
+  const paths = Object.values(mapping);
+  assert.equal(new Set(paths.map((p) => String(p).toLowerCase())).size, names.length);
+  for (const name of names) {
+    assert.match(mapping[name], /^[a-z][a-z0-9.-]*$/);
+    assert.equal(mapping[name], productRetainedPaths[name]);
+    assert.deepEqual(Object.keys(expected[name]), ['bytes', 'sha256']);
+    assert.ok(Number.isSafeInteger(expected[name].bytes) && expected[name].bytes >= 0);
+    assert.match(expected[name].sha256, /^[a-f0-9]{64}$/);
+  }
+  collectionAdmit(
+    names.reduce((n, name) => n + expected[name].bytes, 0),
+    collectionLimits.detail,
+  );
+  const admitted = new Map();
+  for (const name of names) {
+    // The reader must enforce bounded regular-file/no-link IO. No detail is
+    // returned to a consumer until the complete five-file set is admitted.
+    const bytes = await read(mapping[name], expected[name].bytes);
+    assert.ok(Buffer.isBuffer(bytes));
+    assert.deepEqual(expected[name], { bytes: bytes.length, sha256: digest(bytes) });
+    admitted.set(name, Buffer.from(bytes));
+    if (name === 'scan-pass.json') {
+      const scan = JSON.parse(bytes.toString('utf8'));
+      assertCompositionExport(scan);
+      assert.deepEqual(
+        scan.files,
+        Object.fromEntries(productCaptureFiles.map((n) => [n, expected[n]])),
+      );
+    }
+  }
+  return admitted;
+}
+
 // Filesystem categories are not product scan meanings. Keep the renderer's
 // state/evidence schema closed while adapting only this private product route.
 export function productCaptureReadFile(state, path, surface, used, io, expected) {

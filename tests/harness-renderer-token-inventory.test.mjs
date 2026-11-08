@@ -6,11 +6,64 @@ import {
   prefixInventory,
   tokenLimits,
   inventoryRefusal,
+  completeLexicalSummary,
 } from './support/harness-renderer-token-inventory.mjs';
 
 const bytes = (s) => Buffer.from(s);
 const hash = (b) => createHash('sha256').update(b).digest('hex');
 const operations = (r) => r.tokens.map((t) => t.operation);
+
+test('complete lexical summary continues beyond decoder refusal and retains later phases and clusters without payloads', () => {
+  const raw = bytes(
+    '\x1b[?1049h\x1b[?2026h\x1b[H\u2299\x1b[?2026l\x1b[?2027h\x1b[?2026hA\u0301\u203a\ufe0f\x1b]99;PRIVATE_SECRET\x1b\\\x1b[?2026l\x1b[?1049l',
+  );
+  const r = completeLexicalSummary(raw);
+  assert.equal(r.complete, true);
+  assert.equal(r.bytes, raw.length);
+  assert.equal(r.sha256, hash(raw));
+  assert.equal(r.updates.frames, 2);
+  assert.equal(r.prefixes.length, 2);
+  assert.ok(r.prefixes.every((p) => p.reason === 'UNSUPPORTED_GLYPH'));
+  assert.ok(r.operations.some((o) => o.operation === 'CSI/CSI:3F:NONE:68:2027/COMPLETE/BETWEEN'));
+  assert.ok(r.operations.some((o) => o.operation === 'CSI/CSI:3F:NONE:6C:1049/COMPLETE/TRAILING'));
+  assert.deepEqual(
+    r.clusters.map((c) => c.codepoints),
+    [
+      ['U+0041', 'U+0301'],
+      ['U+203A', 'U+FE0F'],
+    ],
+  );
+  assert.equal(r.semantics, 'UNPROVEN');
+  assert.equal(r.productProfile, null);
+  assert.doesNotMatch(JSON.stringify(r), /PRIVATE_SECRET|\x1b/);
+  assert.equal(r.controlPolicy.scope, 'CONTROL_ONLY_NOT_CELL_PROOF');
+  assert.equal(r.controlPolicy.prefixes[0].supported, true);
+  assert.equal(r.controlPolicy.prefixes[1].reason, 'UNSAFE_UNICODE_PHASE');
+  const opaque = completeLexicalSummary(
+    bytes('\x1b[?1049h\x1b[?2026h\x1b[H\u2299\x1b]99;PRIVATE_SECRET\x1b\\\x1b[?2026l'),
+  );
+  assert.equal(opaque.controlPolicy.full.reason, 'UNSUPPORTED_OSC_PAYLOAD');
+  assert.equal(opaque.controlPolicy.full.originalOffset, 22);
+  const multiple = completeLexicalSummary(
+    bytes('\x1b[?1049h\x1b[?2026h\x1b]99;PRIVATE_SECRET\x1b\\\x1b[999z\x1b[?2026l'),
+  );
+  assert.deepEqual(
+    multiple.controlPolicy.failures.map((f) => f.reason),
+    ['UNSUPPORTED_OSC_PAYLOAD', 'UNSUPPORTED_CONTROL'],
+  );
+  assert.deepEqual(
+    multiple.controlPolicy.failures.map((f) => f.scope),
+    ['ORIGINAL_CONTROL_PROJECTION', 'AFTER_RECORDED_EXCLUSIONS'],
+  );
+  assert.equal(multiple.controlPolicy.full.supported, false);
+  assert.equal(multiple.controlPolicy.afterRecordedExclusions.supported, true);
+  assert.doesNotMatch(JSON.stringify(multiple), /PRIVATE_SECRET|\x1b/);
+  const trailing = completeLexicalSummary(bytes('\u2299\x1b]99;PRIVATE_SECRET'));
+  assert.equal(trailing.complete, true);
+  assert.equal(trailing.framingComplete, false);
+  assert.ok(trailing.operations.some((o) => o.operation.includes('TRUNCATED')));
+  assert.deepEqual(completeLexicalSummary(Buffer.alloc(tokenLimits.input + 1)), inventoryRefusal());
+});
 
 test('lexical inventory covers every byte without exporting text or string payloads', () => {
   const raw = bytes(

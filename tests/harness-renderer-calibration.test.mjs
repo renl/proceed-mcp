@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { runInNewContext } from 'node:vm';
+import { join } from 'node:path';
 import {
   collectProductCapture,
   productCaptureExport,
   transferProductCapture,
   productCaptureFiles,
+  productRetainedPaths,
+  verifyRetainedProductCapture,
+  retainProgress,
   compositionSurfaces,
   productCaptureInputs,
   productCaptureLogs,
@@ -775,6 +780,123 @@ test('product exports require all six product meanings, every secret, exact froz
   };
   assert.equal((await transferProductCapture(transfer)).size, 5);
   assert.deepEqual(transferred, ['scan-pass.json', ...productCaptureFiles]);
+  // Execute the actual export -> five-transfer -> explicit retained mapping
+  // helpers. Only the container and filesystem transport are synthetic here.
+  const admitted = await transferProductCapture(transfer);
+  const retained = new Map();
+  const runner = await readFile(
+    new URL('./support/harness-linux-runner.mjs', import.meta.url),
+    'utf8',
+  );
+  const routeSource = runner.slice(
+    runner.indexOf('  const evidenceDestination ='),
+    runner.indexOf('  const retainDiagnostic ='),
+  );
+  assert.ok(routeSource.length > 0 && routeSource.length < 1500);
+  const context = {
+    join,
+    retainProgress,
+    run: '',
+    name: 'synthetic',
+    started: Date.now(),
+    Date,
+    appendFile: async (path, text) =>
+      retained.set(path, Buffer.concat([retained.get(path) ?? Buffer.alloc(0), Buffer.from(text)])),
+    writeFile: async (path, text) => retained.set(path, Buffer.from(text)),
+  };
+  // Execute only the actual private destination and outer-progress closures,
+  // never the runner entrypoint, preflight, container or process orchestration.
+  runInNewContext(
+    'let progressState;\n' +
+      routeSource +
+      '\nglobalThis.route = { evidenceDestination, progress };',
+    context,
+    { timeout: 1000 },
+  );
+  for (const [name, bytes] of admitted) {
+    assert.equal(context.route.evidenceDestination(name), productRetainedPaths[name]);
+    retained.set(context.route.evidenceDestination(name), bytes);
+  }
+  await context.route.progress('outer-start');
+  const expected = Object.fromEntries(
+    [...admitted].map(([name, bytes]) => [name, { bytes: bytes.length, sha256: digest(bytes) }]),
+  );
+  const read = async (path) => retained.get(path);
+  const verified = await verifyRetainedProductCapture({ read, expected });
+  assert.equal(verified.size, 5);
+  assert.deepEqual(verified.get('progress.jsonl'), frozen.details['progress.jsonl']);
+  for (const changed of [
+    { ...expected, extra: expected['progress.jsonl'] },
+    { ...expected, 'transcript.ansi': { ...expected['transcript.ansi'], bytes: -1 } },
+    { ...expected, 'transcript.ansi': { ...expected['transcript.ansi'], sha256: 'f'.repeat(64) } },
+  ])
+    await assert.rejects(verifyRetainedProductCapture({ read, expected: changed }));
+  const innerHash = digest(retained.get('inner-progress.jsonl'));
+  await context.route.progress('outer-teardown');
+  assert.equal(digest(retained.get('inner-progress.jsonl')), innerHash);
+  assert.equal((await verifyRetainedProductCapture({ read, expected })).size, 5);
+  details['progress.jsonl'].fill(0);
+  assert.equal(digest(frozen.details['progress.jsonl']), innerHash);
+  for (const path of [
+    'progress.jsonl',
+    '../inner-progress.jsonl',
+    '/inner-progress.jsonl',
+    'C:\\inner-progress.jsonl',
+    'transcript.ansi',
+    'TRANSCRIPT.ANSI',
+    'inner-progress.jsonl/../progress.jsonl',
+  ]) {
+    let reads = 0;
+    await assert.rejects(
+      verifyRetainedProductCapture({
+        read: async () => {
+          reads++;
+          return Buffer.alloc(0);
+        },
+        expected,
+        mapping: { ...productRetainedPaths, 'progress.jsonl': path },
+      }),
+    );
+    assert.equal(reads, 0);
+  }
+  for (const name of ['scan-pass.json', ...productCaptureFiles]) {
+    for (const change of ['length', 'hash', 'missing']) {
+      await assert.rejects(
+        verifyRetainedProductCapture({
+          expected,
+          read: async (path) => {
+            const bytes = retained.get(path);
+            if (path !== productRetainedPaths[name]) return bytes;
+            if (change === 'missing') return undefined;
+            if (change === 'length') return Buffer.concat([bytes, Buffer.from('x')]);
+            const changed = Buffer.from(bytes);
+            changed[0] ^= 1;
+            return changed;
+          },
+        }),
+      );
+    }
+  }
+  const inner = await readFile(
+    new URL('./support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(runner, /file === 'progress\.jsonl' \? 'inner-progress\.jsonl' : file/);
+  assert.match(runner, /appendFile\(join\(run, 'progress\.jsonl'\)/);
+  assert.equal(
+    (
+      runner.match(
+        /for \(const \[file, bytes\] of details\) await writeFile\(evidenceDestination\(file\), bytes\)/g,
+      ) ?? []
+    ).length,
+    2,
+  );
+  assert.match(
+    inner,
+    /await controls\.close\(\);[\s\S]*const complete = closed && remainingPids\.length === 0;[\s\S]*assert\.ok\(complete && productCleanup === 'OBSERVED'\);[\s\S]*const entries = await collectProductCapture\([\s\S]*const frozen = productCaptureExport\([\s\S]*Object\.entries\(frozen\.details\)/,
+  );
+  // Restore the synthetic input for the existing substitution controls below.
+  details['progress.jsonl'] = Buffer.from('progress.jsonl');
   await assert.rejects(
     transferProductCapture(async (name, cap) =>
       name === 'transcript.ansi'

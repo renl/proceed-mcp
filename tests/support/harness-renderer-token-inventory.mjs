@@ -3,6 +3,11 @@ import { createHash } from 'node:crypto';
 import { openSync, readSync, fstatSync, closeSync, lstatSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import {
+  verifyRetainedProductCapture,
+  productRetainedPaths,
+} from './harness-composition-retention.mjs';
+import { compositionSourceFrame } from './harness-composition-readiness.mjs';
 
 const hash = (b) => createHash('sha256').update(b).digest('hex');
 const hex = (n) => n.toString(16).toUpperCase().padStart(2, '0');
@@ -294,11 +299,12 @@ function pinnedRead(name) {
     path = resolve(capture, name);
   return boundedRead(path, length, digest);
 }
-function boundedRead(path, length, digest) {
-  for (const dir of ['.scratch', '.scratch/harness-host', capture])
+function boundedRead(path, length, digest, root = capture) {
+  for (const dir of ['.scratch', '.scratch/harness-host', root])
     if (!lstatSync(dir).isDirectory() || lstatSync(dir).isSymbolicLink()) throw 0;
   const before = lstatSync(path);
   if (!before.isFile() || before.isSymbolicLink() || before.size !== length) throw 0;
+  if (root !== capture && before.nlink !== 1) throw 0;
   const fd = openSync(path, 'r');
   try {
     const stat = fstatSync(fd);
@@ -318,6 +324,166 @@ function boundedRead(path, length, digest) {
     return b.subarray(0, length);
   } finally {
     closeSync(fd);
+  }
+}
+
+// Lexical coverage is complete even when the cell decoder stops early. Group
+// opaque controls without publishing their payloads or interpreting semantics.
+export function completeLexicalSummary(bytes) {
+  try {
+    const inventory = tokenInventory(bytes);
+    if (!inventory.complete) throw 0;
+    const operations = new Map();
+    const clusters = [];
+    let runStart = null,
+      runEnd = null;
+    const segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
+    const finishRun = () => {
+      if (runStart === null) return;
+      const text = bytes.subarray(runStart, runEnd).toString('utf8');
+      for (const { segment, index } of segmenter.segment(text)) {
+        const cps = [...segment].map((c) => cpName(c.codePointAt(0)));
+        if (cps.length > 1 && /[^\x20-\x7e]/u.test(segment))
+          clusters.push({
+            start: runStart + Buffer.byteLength(text.slice(0, index)),
+            codepoints: cps,
+          });
+      }
+      runStart = runEnd = null;
+    };
+    for (const t of inventory.tokens) {
+      if (['TEXT', 'GLYPH'].includes(t.kind)) {
+        runStart ??= t.start;
+        runEnd = t.end;
+      } else finishRun();
+      if (t.kind === 'TEXT') continue;
+      const key = `${t.kind}/${t.operation}/${t.framing}/${t.phase}`;
+      if (!operations.has(key)) operations.set(key, []);
+      operations.get(key).push(t.start);
+    }
+    finishRun();
+    const prefixes = inventory.tokens
+      .filter((t) => t.operation === 'CSI:3F:NONE:6C:2026')
+      .map((t) => {
+        const prefix = bytes.subarray(0, t.end);
+        const result = compositionSourceFrame(prefix.toString('utf8'));
+        return {
+          bytes: t.end,
+          sha256: hash(prefix),
+          supported: result.supported,
+          reason: result.reason ?? 'NONE',
+          byteOffset: result.byteOffset ?? null,
+        };
+      });
+    // Separate canonical control-policy audit. Remove ALL paint, not just the
+    // first refused glyph. This cannot establish cells, widths or readiness.
+    const controlTokens = inventory.tokens.filter((t) => !['TEXT', 'GLYPH'].includes(t.kind));
+    const controlProjection = (end, excluded = new Set()) => {
+      const selected = controlTokens.filter((t) => t.end <= end && !excluded.has(t.start));
+      const projected = Buffer.concat(selected.map((t) => bytes.subarray(t.start, t.end)));
+      const decoded = compositionSourceFrame(projected.toString('utf8'));
+      let offset = 0,
+        originalOffset = null;
+      for (const t of selected) {
+        if (offset === decoded.byteOffset) originalOffset = t.start;
+        offset += t.end - t.start;
+      }
+      return {
+        bytes: end,
+        supported: decoded.supported,
+        reason: decoded.reason ?? 'NONE',
+        originalOffset,
+      };
+    };
+    const excluded = new Set(),
+      controlFailures = [];
+    let terminalControlResult;
+    for (let n = 0; n <= controlTokens.length; n++) {
+      terminalControlResult = controlProjection(bytes.length, excluded);
+      if (terminalControlResult.supported || terminalControlResult.originalOffset === null) break;
+      const t = controlTokens.find((t) => t.start === terminalControlResult.originalOffset);
+      if (!t || excluded.has(t.start)) throw 0;
+      if (controlFailures.length >= tokenLimits.unique) throw 0;
+      controlFailures.push({
+        ...terminalControlResult,
+        operation: t.operation,
+        phase: t.phase,
+        scope: excluded.size ? 'AFTER_RECORDED_EXCLUSIONS' : 'ORIGINAL_CONTROL_PROJECTION',
+      });
+      excluded.add(t.start);
+    }
+    const result = {
+      complete: true,
+      bytes: bytes.length,
+      sha256: inventory.sha256,
+      tokenCount: inventory.tokens.length,
+      operationCount: inventory.operations.length,
+      framingComplete: inventory.framingComplete,
+      updates: inventory.updates,
+      codepoints: inventory.codepoints,
+      clusters,
+      operations: [...operations]
+        .sort(compare)
+        .map(([operation, offsets]) => ({ operation, count: offsets.length, offsets })),
+      prefixes,
+      controlPolicy: {
+        scope: 'CONTROL_ONLY_NOT_CELL_PROOF',
+        prefixes: prefixes.map((p) => controlProjection(p.bytes)),
+        full: controlProjection(bytes.length),
+        failures: controlFailures,
+        afterRecordedExclusions: terminalControlResult,
+      },
+      stringPayloads: 'OPAQUE_NOT_DECODED',
+      semantics: 'UNPROVEN',
+      productProfile: null,
+    };
+    if (Buffer.byteLength(JSON.stringify(result)) > tokenLimits.output) throw 0;
+    return result;
+  } catch {
+    return inventoryRefusal();
+  }
+}
+
+export async function admittedProductInventory() {
+  try {
+    const root = '.scratch/harness-host/run-linux-xTk2c7';
+    const expected = Object.fromEntries(
+      [
+        [
+          'scan-pass.json',
+          1027,
+          '7cc40e2ce24ec09bab22540c32e1a5e222475f24869b9c17153b08d0e20e9a01',
+        ],
+        [
+          'composition-observations.json',
+          16740,
+          'df333cf59977edcee5b5cd191ca19ebdc1b9397b9b9dfab4f91ab6c3b4985fb0',
+        ],
+        [
+          'transcript.ansi',
+          20542,
+          '38624126391d3a664e56b43ba6220293f9d73e611df99c8124b311c4e216c893',
+        ],
+        [
+          'plugin-diagnostics.log',
+          29962,
+          '8b20a66cd1df4f91eff564422b8eac60fea5bd514ad8e55963060f1b5a3c44ab',
+        ],
+        ['progress.jsonl', 265, 'aae5d40dd5d12920863ea8cd21910f0a91414d203a90d53a9ae5f10faefca8e3'],
+      ].map(([name, bytes, sha256]) => [name, { bytes, sha256 }]),
+    );
+    const admitted = await verifyRetainedProductCapture({
+      expected,
+      read: async (path, length) => {
+        const name = Object.keys(productRetainedPaths).find(
+          (n) => productRetainedPaths[n] === path,
+        );
+        return boundedRead(resolve(root, path), length, expected[name].sha256, root);
+      },
+    });
+    return completeLexicalSummary(admitted.get('transcript.ansi'));
+  } catch {
+    return inventoryRefusal();
   }
 }
 export function admittedCaptureInventory() {
@@ -367,45 +533,51 @@ export function admittedCaptureInventory() {
   }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const result =
-    process.argv.length === 3 && process.argv[2] === '--admitted-capture'
-      ? admittedCaptureInventory()
-      : inventoryRefusal();
-  if (result.complete) {
-    const serialized = JSON.stringify(result) + '\n';
-    const output = resolve(capture, 'token-inventory-' + hash(serialized) + '.json');
-    // Exclusive creation or exact bounded reuse, never overwrite an artifact.
-    try {
-      if (Buffer.byteLength(serialized) > tokenLimits.output) throw 0;
+  if (process.argv.length === 3 && process.argv[2] === '--admitted-product-capture') {
+    const result = await admittedProductInventory();
+    console.log(JSON.stringify(result));
+    if (!result.complete) process.exitCode = 1;
+  } else {
+    const result =
+      process.argv.length === 3 && process.argv[2] === '--admitted-capture'
+        ? admittedCaptureInventory()
+        : inventoryRefusal();
+    if (result.complete) {
+      const serialized = JSON.stringify(result) + '\n';
+      const output = resolve(capture, 'token-inventory-' + hash(serialized) + '.json');
+      // Exclusive creation or exact bounded reuse, never overwrite an artifact.
       try {
-        writeFileSync(output, serialized, { flag: 'wx' });
-      } catch (error) {
-        if (error?.code !== 'EEXIST') throw 0;
-        boundedRead(output, Buffer.byteLength(serialized), hash(serialized));
+        if (Buffer.byteLength(serialized) > tokenLimits.output) throw 0;
+        try {
+          writeFileSync(output, serialized, { flag: 'wx' });
+        } catch (error) {
+          if (error?.code !== 'EEXIST') throw 0;
+          boundedRead(output, Buffer.byteLength(serialized), hash(serialized));
+        }
+        console.log(
+          JSON.stringify({
+            complete: true,
+            bytes: Buffer.byteLength(serialized),
+            sha256: hash(serialized),
+            tokens: result.full.tokens.length,
+            prefixes: result.prefixes.map((p) => ({
+              end: p.end,
+              sha256: p.inventory.sha256,
+              tokenBoundary: p.tokenBoundary,
+              updates: p.inventory.updates,
+            })),
+            operations: result.full.operations,
+            codepoints: result.full.codepoints,
+            updates: result.full.updates,
+          }),
+        );
+      } catch {
+        console.log(JSON.stringify(inventoryRefusal()));
+        process.exitCode = 1;
       }
-      console.log(
-        JSON.stringify({
-          complete: true,
-          bytes: Buffer.byteLength(serialized),
-          sha256: hash(serialized),
-          tokens: result.full.tokens.length,
-          prefixes: result.prefixes.map((p) => ({
-            end: p.end,
-            sha256: p.inventory.sha256,
-            tokenBoundary: p.tokenBoundary,
-            updates: p.inventory.updates,
-          })),
-          operations: result.full.operations,
-          codepoints: result.full.codepoints,
-          updates: result.full.updates,
-        }),
-      );
-    } catch {
-      console.log(JSON.stringify(inventoryRefusal()));
+    } else {
+      console.log(JSON.stringify(result));
       process.exitCode = 1;
     }
-  } else {
-    console.log(JSON.stringify(result));
-    process.exitCode = 1;
   }
 }
