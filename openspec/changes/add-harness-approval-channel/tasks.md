@@ -1,5 +1,30 @@
 # Tasks
 
+## Authorized dismissal-corrected capture - preflight BLOCKED, zero execution
+
+The user authorized exactly one isolated capture-only attempt, bounded by 310000 ms including teardown, on executable `fef234f88604f887159ee3c62ecbcaddc695dd45` and tasks evidence `99a6314cb36b4f13a901aa3c1a50f55dbe9d991b`. Supplied independent correction-3 review PASS and accepted unchanged boundaries were inputs, not rerun here. The instruction to stop on failed admission was applied. No maintained runtime invocation occurred, and no repair, refreeze or admission retry followed.
+
+Live entry checks passed: HEAD `99a6314cb36b4f13a901aa3c1a50f55dbe9d991b`, branch `add-harness-approval-channel`, empty index, executable ancestry and tasks-only committed delta from the reviewed executable. Only README/status overlays were dirty. They remain untouched and unselected. Project-local harness scratch ignore coverage was confirmed without creating scratch.
+
+The finite native admission command failed before launch with `AssertionError`, actual path-binding count 17 versus an incorrectly authored expected count of 20. The frozen current path set has 17 distinct entries. This was an admission-script expectation error, not evidence of repository drift or a failed product assertion. The command stopped before its per-path hash comparisons, ordered payload/outer/product manifest comparisons and pinned image inspection. Those gates are UNRUN, not passed. No supported product metadata-preflight alias exists in the maintained host entry, so none was guessed or invoked.
+
+Reviewed bindings remain the required, unverified launch inputs for this blocked attempt: 95-file payload `26b753c433911b0592d7b83f18da5331abf6da3ea962a730313935a7b9a4a25f`, 3-file outer `52a34079f1a0ebc2636dc1df4af5f39f6462aeddee5db5eb84c2c95d305e06c0`, 59-file product `ecf3bf969a09ecd10fd387625a444e6733d004c0ab9c8828a4ec03a841d33bfc`. Required image identity is `sha256:a8302764b5f4896690dcba9cdbe27755f6c0f4f88db92974a029f8499f3700cb`, actual image/isolation admission UNRUN. No pull, build, container or synthetic setup occurred.
+
+| Milestone                                                | Outcome                                                                                                                             |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Maintained capture / elapsed                             | UNRUN, zero invocations and zero runtime elapsed. Preflight command exited 1 within its 30000 ms bound, exact elapsed not retained. |
+| Keys / sessions                                          | Zero keys, Enter, requests and decisions issued. Zero sessions created, actual product session count UNKNOWN.                       |
+| Six-surface privacy scan / five transfers                | UNRUN, zero captures, transfers or detail reads. No scan-admitted observations exist for this attempt.                              |
+| Fresh readiness / picker style / dismissal               | UNRUN. No current frame, row/style transfer or dismissal proof.                                                                     |
+| Timely ProductCleanup / ENTRY / RETURN / MARKER          | UNRUN, no product process started and no cleanup clocks or milestones observed. Historical timely-cleanup FAIL remains unchanged.   |
+| Owned process / stream closure / exact container absence | NOT APPLICABLE to this attempt, no owned runtime resources created. No independent container absence probe ran.                     |
+| Graceful broker/helper cleanup                           | UNKNOWN, no direct runtime evidence.                                                                                                |
+| Qualification / release                                  | UNQUALIFIED, profile null. No product decision, original waiting-call or release proof.                                             |
+
+Founder-visible success remains a paired human decision returned to its exact original waiting call. This blocked preflight supplies no product proof or proxy observation. The bounded reporting package is estimated 100% complete, not the capture or feature. Coordination owns the next disposition of the admission-script error. No retry or follow-on execution is authorized here. Worktree `.worktree/add-harness-approval-channel`, branch/change `add-harness-approval-channel`, test engineering owner, retained/cleanup pending verified landing. No worktree cleanup or unknown-artifact removal occurred. This outcome increment changes tasks only and stops at report.
+
+Tasks-only finalization: scoped repository Prettier write/check, selected whitespace and telemetry-disabled strict OpenSpec validation PASS, exit 0 within 30000 ms. These structural checks do not repair or repeat the failed launch admission.
+
 ## PRODUCT-PICKER-DISMISSAL-EXIT-HANDOFF - correction 3
 
 **Frozen executable/review candidate:** `fef234f88604f887159ee3c62ecbcaddc695dd45`, parent `3a24a272f5491e6544beef416418c52fa1a8f90d`. Review the three full code/test paths below and this section against that parent. The subsequent evidence increment is tasks-only. Independent focused review is UNRUN. No fresh capture authority follows.
