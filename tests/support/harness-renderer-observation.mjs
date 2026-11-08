@@ -23,7 +23,7 @@ export const rendererPayload = Object.freeze([
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const calibrationLabels = ['1 SYNTHETIC ALPHA', '2 SYNTHETIC BETA'];
 
-// Reparse the bounded transcript using the existing ASCII/truecolor projector.
+// Reparse ASCII title spans plus the explicitly pinned bare-current-marker model.
 // No lexical emission (including a new copy elsewhere) can replace current cells.
 export function rendererCells(raw, previous, geometry = { rows: 40, columns: 120 }) {
   assert.equal(typeof raw, 'string');
@@ -63,7 +63,7 @@ export function rendererCells(raw, previous, geometry = { rows: 40, columns: 120
       'GENERATION_RESET',
     );
   }
-  const frame = compositionCurrentFrame(raw, { styled: true });
+  const frame = compositionCurrentFrame(raw, { styled: true, sourceMarkerCells: true });
   assert.ok(frame && typeof frame.text === 'string', 'UNSUPPORTED_OR_INCOMPLETE');
   const rows = frame.text.split('\n');
   assert.ok(
@@ -71,7 +71,8 @@ export function rendererCells(raw, previous, geometry = { rows: 40, columns: 120
     'FRAME_OVERFLOW',
   );
   const labels = {},
-    positions = {};
+    positions = {},
+    markers = {};
   for (const label of calibrationLabels) {
     const occurrences = [];
     rows.forEach((line, row) => {
@@ -80,7 +81,16 @@ export function rendererCells(raw, previous, geometry = { rows: 40, columns: 120
     });
     assert.equal(occurrences.length, 1, 'MISSING_OR_DUPLICATE_LABEL');
     const position = occurrences[0];
-    assert.equal(rows[position.row].trim(), label, 'MISPLACED_LABEL');
+    const prefix = rows[position.row].slice(0, position.col);
+    const suffix = rows[position.row].slice(position.col + label.length);
+    // Only current ALPHA may carry one bare marker before its exact ASCII title.
+    // Whitespace is geometry, not part of the title or its selection style.
+    assert.match(suffix, /^ *$/, 'MISPLACED_LABEL');
+    if (prefix.includes('\u25cf')) {
+      assert.equal(label, calibrationLabels[0], 'MISPLACED_MARKER');
+      assert.match(prefix, /^ *\u25cf +$/, 'MISPLACED_MARKER');
+      markers[label] = { row: position.row, col: prefix.indexOf('\u25cf') };
+    } else assert.match(prefix, /^ *$/, 'MISPLACED_LABEL');
     const cells = frame.styles[position.row]?.slice(position.col, position.col + label.length);
     assert.equal(cells?.length, label.length, 'MISSING_STYLE');
     for (const cell of cells) assert.deepEqual(cell, cells[0], 'MIXED_STYLE');
@@ -88,6 +98,11 @@ export function rendererCells(raw, previous, geometry = { rows: 40, columns: 120
     labels[label] = { ...cells[0], supported: true };
     positions[label] = position;
   }
+  assert.equal(
+    rows.reduce((count, line) => count + [...line].filter((ch) => ch === '\u25cf').length, 0),
+    Object.keys(markers).length,
+    'UNASSOCIATED_MARKER',
+  );
   assert.equal(
     positions[calibrationLabels[1]].row,
     positions[calibrationLabels[0]].row + 1,
@@ -98,10 +113,17 @@ export function rendererCells(raw, previous, geometry = { rows: 40, columns: 120
     positions[calibrationLabels[0]].col,
     'ROW_ALIGNMENT',
   );
-  if (previous) assert.deepEqual(positions, previous.positions, 'LABEL_MOVED');
+  if (previous) {
+    assert.deepEqual(positions, previous.positions, 'LABEL_MOVED');
+    assert.deepEqual(markers, previous.markers, 'MARKER_MOVED');
+  }
   return {
     labels,
     positions,
+    markers,
+    cellModel: Object.keys(markers).length
+      ? 'OPENTUI_0_8_0_BARE_25CF_SOURCE_LAYOUT_NOT_TERMINAL_WIDTH'
+      : 'ASCII_ONLY',
     geometry: { ...geometry },
     frames,
     frameEnd,

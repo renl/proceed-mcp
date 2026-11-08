@@ -2,7 +2,7 @@
 export const productReadyText = 'Proceed harness ready for qualification (owner shared).';
 // Small, fail-closed projection of the pinned host's synchronized cell updates.
 // Only completed frames count. Repainting cells replaces old text, never appends it.
-export function compositionCurrentFrame(ansi, { styled = false } = {}) {
+export function compositionCurrentFrame(ansi, { styled = false, sourceMarkerCells = false } = {}) {
   let rows = [],
     styles = [],
     style = { fg: null, bg: null, bold: false },
@@ -96,9 +96,14 @@ export function compositionCurrentFrame(ansi, { styled = false } = {}) {
     if (token === '\r') col = 0;
     else if (token === '\n') row++;
     else if (token >= ' ' && row < 100 && col < 300) {
-      // Style observation deliberately supports ASCII cells only, not guessed
-      // Unicode widths/autowrap. The existing text readiness projection is unchanged.
-      if (styled && (token.length !== 1 || token.charCodeAt(0) > 126)) return '';
+      // Opt-in calibration source-buffer model, NOT terminal width calibration.
+      // @opentui/core 0.8.0, 738067f47e940dcec3f5aab74868908574335c6c:
+      // native/tests/unicode-width-map.zon:27-29, utf8_test.zig:2047-2063
+      // assign bare U+25CF one cell in all supported width methods. No other
+      // Unicode/grapheme is admitted (including VS16). Never infer a CUP that
+      // was not observed. Absolute cursor handling above remains unchanged.
+      const sourceMarker = sourceMarkerCells && token === '\u25cf';
+      if (styled && !sourceMarker && (token.length !== 1 || token.charCodeAt(0) > 126)) return '';
       if (!syncing) frame = '';
       rows[row] ??= [];
       styles[row] ??= [];

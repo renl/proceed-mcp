@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { compositionCurrentFrame } from './support/harness-composition-readiness.mjs';
 import {
   rendererScan,
   rendererSurfaces,
@@ -30,6 +31,92 @@ const ordinary = '\x1b[0;38;2;238;238;238m';
 const paint = (row, style, label) => `\x1b[${row};3H${style}${label}`;
 const initialCells = begin + paint(3, selected, alpha) + paint(4, ordinary, beta) + end;
 const movedCells = begin + paint(3, current, alpha) + paint(4, selected, beta) + end;
+const marker = '\u25cf';
+// Source-buffer model only. The marker remains on current A after selection moves.
+const decorated = (a, b, absolute = false) =>
+  begin +
+  `\x1b[3;1H${a}${marker} ${absolute ? '\x1b[3;3H' : ''}${alpha}` +
+  `\x1b[4;1H${b}  ${beta}` +
+  end;
+
+test('bare current marker has a separate source-cell region, never selection authority', () => {
+  for (const absolute of [false, true]) {
+    const raw = decorated(selected, ordinary, absolute);
+    const before = rendererCells(raw);
+    const after = rendererCells(raw + decorated(current, selected, absolute), before);
+    assertRendererStyles(before.labels, after.labels, {});
+    assertRendererCursor({}, rendererCursor({ value: 'beta' }), 'BETA', true);
+    assert.deepEqual(before.markers, { [alpha]: { row: 2, col: 0 } });
+    assert.deepEqual(after.markers, before.markers);
+    assert.equal(before.cellModel, 'OPENTUI_0_8_0_BARE_25CF_SOURCE_LAYOUT_NOT_TERMINAL_WIDTH');
+    assert.equal(after.profileInstalled, false);
+    assert.deepEqual(after.positions, { [alpha]: { row: 2, col: 2 }, [beta]: { row: 3, col: 2 } });
+    // The marker stays on A, so it cannot satisfy B's style or cursor evidence.
+    assert.throws(() => assertRendererStyles(before.labels, before.labels, {}));
+    assert.throws(() => assertRendererCursor({}, rendererCursor({ value: 'alpha' }), 'BETA', true));
+  }
+});
+
+test('decorated title cells survive fragmented style/cursor repaint, not mixed profiles', () => {
+  const raw = decorated(selected, ordinary);
+  const before = rendererCells(raw);
+  const repaint =
+    begin +
+    '\x1b[2 q' +
+    [...alpha].map((ch, i) => `\x1b[3;${i + 3}H${current}${ch}`).join('') +
+    [...beta].map((ch, i) => `\x1b[4;${i + 3}H${selected}${ch}`).join('') +
+    end;
+  assertRendererStyles(before.labels, rendererCells(raw + repaint, before).labels, {});
+  assert.throws(() => rendererCells(raw + begin + '\x1b[3;3H' + current + '1' + end, before));
+  // Marker styling is not title styling. Only the ASCII span supplies attributes.
+  const splitRun = raw.replace(`${selected}${marker} `, `${current}${marker} ${selected}`);
+  assert.deepEqual(rendererCells(splitRun).labels, before.labels);
+  assert.equal(compositionCurrentFrame(raw, { styled: true }), '', 'no composition opt-in');
+});
+
+test('marker variants, unknown width, unsupported controls and forged associations refuse', () => {
+  const raw = decorated(selected, ordinary);
+  for (const invalid of [
+    raw.replace(marker, marker + '\ufe0f'),
+    raw.replace(marker, marker + '\ufe0e'),
+    raw.replace(marker, marker + '\u200d'),
+    raw.replace(marker, '\u25cb'),
+    raw.replace(marker, '\u754c'),
+    raw.replace(alpha, alpha + '\u0301'),
+    raw.replace(alpha, '\u754c' + alpha),
+    raw.replace(marker, '\x1b]66;w=1;' + marker + '\x1b\\'),
+    raw.replace(marker, marker + '\x1b[2C'),
+    raw.replace(marker, marker + marker),
+    raw.replace('  ' + beta, marker + ' ' + beta),
+    raw.replace(alpha, alpha + ' ' + marker),
+    raw.replace(alpha, 'prefix ' + alpha),
+    raw.replace(alpha, alpha + alpha),
+    raw.replace('\x1b[4;1H', '\x1b[5;1H'),
+    raw.replace('  ' + beta, '   ' + beta),
+    raw + begin + '\x1b[1;1H' + marker + end,
+    raw + begin + '\x1b[3;120H' + marker + ' ' + end,
+  ])
+    assert.throws(() => rendererCells(invalid));
+  const before = rendererCells(raw);
+  assert.throws(
+    () => rendererCells(raw + begin + '\x1b[3;1H  ' + end + movedCells, before),
+    'missing marker after repaint',
+  );
+});
+
+test('unknown earlier decoration cannot be ignored or revive historic labels after reset', () => {
+  const raw = decorated(selected, ordinary);
+  const earlier = begin + '\x1b[1;1H\u754c' + end;
+  // Conservative refusal, even with a later CUP/reset. No guessed width recovery.
+  for (const reset of ['', '\x1b[2J', '\x1b[3J', '\x1b[?1049h'])
+    assert.throws(() => rendererCells(earlier + reset + raw));
+  for (const reset of ['\x1b[2J', '\x1b[3J', '\x1b[?1049h']) {
+    assert.throws(() => rendererCells(raw + reset));
+    assert.throws(() => rendererCells(raw + reset + begin + '\x1b[1;1Hnew' + end));
+    assert.deepEqual(rendererCells(raw + reset + raw).positions, rendererCells(raw).positions);
+    assert.throws(() => rendererCells(raw + reset + raw, rendererCells(raw)));
+  }
+});
 
 test('finite fixture keeps current ALPHA, observes live selection through Ctrl+Y and sends physical Down', async () => {
   const fixture = await readFile(
