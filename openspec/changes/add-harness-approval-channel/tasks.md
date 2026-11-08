@@ -1,6 +1,61 @@
 # Tasks
 
-## Size-only inventory preparation - approved brief, runtime withheld
+## Size-only inventory - single authorized run PASS, no follow-on
+
+### Actual-host inventory outcome
+
+**Authority and binding:** the user's conditional authorization permits preparation and exactly one isolated metadata-only inventory after independent static review passes. Coordination supplied focused review PASS for `RENDERER-INVENTORY-TIMESTAMP-ADMISSION`, reusing accepted unchanged scope/privacy/projection/lifecycle reviews. Entry HEAD/evidence is exactly `2d6236faa37fb82669959d80f40e546eb7e1c2ac`, code `9d5a933ba15827e460ca38faed8c0d8e7adf7363` is an ancestor and the committed delta is this tasks file only. Branch is `add-harness-approval-channel`, index empty, only README/status overlays dirty and preserved unselected. All nine live inputs match the frozen table below and the run's six-payload/three-outer manifests. No drift, repair or refreeze occurred. Supplied 64/64 native/static PASS is reused for the unchanged candidate and assertion scope, not rerun.
+
+**Admission and execution:** inventory mode supports no separate metadata preflight, so none was invented or substituted. Exactly one `node tests/run-harness-host.mjs --renderer-inventory-run` ran with outer timeout 310000 ms, exit 0. Maintained verdict elapsed 3701 ms and final progress 3702 ms. Execution-time image/policy admission PASS for `sha256:a8302764b5f4896690dcba9cdbe27755f6c0f4f88db92974a029f8499f3700cb`, network none, private PID namespace, init true and exactly one read-only payload mount. No build or pull. The maintained synthetic Ctrl+G, observe, Down, observe, Escape and owned-exit lifecycle completed before inventory. Callback values and raw evidence were not exported or inspected. Windows native orchestration is distinct from the isolated Linux actual-host metadata boundary.
+
+**Closed result:** `complete: true`, reason `NONE`. Both full metadata passes and complete-entry-set comparisons passed, with no observed instability or refusal. This is observed stability, not an atomic snapshot. The admitted closed JSON is 375 bytes, below 8192. No frozen-file contents, names, paths, identities, timestamps, callback operands, error text or secret-match details were inspected or exported. Safe totals are 40 entries and 15 regular files, totaling 18977624 file bytes and 1523 UTF-8 path bytes.
+
+| Root     | Entries | Regular files | File bytes | Maximum file bytes |
+| -------- | ------: | ------------: | ---------: | -----------------: |
+| state    |      33 |             9 |   18932777 |           12846400 |
+| evidence |       7 |             6 |      44847 |              30156 |
+
+Required logs: count 1, bytes 28759. Logical byte projections preserve existing path/log duplication and fixed scan-marker/hash-placeholder serialization. They are not measured exports or RSS.
+
+| Projection                 |    Bytes |
+| -------------------------- | -------: |
+| tui                        |    30156 |
+| diagnostics                |    28759 |
+| fixture                    |    12877 |
+| inventory                  |        2 |
+| state                      | 18933217 |
+| evidence                   |    45064 |
+| Six scan surfaces combined | 19050075 |
+| Detailed export            |    76500 |
+
+**Limits and interpretation:** unchanged ceilings are two passes, 16384 entries/pass, 32768 visits, 16382 regular files, depth 64, path 4096 bytes, retained paths 4194304 bytes, accounted metadata 8388608 bytes, output 8192 bytes and phase 30000 ms. Aggregate 300000 ms, reserve 45000 ms, readiness 60000 ms, shared interaction 15000 ms and inner 210000/240000 ms endpoints remain unchanged. Complete admission establishes these enforced ceilings, not exact peak bookkeeping, depth, elapsed inventory phase or process memory. Exported integers remain safe, internal identity/timestamps exact bigint and unexported. No refusal occurred. This run's file bytes already exceed the unchanged 16777216-byte content aggregate. The projection does not authorize a larger budget, content collection or scanner implementation, and does not establish a historical offender or cause.
+
+| Check                                                   | Result                                                                                                                                                                      |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Candidate, nine frozen inputs, image/policy             | PASS, exact reviewed bindings.                                                                                                                                              |
+| Metadata inventory and bounded stopped-container export | PASS, complete two-pass result, reason NONE.                                                                                                                                |
+| Fixture Cleanup                                         | PASS through maintained mandatory pre-inventory gate.                                                                                                                       |
+| Actual host exit and stream closure                     | PASS through maintained actual-PID absence, exit/close and stream-destruction gate before completed transcript/observation writes. Not inferred solely from container exit. |
+| Exact container absence                                 | PASS, maintained exact-name listing and inspect-absence verification. Private PID namespace destroyed.                                                                      |
+| Privacy / renderer / installed profile / product        | UNPROVEN. No scan PASS marker, detailed capture or profile exported or installed.                                                                                           |
+
+**Evidence:** ignored `.scratch/harness-host/run-linux-6ivonD/`, restricted to maintained closed metadata and input manifests. No frozen state/evidence content was read or hashed. SHA-256 below binds only these admitted local records.
+
+| Record                       | SHA-256                                                            |
+| ---------------------------- | ------------------------------------------------------------------ |
+| `candidate.json`             | `d81d0397be264ec1432a89a16b59414a755525e9d12495b4ea7ec3f1c565bfe8` |
+| `input-integrity.json`       | `b0b75228ebeb530727139690d99c50486b5b162697550635d57287c9e8a9639e` |
+| `outer-input-integrity.json` | `0b5d00199e39e4cdd099594d9c332cd3be6c30e702cb46415dc9f292e5220cd8` |
+| `policy.json`                | `a4d136da6c4e5875625ff9bb35c454244089e8f87599dab297a8085f14ed7c43` |
+| `progress.json`              | `8f9cb9b360fa6220df8b8fe9b36148942f7ad8337eb126d0e6a2041ffb6793a8` |
+| `renderer-inventory.json`    | `b84edec043c2a71189db829c7bb71431507038b9818a8c0f9d48cf92d224fd8b` |
+| `verdict.json`               | `0e220fed5c806821d4cf066e80f2120e0361cdf5fd8659d8758af4454f2f6223` |
+
+**Disposition:** single-run authorization consumed. No retry, recovery inspection or automatic follow-on. Founder-visible success remains a genuine decision on the exact Proceed request. This inventory is enabling diagnostic/proxy proof only. Privacy ALWAYS UNPROVEN, profile/product/feature/first-use/release proof remain unresolved. No credentials, approval requests/decisions, product broker/helper, provider/model/Telegram/external network, content scan, capture qualification, budget/policy/deadline/logging changes, mount expansion, external filesystem/home/global config, dependency/source/test/spec/design/README/status/archive edits, push/PR/archive/merge/deploy/publication or unrelated cleanup. Worktree retained pending verified landing. Coordination owns next disposition of actual collection overflow and missing renderer/product proof. Only this active tasks outcome is selected for commit. README/status overlays remain unchanged at SHA-256 `81d90772a3fae032d934976af082118473e0c88d9bf5bb115e3f4a11f3b715c5` and `94fbdcc8efdf01595685bd08cb623a165a80b7d9a1a5fccd54059b3c7a30182f`.
+
+**Finalization checks:** tasks-only repository Prettier write/check, selected whitespace checks and telemetry-disabled strict OpenSpec structural validation PASS, exit 0 within 30000 ms. Structural validation is not behavioral proof. Finalization remains tasks-only, with no code/test/dependency/configuration/baseline delta and no repeat runtime. Worktree path `.worktree/add-harness-approval-channel`, branch/change `add-harness-approval-channel`, owner test engineering, status retained, next action coordination disposition, cleanup pending verified landing. Owned runtime resources are removed as recorded separately above.
+
+### Preparation and review history
 
 **Authority and outcome:** user-authorized static preparation on outcome `4f653deeca9ed546b7f4534f87db3022b7cb7052`, prior code `1106a95f2b7ca402b58e75a592cc7e3502f91d1e` and tasks evidence `45f228cbfbdedb452b59bd906363ff0ae0aa0296`. Entry HEAD matches, index empty, only README/status overlays dirty and preserved unselected. Founder-visible success remains a genuine decision on the exact Proceed request. Inventory is enabling diagnostic/proxy work, never privacy, renderer, product or release proof. This brief is recorded before implementation.
 
