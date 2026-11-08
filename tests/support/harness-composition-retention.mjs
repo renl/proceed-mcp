@@ -263,6 +263,7 @@ const phases = new Set([
   'rendered-product-empty-result',
   'physical-helper-absence',
   'exact-product-PluginCleanup',
+  'rendered-product-picker-dismissal',
   'actual-host-exit',
 ]);
 const own = (object, name) => {
@@ -309,6 +310,7 @@ export async function waitCompositionPhase({ predicate, now, deadline, pause, ov
 export async function settleCompositionHost({
   observe,
   exitSent,
+  allowExit = true,
   requestExit,
   terminate,
   now,
@@ -323,7 +325,7 @@ export async function settleCompositionHost({
     while (!observe().closed && now() < until) await pause();
   };
   if (!observe().closed) {
-    if (!observe().exited && !exitSent) requestExit();
+    if (!observe().exited && !exitSent && allowExit) requestExit();
     await wait(graceMs);
     if (!observe().closed) {
       termination = 'SIGTERM_REQUESTED';
@@ -340,6 +342,95 @@ export async function settleCompositionHost({
     exitObserved: observe().exited === true,
     closeObserved: observe().closed === true,
     termination,
+  };
+}
+
+// Closed driver-clock observations. Wrapper durations have a separate origin.
+export function cleanupMilestones(now) {
+  const origin = now();
+  let deadline = null;
+  let timely = false;
+  const events = [];
+  const record = (stage) => {
+    assert.ok(['EXIT_KEY', 'MARKER_OBSERVED', 'SIGTERM', 'SIGKILL'].includes(stage));
+    if (events.some((e) => e.stage === stage)) return;
+    const at = now();
+    if (stage === 'MARKER_OBSERVED') timely = deadline !== null && at < deadline;
+    events.push({ stage, ms: Math.max(0, Math.floor(at - origin)) });
+  };
+  return {
+    begin(budget) {
+      assert.equal(deadline, null);
+      assert.ok(Number.isFinite(budget) && budget >= 0 && budget <= 15000);
+      deadline = now() + Math.max(0, budget);
+      return deadline;
+    },
+    record,
+    value(wrapper) {
+      let milestones = null;
+      const clock = own(wrapper, 'clock'),
+        entry = own(wrapper, 'entry'),
+        returned = own(wrapper, 'returned');
+      if (
+        clock === 'WRAPPER_MONOTONIC_MS' &&
+        Number.isSafeInteger(entry) &&
+        entry >= 0 &&
+        entry <= 210000 &&
+        (returned === undefined ||
+          (Number.isSafeInteger(returned) && returned >= entry && returned <= 210000))
+      ) {
+        milestones = {
+          clock,
+          ENTRY: entry,
+          RETURN: returned ?? null,
+        };
+      }
+      return {
+        clock: 'DRIVER_MONOTONIC_MS',
+        events: structuredClone(events),
+        deadlineMs: deadline === null ? null : Math.max(0, Math.floor(deadline - origin)),
+        timely,
+        wrapper: milestones,
+      };
+    },
+  };
+}
+
+export function safeCleanupObservation(value) {
+  const time = (v) => (Number.isSafeInteger(v) && v >= 0 && v <= 210000 ? v : null);
+  if (own(value, 'clock') !== 'DRIVER_MONOTONIC_MS') return null;
+  const input = own(value, 'events');
+  const events = [];
+  if (Array.isArray(input)) {
+    for (let n = 0; n < 4; n++) {
+      const event = own(input, String(n));
+      const stage = own(event, 'stage'),
+        ms = time(own(event, 'ms'));
+      if (
+        ['EXIT_KEY', 'MARKER_OBSERVED', 'SIGTERM', 'SIGKILL'].includes(stage) &&
+        ms !== null &&
+        !events.some((e) => e.stage === stage) &&
+        (!events.length || ms >= events.at(-1).ms)
+      )
+        events.push({ stage, ms });
+    }
+  }
+  const wrapper = own(value, 'wrapper');
+  const entry = time(own(wrapper, 'ENTRY')),
+    returned = time(own(wrapper, 'RETURN'));
+  return {
+    clock: 'DRIVER_MONOTONIC_MS',
+    events,
+    deadlineMs: time(own(value, 'deadlineMs')),
+    timely: own(value, 'timely') === true && events.some((e) => e.stage === 'MARKER_OBSERVED'),
+    wrapper:
+      own(wrapper, 'clock') === 'WRAPPER_MONOTONIC_MS' && entry !== null
+        ? {
+            clock: 'WRAPPER_MONOTONIC_MS',
+            ENTRY: entry,
+            RETURN: returned !== null && returned >= entry ? returned : null,
+          }
+        : null,
   };
 }
 
@@ -481,6 +572,7 @@ export function safeCompositionDiagnostic(input) {
     phase: phases.has(get('phase')) ? get('phase') : 'UNLISTED_PHASE',
     errorCode: compositionErrorCode({ code: get('errorCode') }),
     failureAt,
+    cleanupObservation: safeCleanupObservation(get('cleanupObservation')),
     keys: keys(get('keys')),
     lifecycle: {
       exitObserved: own(life, 'exitObserved') === true,

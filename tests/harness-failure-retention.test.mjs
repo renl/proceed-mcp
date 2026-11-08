@@ -12,6 +12,8 @@ import {
   assertCompositionExport,
   persistCompositionDiagnostic,
   compositionScanReason,
+  cleanupMilestones,
+  safeCleanupObservation,
 } from './support/harness-composition-retention.mjs';
 
 test('picker assertion, typed deadline and unlisted IO remain distinct without exception text', async () => {
@@ -59,6 +61,107 @@ test('picker assertion, typed deadline and unlisted IO remain distinct without e
     assert.throws(() => {
       failure.keys.exit++;
     });
+  }
+});
+
+test('cleanup marker deadline exact edge, late signal order and separate clock origins remain truthful', async () => {
+  for (const observed of [14.9, 15, 15.1, 30]) {
+    let tick = 1000;
+    const timing = cleanupMilestones(() => tick);
+    timing.begin(15);
+    timing.record('EXIT_KEY');
+    tick += observed;
+    if (observed === 30) timing.record('SIGTERM');
+    timing.record('MARKER_OBSERVED');
+    timing.record('MARKER_OBSERVED');
+    const observation = timing.value({
+      clock: 'WRAPPER_MONOTONIC_MS',
+      entry: 70000,
+      returned: 70001,
+      secret: 'SECRET',
+    });
+    assert.equal(observation.timely, observed < 15);
+    assert.equal(observation.events.filter((e) => e.stage === 'MARKER_OBSERVED').length, 1);
+    assert.deepEqual(safeCleanupObservation(observation), observation);
+    assert.ok(!JSON.stringify(observation).includes('SECRET'));
+    assert.equal(observation.wrapper.ENTRY, 70000); // Never subtract this from driver timestamps.
+    if (observed === 30)
+      assert.deepEqual(
+        observation.events.map((e) => e.stage),
+        ['EXIT_KEY', 'SIGTERM', 'MARKER_OBSERVED'],
+      );
+  }
+  let tick = 0;
+  await assert.rejects(
+    waitCompositionPhase({
+      now: () => tick,
+      deadline: 15,
+      predicate: () => {
+        tick = 15;
+        return true;
+      },
+      pause: async () => {},
+      overflow: () => false,
+    }),
+    { code: 'PHASE_DEADLINE' },
+  );
+  const timing = cleanupMilestones(() => 0);
+  assert.equal(timing.value({ clock: 'WRAPPER_MONOTONIC_MS', entry: 3 }).wrapper.RETURN, null);
+  assert.equal(
+    timing.value({ clock: 'WRAPPER_MONOTONIC_MS', entry: 3, returned: 2 }).wrapper,
+    null,
+  );
+  assert.equal(safeCleanupObservation({ clock: 'SECRET' }), null);
+  const poisoned = [];
+  Object.defineProperty(poisoned, '0', {
+    get() {
+      assert.fail('accessor invoked');
+    },
+  });
+  assert.deepEqual(
+    safeCleanupObservation({ clock: 'DRIVER_MONOTONIC_MS', events: poisoned, timely: true }).events,
+    [],
+  );
+  assert.equal(
+    safeCleanupObservation({ clock: 'DRIVER_MONOTONIC_MS', events: poisoned, timely: true }).timely,
+    false,
+  );
+  assert.equal(
+    timing.value(
+      Object.defineProperty({}, 'entry', {
+        get() {
+          assert.fail('accessor invoked');
+        },
+      }),
+    ).wrapper,
+    null,
+  );
+  assert.throws(() => timing.begin(15001));
+});
+
+test('missed dismissal never sends an exit key and uses unchanged bounded owned-process signal path', async () => {
+  for (const closeOn of ['SIGTERM', 'SIGKILL', 'NEVER']) {
+    let tick = 0;
+    const events = [],
+      state = { exited: false, closed: false };
+    const result = await settleCompositionHost({
+      observe: () => state,
+      exitSent: false,
+      allowExit: false,
+      requestExit: () => assert.fail('no retry key on missed dismissal'),
+      terminate: (signal) => {
+        events.push(signal);
+        if (signal === closeOn) Object.assign(state, { exited: true, closed: true });
+      },
+      now: () => tick,
+      deadline: 15000,
+      pause: async () => {
+        tick += 20;
+      },
+    });
+    assert.ok(tick <= 15000);
+    assert.deepEqual(events, closeOn === 'SIGTERM' ? ['SIGTERM'] : ['SIGTERM', 'SIGKILL']);
+    assert.equal(result.closeObserved, closeOn !== 'NEVER');
   }
 });
 

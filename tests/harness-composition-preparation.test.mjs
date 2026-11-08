@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 import { qualificationPayload } from './support/harness-linux-plan.mjs';
 import {
   awaitCompositionRender,
@@ -25,6 +26,72 @@ import { scanRequiredCaptures } from './support/harness-transport-fixtures.mjs';
 import { assertDetailedTransportExport } from './support/harness-runtime-transport.mjs';
 
 const readyFrame = `2.2.5\nAsk anything\n┃  ${productReadyText}  ┃`;
+
+test(
+  'actual wrapper cleanup writes ENTRY before await, RETURN only after return, never equates driver marker time',
+  { timeout: 1000 },
+  async () => {
+    const fixture = await readFile(
+      new URL('fixtures/harness-composition/tui.ts', import.meta.url),
+      'utf8',
+    );
+    const start = fixture.indexOf('return async () => {');
+    const finish = fixture.indexOf('\n      };', start);
+    assert.ok(start > 0 && finish > start);
+    const events = [];
+    let tick = 500,
+      release,
+      releaseMarker;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    const markerPending = new Promise((resolve) => {
+      releaseMarker = resolve;
+    });
+    const context = {
+      live: true,
+      context: { renderer: { off() {} } },
+      resized() {},
+      timer: 1,
+      clearInterval() {},
+      publish: () => events.push('publish'),
+      cleanupOrigin: 100,
+      performance: { now: () => tick },
+      root: 'memory/',
+      cleanup: async () => {
+        events.push('cleanup');
+        await pending;
+      },
+      writeFileSync: (_, bytes) => events.push(JSON.parse(bytes)),
+      writeFile: async (_, bytes) => {
+        await markerPending;
+        events.push(JSON.parse(bytes));
+      },
+    };
+    const cleanup = runInNewContext(
+      '(' + fixture.slice(start + 'return '.length, finish) + '\n})',
+      context,
+      { timeout: 100 },
+    );
+    const run = cleanup();
+    assert.deepEqual(
+      events.slice(0, 3).map((v) => (typeof v === 'string' ? v : Object.keys(v).sort().join(','))),
+      ['publish', 'clock,entry', 'cleanup'],
+    );
+    assert.equal(events.length, 3);
+    tick = 510;
+    release();
+    for (let n = 0; n < 5; n++) await Promise.resolve();
+    assert.equal(events.length, 4); // Returned, but marker write has not completed.
+    assert.equal(events[3].returned, 410);
+    releaseMarker();
+    await run;
+    assert.equal(events[3].entry, 400);
+    assert.equal(events[3].returned, 410);
+    assert.equal(events[3].productCleanup, undefined);
+    assert.equal(events[4].productCleanup, 'PASS');
+  },
+);
 
 test('actual capture readiness route never substitutes the unstyled failure observer', async () => {
   const paint = (s) => '\x1b[?2026h\x1b[1;1H' + s + '\x1b[?2026l';

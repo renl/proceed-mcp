@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { runInNewContext } from 'node:vm';
 import {
   assertIdentityMessage,
   highlightedOrdinal,
@@ -10,6 +12,8 @@ import {
   productPickerObservation,
   productPickerInterval,
   captureProductPicker,
+  productPickerDismissal,
+  issueProductPickerExit,
 } from './support/harness-navigation-observation.mjs';
 import {
   compositionCurrentFrame,
@@ -227,8 +231,135 @@ test('product adapter refuses fixture/historical binding, replaced prefix, incom
   );
 });
 
-test('capture-only actual dispatch has no Enter, identity or decision capability, no profile requirement and always dismisses', async () => {
-  for (const fail of ['none', 'observe', 'move', 'moved', 'unsupported']) {
+const dismissedRaw = () =>
+  Buffer.concat([
+    productRaw(),
+    Buffer.from(productUpdate(2)),
+    Buffer.from(
+      '\x1b[?2026h' +
+        [1, 2, 3, 4, 5].map((r) => `\x1b[${r};1H` + ' '.repeat(120)).join('') +
+        '\x1b[H2.2.5 Ask anything\x1b[?2026l',
+    ),
+  ]);
+
+test('fresh completed dismissal admits exactly one owned exit, all stale or ambiguous controls refuse', () => {
+  const { moved } = productPair();
+  const raw = dismissedRaw();
+  let exits = 0;
+  const route = (candidate = raw, binding = productBinding) =>
+    issueProductPickerExit({
+      snapshot: () => ({
+        raw: candidate,
+        binding,
+        previous: moved,
+        hostFrame: '2.2.5 Ask anything',
+      }),
+      exitCount: () => exits,
+      exit: () => exits++,
+    });
+  assert.equal(route().supported, true);
+  assert.equal(exits, 1);
+  assert.throws(() => route());
+  assert.equal(exits, 1);
+  for (const candidate of [
+    productRaw(),
+    Buffer.concat([productRaw(), Buffer.from(productUpdate(2))]),
+    Buffer.concat([raw, Buffer.from('\x1b[?2026h')]),
+    Buffer.concat([raw, Buffer.from('\x1b[')]),
+    Buffer.concat([raw, Buffer.from('\x1b[?1049l')]),
+    Buffer.concat([raw, Buffer.from('\x1b[2J')]),
+    Buffer.concat([raw, Buffer.from('\x1b[3m')]),
+    Buffer.from(raw.toString().replace('2.2.5 Ask anything', 'unknown host frame')),
+    Buffer.from(raw.toString().replace('2.2.5 Ask anything', '2.2.5 Ask anything UNKNOWN DIALOG')),
+    Buffer.from(raw.toString().replace('duplicate preview', 'replaced preview')),
+    Buffer.concat([raw, Buffer.from(productUpdate(1))]),
+  ]) {
+    exits = 0;
+    assert.equal(
+      productPickerDismissal(candidate, productBinding, moved, '2.2.5 Ask anything').supported,
+      false,
+    );
+    assert.throws(() => route(candidate));
+    assert.equal(exits, 0);
+  }
+  for (const change of [
+    { setup: 'replacement' },
+    { run: 'replacement' },
+    { geometry: { width: 120, height: 40, resizeSequence: 1 } },
+    { geometry: { width: 80, height: 24, resizeSequence: 0 } },
+  ]) {
+    exits = 0;
+    assert.throws(() => route(raw, { ...productBinding, ...change }));
+    assert.equal(exits, 0);
+  }
+});
+
+test('actual composition final-exit closure refuses live replacement, deadline and geometry drift', async () => {
+  const source = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('productExitSnapshot = () => {');
+  const finish = source.indexOf('\n          };', start);
+  assert.ok(start > 0 && finish > start);
+  const closure = source.slice(start + 'productExitSnapshot = '.length, finish) + '\n}';
+  const { moved } = productPair();
+  for (const mutation of [
+    'none',
+    'deadline',
+    'exit',
+    'overflow',
+    'run',
+    'setup',
+    'resize',
+    'snapshot',
+    'partial',
+  ]) {
+    const live = {
+      live: true,
+      run: productBinding.run,
+      generation: productBinding.setup,
+      geometry: structuredClone(productBinding.geometry),
+      snapshot: structuredClone(productSnapshot),
+    };
+    let exits = 0;
+    const context = {
+      assert,
+      Buffer,
+      performance: { now: () => (mutation === 'deadline' ? 5 : 4) },
+      pickerEnd: 5,
+      exited: mutation === 'exit',
+      overflow: mutation === 'overflow',
+      readObservation: () => live,
+      run: productBinding.run,
+      binding: { generation: productBinding.setup },
+      captureBinding: productBinding,
+      snapshot: productSnapshot,
+      transcript:
+        mutation === 'partial'
+          ? Buffer.concat([dismissedRaw(), Buffer.from('\x1b[?2026h')])
+          : dismissedRaw(),
+      pickerEvidence: { dismissalBaseline: moved },
+      readinessFrame: '2.2.5 Ask anything',
+    };
+    if (mutation === 'run') live.run = 'replacement';
+    if (mutation === 'setup') live.generation = 'replacement';
+    if (mutation === 'resize') live.geometry.resizeSequence++;
+    if (mutation === 'snapshot') live.snapshot.reverse();
+    const snapshot = runInNewContext('(' + closure + ')', context, { timeout: 100 });
+    const execute = () =>
+      issueProductPickerExit({ snapshot, exitCount: () => exits, exit: () => exits++ });
+    if (mutation === 'none') execute();
+    else assert.throws(execute);
+    assert.equal(exits, mutation === 'none' ? 1 : 0);
+  }
+  assert.match(source, /allowExit: !pickerCapture \|\| dismissalAdmitted/);
+  assert.match(source, /pickerEvidence.dismissal = issueProductPickerExit\(/);
+  assert.match(source, /const pickerEnd = performance.now\(\) \+ Math.min\(5000,/);
+});
+
+test('capture-only actual dispatch has no Enter, identity or decision capability and requires dismissal before returning', async () => {
+  for (const fail of ['none', 'observe', 'move', 'moved', 'unsupported', 'dismissal']) {
     const events = [],
       pair = productPair();
     let observations = 0;
@@ -248,23 +379,39 @@ test('capture-only actual dispatch has no Enter, identity or decision capability
         events.push('down');
         if (fail === 'move') throw Error('synthetic failure');
       },
-      dismiss: async () => events.push('escape'),
+      dismiss: async () => {
+        events.push('escape');
+        return pair.moved;
+      },
+      observeDismissal: async (previous) => {
+        events.push('dismissal');
+        if (fail === 'dismissal') return { supported: false };
+        return productPickerDismissal(
+          dismissedRaw(),
+          productBinding,
+          previous,
+          '2.2.5 Ask anything',
+        );
+      },
       // Poison unused operations: the route must never call any of these.
       stdin: { write: () => assert.fail('generic key forbidden') },
       acceptIdentity: () => assert.fail('identity forbidden'),
       exchange: () => assert.fail('pending/decision forbidden'),
       qualify: () => assert.fail('automatic qualification forbidden'),
     });
-    if (['observe', 'move', 'moved'].includes(fail)) await assert.rejects(run);
+    if (['observe', 'move', 'moved', 'unsupported', 'dismissal'].includes(fail))
+      await assert.rejects(run);
     else {
       const result = await run;
       assert.equal(result.enter, 0);
       assert.equal(result.selectionProfile, null);
       assert.equal(result.qualification, 'UNQUALIFIED');
     }
-    assert.equal(events.at(-1), 'escape');
+    if (fail === 'none') assert.equal(events.at(-1), 'dismissal');
+    else if (fail === 'dismissal') assert.equal(events.filter((s) => s === 'escape').length, 1);
+    else assert.ok(!events.includes('escape'));
     assert.ok(events.filter((s) => s === 'down').length <= 1);
-    if (fail === 'unsupported') assert.deepEqual(events, ['observe', 'escape']);
+    if (fail === 'unsupported') assert.deepEqual(events, ['observe']);
   }
 });
 

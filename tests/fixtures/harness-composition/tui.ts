@@ -10,6 +10,7 @@ import { observeCompositionSelectors } from '/payload/tests/support/harness-comp
 export default Plugin.define({
   id: product.id,
   async setup(context) {
+    const cleanupOrigin = performance.now();
     let phase = 'product-setup';
     const root = '/run/proceed/evidence/';
     const { run, captureOnly } = JSON.parse(
@@ -108,11 +109,31 @@ export default Plugin.define({
         context.renderer?.off('resize', resized);
         clearInterval(timer);
         publish();
+        const entry = Math.floor(performance.now() - cleanupOrigin);
+        writeFileSync(
+          root + 'composition-cleanup-entry.json',
+          JSON.stringify({
+            clock: 'WRAPPER_MONOTONIC_MS',
+            entry,
+          }),
+        );
         await cleanup();
+        const returned = Math.floor(performance.now() - cleanupOrigin);
+        writeFileSync(
+          root + 'composition-cleanup-return.json',
+          JSON.stringify({
+            clock: 'WRAPPER_MONOTONIC_MS',
+            entry,
+            returned,
+          }),
+        );
         await writeFile(
           '/run/proceed/evidence/composition-cleanup.json',
           JSON.stringify({
             productCleanup: 'PASS',
+            clock: 'WRAPPER_MONOTONIC_MS',
+            entry,
+            returned,
           }),
         );
       };

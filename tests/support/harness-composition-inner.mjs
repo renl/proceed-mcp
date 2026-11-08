@@ -26,6 +26,7 @@ import {
   waitCompositionPhase,
   failureSnapshot,
   settleCompositionHost,
+  cleanupMilestones,
   scanFrozenComposition,
   compositionScanReason,
   persistCompositionDiagnostic,
@@ -54,6 +55,8 @@ import {
   assertCurrentIdentityFrame,
   captureProductPicker,
   productPickerObservation,
+  productPickerDismissal,
+  issueProductPickerExit,
 } from './harness-navigation-observation.mjs';
 import {
   stageQualification,
@@ -68,6 +71,10 @@ assert.ok(
 );
 const pickerCapture = process.argv[2] === '--product-picker-capture';
 let pickerEvidence, executionBinding;
+let dismissalAdmitted = false;
+let productExitSnapshot;
+const cleanupTiming = cleanupMilestones(() => performance.now());
+let cleanupObservation;
 const terminalResponses = [
   [/\x1b\[6n/g, '\x1b[1;1R'],
   [/\x1b\[\?u/g, '\x1b[?0u'],
@@ -126,13 +133,20 @@ const exists = (p) =>
     () => true,
     () => false,
   );
-async function wait(label, predicate, budget = 15000) {
+const readCleanupObservation = (name) => {
+  try {
+    return JSON.parse(readFileSync(join(evidence, name), 'utf8'));
+  } catch {
+    return null;
+  }
+};
+async function wait(label, predicate, budget = 15000, monotonicDeadline) {
   await progress(label);
-  const deadline = Math.min(end, Date.now() + budget);
+  const deadline = monotonicDeadline ?? Math.min(end, Date.now() + budget);
   await waitCompositionPhase({
     predicate,
     deadline,
-    now: Date.now,
+    now: monotonicDeadline === undefined ? Date.now : () => performance.now(),
     pause: () => delay(20),
     overflow: () => overflow,
   });
@@ -431,6 +445,7 @@ try {
           },
         });
         if (pickerCapture) {
+          const pickerEnd = performance.now() + Math.min(5000, Math.max(0, end - Date.now()));
           const initialLive = readObservation('composition-live.json');
           const snapshot = structuredClone(initialLive.snapshot);
           const captureBinding = {
@@ -439,6 +454,19 @@ try {
             run,
             setup: binding.generation,
             geometry: structuredClone(initialLive.geometry),
+          };
+          productExitSnapshot = () => {
+            assert.ok(performance.now() < pickerEnd && !exited && !overflow);
+            const live = readObservation('composition-live.json');
+            assert.ok(live?.live && live.run === run && live.generation === binding.generation);
+            assert.deepEqual(live.geometry, captureBinding.geometry);
+            assert.deepEqual(live.snapshot, snapshot);
+            return {
+              raw: Buffer.from(transcript),
+              binding: captureBinding,
+              previous: pickerEvidence.dismissalBaseline,
+              hostFrame: readinessFrame,
+            };
           };
           pickerEvidence = await captureProductPicker({
             selectionProfile: null,
@@ -464,12 +492,48 @@ try {
                     observation.supported && (!previous || observation.frames > previous.frames)
                   );
                 },
-                5000,
+                0,
+                pickerEnd,
               );
               return observation;
             },
             moveDown: async () => child.stdin.write('\x1b[B'),
-            dismiss: async () => child.stdin.write('\x1b'),
+            dismiss: async (previous) => {
+              assert.ok(performance.now() < pickerEnd);
+              const baseline = productPickerObservation(
+                Buffer.from(transcript),
+                captureBinding,
+                snapshot,
+              );
+              assert.ok(baseline.supported && baseline.frames >= previous.frames);
+              assert.deepEqual(baseline.binding, previous.binding);
+              child.stdin.write('\x1b');
+              return baseline;
+            },
+            observeDismissal: async (previous) => {
+              let observation;
+              await wait(
+                'rendered-product-picker-dismissal',
+                () => {
+                  const live = readObservation('composition-live.json');
+                  assert.ok(!exited && !overflow && live?.live);
+                  assert.equal(live.run, run);
+                  assert.equal(live.generation, binding.generation);
+                  assert.deepEqual(live.geometry, captureBinding.geometry);
+                  assert.deepEqual(live.snapshot, snapshot);
+                  observation = productPickerDismissal(
+                    Buffer.from(transcript),
+                    captureBinding,
+                    previous,
+                    readinessFrame,
+                  );
+                  return observation.supported;
+                },
+                0,
+                pickerEnd,
+              );
+              return observation;
+            },
           });
           assert.equal(keys.enter, 0);
           assert.equal(
@@ -568,14 +632,39 @@ try {
           await wait('physical-helper-absence', async () => !(await exists('/proc/' + helper.pid)));
           await h.noWork();
         }
-        keys.exit++;
-        child.stdin.write('\x03');
-        await wait('exact-product-PluginCleanup', () =>
-          exists(join(evidence, 'composition-cleanup.json')),
+        const cleanupEnd = cleanupTiming.begin(Math.min(15000, Math.max(0, end - Date.now())));
+        const ownedExit = () => {
+          cleanupTiming.record('EXIT_KEY');
+          keys.exit++;
+          child.stdin.write('\x03');
+        };
+        if (pickerCapture) {
+          pickerEvidence.dismissal = issueProductPickerExit({
+            snapshot: productExitSnapshot,
+            exit: ownedExit,
+            exitCount: () => keys.exit,
+          });
+          dismissalAdmitted = true;
+        } else ownedExit();
+        await wait(
+          'exact-product-PluginCleanup',
+          async () => {
+            if (!(await exists(join(evidence, 'composition-cleanup.json')))) return false;
+            cleanupTiming.record('MARKER_OBSERVED');
+            return true;
+          },
+          0,
+          cleanupEnd,
         );
-        assert.deepEqual(
-          JSON.parse(await readFile(join(evidence, 'composition-cleanup.json'), 'utf8')),
-          { productCleanup: 'PASS' },
+        const cleanupMarker = JSON.parse(
+          await readFile(join(evidence, 'composition-cleanup.json'), 'utf8'),
+        );
+        cleanupObservation = cleanupTiming.value(cleanupMarker);
+        assert.equal(cleanupMarker.productCleanup, 'PASS');
+        assert.ok(
+          cleanupObservation.timely &&
+            cleanupObservation.wrapper &&
+            cleanupObservation.wrapper.RETURN !== null,
         );
         await wait('actual-host-exit', () => exited);
         if (!pickerCapture)
@@ -621,6 +710,7 @@ try {
           phase,
           errorCode,
           failureAt,
+          cleanupObservation: cleanupTiming.value(null),
           keys,
           lifecycle,
           commandEligibility,
@@ -649,11 +739,14 @@ try {
           lifecycle = await settleCompositionHost({
             observe: () => ({ exited, closed }),
             exitSent: keys.exit > 0,
+            allowExit: !pickerCapture || dismissalAdmitted,
             requestExit: () => {
+              cleanupTiming.record('EXIT_KEY');
               keys.exit++;
               child.stdin.write('\x03');
             },
             terminate: (signal) => {
+              cleanupTiming.record(signal);
               try {
                 process.kill(-child.pid, signal);
               } catch {
@@ -668,6 +761,11 @@ try {
         productCleanup = (await exists(join(evidence, 'composition-cleanup.json')))
           ? 'OBSERVED'
           : 'UNRUN';
+        if (productCleanup === 'OBSERVED') cleanupTiming.record('MARKER_OBSERVED');
+        const cleanupWrapper =
+          readCleanupObservation('composition-cleanup-return.json') ??
+          readCleanupObservation('composition-cleanup-entry.json');
+        cleanupObservation = cleanupTiming.value(cleanupWrapper);
         renderEvidence = compositionRenderEvidence(
           compositionReadinessFrame(transcript.toString(), pickerCapture),
         );
@@ -689,6 +787,7 @@ try {
               const observations = Buffer.from(
                 JSON.stringify({
                   pickerEvidence,
+                  cleanupObservation,
                   executionBinding,
                   keys,
                   lifecycle,
@@ -874,6 +973,7 @@ await persistCompositionDiagnostic(diagnosticIO, {
   phase,
   errorCode,
   failureAt,
+  cleanupObservation,
   lifecycle,
   renderedEvidenceSeen: renderEvidence,
   currentScreen: 'UNPROVEN',

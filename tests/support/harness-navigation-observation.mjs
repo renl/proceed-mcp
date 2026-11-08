@@ -119,28 +119,81 @@ export function productPickerInterval(before, after) {
   }
 }
 
+// A positive host-frame predicate, not absence in arbitrary terminal bytes.
+export function productPickerDismissal(raw, binding, previous, hostFrame) {
+  try {
+    assert.ok(previous?.supported && Buffer.isBuffer(raw));
+    assert.deepEqual(binding, previous.binding);
+    assert.ok(raw.length > previous.bytes && raw.length <= 1048576);
+    assert.equal(
+      createHash('sha256').update(raw.subarray(0, previous.bytes)).digest('hex'),
+      previous.sha256,
+    );
+    const frame = compositionSourceFrame(new TextDecoder('utf-8', { fatal: true }).decode(raw));
+    assert.ok(
+      frame.supported && frame.generation === previous.screen && frame.frames > previous.frames,
+    );
+    assert.ok(frame.text.includes('2.2.5') && frame.text.includes('Ask anything'));
+    assert.ok(
+      !/Select the Proceed session|Open Proceed question\?|Session \d+ - /.test(frame.text),
+    );
+    const normalize = (s) =>
+      s
+        .split('\n')
+        .map((line) => line.replace(/ +$/, ''))
+        .join('\n')
+        .replace(/\n+$/, '');
+    assert.equal(typeof hostFrame, 'string');
+    assert.equal(normalize(frame.text), normalize(hostFrame));
+    return {
+      supported: true,
+      reason: 'NONE',
+      bytes: raw.length,
+      sha256: createHash('sha256').update(raw).digest('hex'),
+      screen: frame.generation,
+      frames: frame.frames,
+      hostFrameSha256: createHash('sha256').update(normalize(hostFrame)).digest('hex'),
+    };
+  } catch {
+    return { supported: false, reason: 'DISMISSAL_UNPROVEN' };
+  }
+}
+
+export function issueProductPickerExit({ snapshot, exit, exitCount }) {
+  assert.equal(exitCount(), 0);
+  const { raw, binding, previous, hostFrame } = snapshot();
+  const dismissal = productPickerDismissal(raw, binding, previous, hostFrame);
+  assert.equal(dismissal.supported, true, 'dismissal unproven');
+  exit(); // No asynchronous gap between final observation and the sole owned key.
+  return dismissal;
+}
+
 // A closed input alphabet: never hand a generic stdin to this mode.
 export async function captureProductPicker(driver) {
   assert.equal(driver.selectionProfile, null);
-  let initial, moved;
-  try {
-    initial = await driver.observe();
-    if (initial.supported) {
-      await driver.moveDown(); // Exactly one diagnostic physical movement.
-      moved = await driver.observe(initial);
-    }
-    return {
-      mode: 'PRODUCT_PICKER_CAPTURE_ONLY',
-      selectionProfile: null,
-      qualification: 'UNQUALIFIED',
-      initial,
-      moved: moved ?? null,
-      interval: moved ? productPickerInterval(initial, moved) : null,
-      enter: 0,
-    };
-  } finally {
-    await driver.dismiss();
+  let initial, moved, dismissal;
+  initial = await driver.observe();
+  assert.equal(initial.supported, true, 'picker unproven');
+  if (initial.supported) {
+    await driver.moveDown(); // Exactly one diagnostic physical movement.
+    moved = await driver.observe(initial);
+    assert.equal(moved.supported, true, 'moved picker unproven');
   }
+  const dismissalBaseline = await driver.dismiss(moved ?? initial);
+  assert.equal(dismissalBaseline.supported, true);
+  dismissal = await driver.observeDismissal(dismissalBaseline);
+  assert.equal(dismissal.supported, true, 'dismissal unproven');
+  return {
+    mode: 'PRODUCT_PICKER_CAPTURE_ONLY',
+    selectionProfile: null,
+    qualification: 'UNQUALIFIED',
+    initial,
+    moved: moved ?? null,
+    dismissal,
+    dismissalBaseline,
+    interval: moved ? productPickerInterval(initial, moved) : null,
+    enter: 0,
+  };
 }
 
 const rgb = (v) =>
