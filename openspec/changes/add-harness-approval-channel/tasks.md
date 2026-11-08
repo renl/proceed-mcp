@@ -2,6 +2,39 @@
 
 ## Gap RENDERER-LIVE-PRODUCT-PICKER-QUALIFICATION - preparation brief
 
+### Authorized single product capture - consumed, readiness failure
+
+Exactly one `node tests/run-harness-host.mjs --product-picker-capture-run` ran with a 310000 ms outer timeout including teardown. Entry/evidence HEAD was `7d9b1d610ef49dc2a226340e663e7cfb4394072c`, executable candidate `a82182344a5133a0bd582cc52f09e7986f7eeb81`. Live branch/index/dirty and ancestry admission passed. The index was empty, only README/status overlays were dirty, and the committed delta from executable candidate was tasks-only. Those overlays remain unselected. Supplied independent corrected static review PASS and 97 native/static controls were reused without replay. No supported product metadata-preflight alias exists, so none was guessed or invoked.
+
+**Frozen admission:** all 13 current per-path hashes above/below passed. Ordered payload (95), outer (3) and product/package/source (59) manifests matched respectively `1dde1cf6dd67fda07efbb9f2ddad95013a04eebb4ca8b1b42ffdac39afc51f60`, `65539ae18df4c0443d3cac749d99f033399cdc80750eae8536e5e44a0428f4a0` and `ecf3bf969a09ecd10fd387625a444e6733d004c0ab9c8828a4ec03a841d33bfc`. Runner-generated actual staged/source and outer manifests matched those same digests. Image inspection and pre-release isolation admission passed for `sha256:a8302764b5f4896690dcba9cdbe27755f6c0f4f88db92974a029f8499f3700cb`, Linux amd64, network none, private PID mode, init, one exact read-only payload mount and isolated roots. No build/pull occurred.
+
+**Maintained outcome:** FAIL, exit 1, `COMPOSITION_CONTROL_FAILURE`, inner `READINESS_DEADLINE` at `rendered-host-and-product-registration`. Outer completion was 68962 ms, verdict 68961 ms, inner diagnostic 64317 ms. The guard observed a running host and completed supported host frame, but no admitted product activation/setup/request/response binding or command eligibility before the original deadline. This is not evidence of a specific root cause. The picker was not opened. Final recorded keys are Ctrl+G 0, Enter 0, exit Ctrl+C 1. Down and Escape were not reached because readiness failed before capture dispatch. No identity acceptance, approval request, pending/decision exchange, model, real Telegram, external network, profile installation, qualification or retry occurred. Synthetic enrollment and compiled-product start phases were reached. Two equal-title sessions were intended by the wrapper, but no completed immutable session snapshot or count was retained. Actual session count remains UNKNOWN, not 2.
+
+**Scan and transfer admission PASS, separately from capture FAIL:** complete PRODUCT `tui`, `telegram`, `journal`, `diagnostics`, `evidence`, `api` scanning passed with the complete frozen distinct authority set. The reviewed producer normalizes eleven raw role/base entries into five distinct synthetic authorities. That count is source/control evidence, not a separately exported runtime count. API surface hash is SHA-256 of empty bytes. No renderer marker substitutes for this product scan. All five separately bounded TAR transfers were admitted before any detailed inspection. Independent local marker validation and all four exact length/hash checks passed, totaling 68536 bytes including the 1027-byte marker, below 262144 bytes. Existing file/source/surface/work/stream/metadata/traversal/deadline limits were unchanged.
+
+| Admitted export | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `scan-pass.json` | 1027 | `7cc40e2ce24ec09bab22540c32e1a5e222475f24869b9c17153b08d0e20e9a01` |
+| `composition-observations.json` | 16740 | `df333cf59977edcee5b5cd191ca19ebdc1b9397b9b9dfab4f91ab6c3b4985fb0` |
+| `transcript.ansi` | 20542 | `38624126391d3a664e56b43ba6220293f9d73e611df99c8124b311c4e216c893` |
+| `plugin-diagnostics.log` | 29962 | `8b20a66cd1df4f91eff564422b8eac60fea5bd514ad8e55963060f1b5a3c44ab` |
+| `progress.jsonl` (retained as `inner-progress.jsonl`) | 265 | `aae5d40dd5d12920863ea8cd21910f0a91414d203a90d53a9ae5f10faefca8e3` |
+
+**Admitted facts and limits:** executable bundle SHA-256 `8d060e1d2fbb9bb44cf09ae6ed1f3f6a7cff070b5227e2f90970132b23a92050`, package `98e699328a024a1b983194aaf984ffe3350d11ae22135d3c0d5f342de3bb5b82`, wrapper `54ba63a1d09623c5513fd38ccfcdaabc527f24928e3722cd0414b9faa9ac1920`, exact staged config `b294c7d5f599a260a7787a9b1f7316507cddb1aadc1f5b41ef9e843487898f13`. Source `9bbb8ce18c80f099e0e448775f59d965ead40a21` and renderer `738067f47e940dcec3f5aab74868908574335c6c` are image-provenance bindings, not runtime source accessors. Exact explicit environment and terminal-response policy are retained in admitted observations. Resolved theme, design mode and effective depth remain null. No picker rows, current cells, selection transfer, session identities or useful human decision were proven. Admitted plugin diagnostics show product setup completion and later cleanup, plus warnings from adversary/transport setup. They do not establish the readiness-failure cause or a qualified product profile.
+
+**Separate cleanup:** product Cleanup OBSERVED, actual host exit PASS, exit and stream close both observed, signal escalation NOT_REQUESTED. Outer owned-container removal PASS, exact-name list empty and exact inspect absent, private PID namespace destroyed. Broker/helper/listener processes and disposable synthetic state were contained in that destroyed namespace/container. No independent per-broker/helper graceful-cleanup attestation was exported, so that narrower outcome remains UNKNOWN. No recovery container, secret inspection or raw fallback was used. Ignored runner evidence remains at `.scratch/harness-host/run-linux-xTk2c7/`. No unknown artifact was removed.
+
+| Check stage | Outcome, owner and next trigger |
+| --- | --- |
+| Current single capture | FAIL at readiness. Authorization consumed. Test engineering reports through coordination, with no automatic repair or follow-on work. |
+| Privacy/export and owned cleanup | Product scan and five-transfer admission PASS. Product Cleanup, host exit/stream closure and exact container absence separately observed as above. |
+| Pre-exposure qualification/useful decision | UNQUALIFIED, profile null, not waived. Maintainer/coordination owns a separately authorized next action after review of the readiness evidence. Previous failures and unknowns remain. |
+| Post-deploy/deferred | UNRUN, deployment unauthorized. Genuine request/question/operator/original waiting-call/human-decision proof remains required before exposure. |
+
+Tasks-only repository Prettier write/check, selected whitespace and telemetry-disabled strict OpenSpec validation PASS with exit 0 within 30000 ms. Structural validation is not behavior proof. No executable tests were rerun for this evidence-only delta.
+
+Estimated 100% of this bounded one-attempt/report package is complete, not product or release acceptance. Worktree/branch/change `add-harness-approval-channel` remains retained, owner test engineering, cleanup pending verified landing. This evidence increment is tasks-only. No executable, test, dependency, configuration, baseline, README/status or archive change is authorized or made. Stop after reporting, with no second attempt, inventory, calibration, exchange or follow-on qualification.
+
 ### Product capture integration correction 1 - current review brief
 
 Entry HEAD `470a817320d4a40f128a6b2046909e20ea7af4dc`, executable candidate `0d1c005a7331fa61c7ca47670e810ad78684b829`. One live HEAD/index/dirty inspection confirmed the change branch, empty index and only README/status overlays. Those overlays remain unselected. Combined independent review FAILED that executable candidate on the two routes below. This correction supersedes its completion/review-ready claim and changed-path hashes, not its historical test results. The frozen correction revision is recorded in the final evidence paragraph below.
