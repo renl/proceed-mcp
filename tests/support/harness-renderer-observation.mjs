@@ -25,6 +25,189 @@ export const rendererPayload = Object.freeze([
 ]);
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
+export const collectionLimits = Object.freeze({
+  file: 16777216,
+  contents: 25165824,
+  surfaces: 33554432,
+  work: 201326592,
+  detail: 262144,
+});
+export const rendererDetailFiles = Object.freeze([
+  'binding.json',
+  'observations.json',
+  'fixture.jsonl',
+  'inventory.json',
+  'transcript.ansi',
+  'diagnostics.log',
+  'progress.jsonl',
+]);
+export function collectionAdmit(value, ceiling) {
+  assert.ok(Number.isSafeInteger(value) && value >= 0 && value <= ceiling, 'COLLECTION_LIMIT');
+}
+// Logical byte visits, not a bound on regex CPU or process memory.
+export function rendererWork(F, N, C, S) {
+  for (const n of [F, N, C, S]) collectionAdmit(n, Number.MAX_SAFE_INTEGER);
+  const work = 2n * BigInt(F) + BigInt(N) + (BigInt(C) + 2n) * BigInt(S);
+  inventoryAdmit(work, BigInt(collectionLimits.work));
+  return Number(work);
+}
+
+// Exact JSON UTF-8 size without constructing the serialized scan marker.
+// The closed marker has only ASCII keys, nonnegative integers, strings and arrays.
+export function rendererJsonBytes(value) {
+  if (typeof value === 'string') {
+    let bytes = 2;
+    for (let i = 0; i < value.length; i++) {
+      const n = value.charCodeAt(i);
+      if (n === 34 || n === 92 || [8, 9, 10, 12, 13].includes(n)) bytes += 2;
+      else if (n < 32) bytes += 6;
+      else if (n < 128) bytes++;
+      else if (n < 2048) bytes += 2;
+      else if (
+        n >= 0xd800 &&
+        n <= 0xdbff &&
+        value.charCodeAt(i + 1) >= 0xdc00 &&
+        value.charCodeAt(i + 1) <= 0xdfff
+      ) {
+        bytes += 4;
+        i++;
+      } else bytes += n >= 0xd800 && n <= 0xdfff ? 6 : 3;
+    }
+    return bytes;
+  }
+  if (typeof value === 'number') {
+    collectionAdmit(value, Number.MAX_SAFE_INTEGER);
+    return String(value).length;
+  }
+  if (Array.isArray(value))
+    return 2 + Math.max(0, value.length - 1) + value.reduce((n, v) => n + rendererJsonBytes(v), 0);
+  assert.ok(value && Object.getPrototypeOf(value) === Object.prototype);
+  const keys = Object.keys(value);
+  return (
+    2 +
+    Math.max(0, keys.length - 1) +
+    keys.reduce((n, k) => n + rendererJsonBytes(k) + 1 + rendererJsonBytes(value[k]), 0)
+  );
+}
+export function rendererDetailAdmission(scan, lengths) {
+  assert.deepEqual(Object.keys(lengths), rendererDetailFiles);
+  let total = rendererJsonBytes(scan);
+  for (const length of Object.values(lengths)) {
+    collectionAdmit(length, collectionLimits.detail);
+    total += length;
+  }
+  collectionAdmit(total, collectionLimits.detail);
+  return total;
+}
+export function rendererAttachFiles(scan, entries) {
+  scan.files = [];
+  let size = rendererJsonBytes(scan);
+  for (const e of entries) {
+    const record = { path: e.path, sha256: '0'.repeat(64), bytes: e.bytes.length };
+    size += rendererJsonBytes(record) + (scan.files.length ? 1 : 0);
+    collectionAdmit(size, collectionLimits.detail);
+    record.sha256 = digest(e.bytes);
+    scan.files.push(record);
+  }
+  return scan;
+}
+export async function rendererTransferDetails(transfer) {
+  const details = new Map();
+  let remaining = collectionLimits.detail;
+  for (const file of ['scan-pass.json', ...rendererDetailFiles]) {
+    const archive = await transfer(file, remaining + 4096);
+    const bytes = parseRendererArchive(archive, file, remaining);
+    remaining -= bytes.length;
+    details.set(file, bytes);
+    if (file === 'scan-pass.json') assertRendererExport(JSON.parse(bytes.toString('utf8')));
+  }
+  const scan = JSON.parse(details.get('scan-pass.json').toString('utf8'));
+  rendererDetailAdmission(
+    scan,
+    Object.fromEntries(rendererDetailFiles.map((file) => [file, details.get(file).length])),
+  );
+  return details;
+}
+
+// Admit composition from actual buffers BEFORE path encoding or concatenation.
+export function rendererBuildCapture(entries, roots, rawBuffers, canaries, concat = Buffer.concat) {
+  const at = (name) => {
+    const b = entries.find((e) => e.path === posix.join(roots.evidence, name))?.bytes;
+    assert.ok(Buffer.isBuffer(b));
+    return b;
+  };
+  const logs = rendererDiagnostics({}, entries);
+  const grouped = Object.fromEntries(
+    Object.entries(roots).map(([s, root]) => [
+      s,
+      entries.filter((e) => e.path.startsWith(root + '/')),
+    ]),
+  );
+  const sum = (xs) => xs.reduce((n, b) => n + b.length, 0);
+  const lengths = {
+    tui: sum(rawBuffers),
+    diagnostics: sum(logs.map((e) => e.bytes)),
+    fixture: at('fixture.jsonl').length,
+    inventory: at('inventory.json').length,
+    ...Object.fromEntries(
+      Object.entries(grouped).map(([s, es]) => [
+        s,
+        es.reduce((n, e) => n + Buffer.byteLength(e.path) + e.bytes.length, 0),
+      ]),
+    ),
+  };
+  const S = Object.values(lengths).reduce((a, b) => a + b, 0);
+  collectionAdmit(S, collectionLimits.surfaces);
+  const F = entries.reduce((n, e) => n + e.bytes.length, 0);
+  collectionAdmit(F, collectionLimits.contents);
+  rendererWork(F, entries.length, canaries.length, S);
+  return {
+    tui: concat(rawBuffers, lengths.tui),
+    diagnostics: concat(
+      logs.map((e) => e.bytes),
+      lengths.diagnostics,
+    ),
+    fixture: at('fixture.jsonl'),
+    inventory: at('inventory.json'),
+    ...Object.fromEntries(
+      Object.entries(grouped).map(([s, es]) => [
+        s,
+        concat(
+          es.flatMap((e) => [Buffer.from(e.path), e.bytes]),
+          lengths[s],
+        ),
+      ]),
+    ),
+  };
+}
+
+// Bounded one-member ordinary TAR. No names, links or extensions are trusted.
+export function parseRendererArchive(bytes, name, remaining) {
+  collectionAdmit(remaining, collectionLimits.detail);
+  assert.ok(Buffer.isBuffer(bytes) && bytes.length <= remaining + 4096 && bytes.length >= 1536);
+  const h = bytes.subarray(0, 512);
+  assert.equal(h.subarray(0, 100).toString('latin1').replace(/\0.*$/s, ''), name);
+  assert.ok([0, 48].includes(h[156]));
+  assert.ok(
+    h.subarray(157, 257).every((b) => b === 0) && h.subarray(345, 500).every((b) => b === 0),
+  );
+  const octal = (field) => {
+    const s = field.toString('latin1').replace(/\0/g, '').trim();
+    assert.match(s, /^[0-7]{1,12}$/);
+    return BigInt('0o' + s);
+  };
+  const size = octal(h.subarray(124, 136));
+  inventoryAdmit(size, BigInt(remaining));
+  assert.equal(
+    octal(h.subarray(148, 156)),
+    BigInt(h.reduce((n, b, i) => n + (i >= 148 && i < 156 ? 32 : b), 0)),
+  );
+  const length = Number(size),
+    end = 512 + Math.ceil(length / 512) * 512;
+  assert.ok(bytes.length >= end + 1024 && bytes.subarray(512 + length).every((b) => b === 0));
+  return bytes.subarray(512, 512 + length);
+}
+
 // TEST ONLY. Metadata accounting is explicit serialized storage, not process RSS.
 export const inventoryLimits = Object.freeze({
   entries: 16384n,
@@ -154,6 +337,7 @@ export async function rendererMetadataInventory(
   io = { lstat, open, opendir, flags: constants },
   limits = inventoryLimits,
   clock = Date.now,
+  consume,
 ) {
   try {
     for (const key of Object.keys(inventoryLimits)) {
@@ -234,6 +418,13 @@ export async function rendererMetadataInventory(
           assert.equal(entries.has(path), false);
           // Decimal strings preserve every bigint bit in the charged internal
           // record. Neither this record nor identity/timestamps are exported.
+          inventoryAdmit(
+            retained +
+              6n * inventoryBytes(path) +
+              1024n +
+              before.slice(1).reduce((n, v) => n + BigInt(v.toString().length) * 2n, 0n),
+            limits.retained,
+          );
           const record = JSON.stringify({ surface, metadata: before }, (_, value) =>
             typeof value === 'bigint' ? value.toString() : value,
           );
@@ -247,6 +438,7 @@ export async function rendererMetadataInventory(
           }
           if (before[0] === 'directory') {
             let dir;
+            const childrenStart = queue.length;
             try {
               dir = await io.opendir(path, { bufferSize: 1, encoding: 'utf8' });
               check();
@@ -261,11 +453,15 @@ export async function rendererMetadataInventory(
                 );
                 // Pending queue entries count toward admission before another read.
                 inventoryAdmit(count + BigInt(queue.length) + 1n, limits.entries);
+                inventoryAdmit(inventoryBytes(path) + 1n + inventoryBytes(entry.name), limits.path);
                 enqueue(posix.join(path, entry.name), depth + 1n);
               }
             } finally {
               if (dir) await dir.close();
             }
+            // Preserve the existing depth-first directory enumeration order.
+            for (let a = childrenStart, b = queue.length - 1; a < b; a++, b--)
+              [queue[a], queue[b]] = [queue[b], queue[a]];
             same(metadata(await call(() => io.lstat(path, { bigint: true }))), before);
           } else {
             files++;
@@ -287,6 +483,13 @@ export async function rendererMetadataInventory(
       }
       if (pass) assert.equal(entries.size, passes[0].size);
       passes.push(entries);
+      if (pass === 0 && consume) {
+        // Private capture membership is charged before retention. Public inventory
+        // mode never supplies this callback and remains metadata-only.
+        for (const [path, e] of entries) if (e.metadata[0] === 'file') charge(path, 128n);
+        await consume(entries);
+        check();
+      }
     }
     const result = {
       complete: true,
@@ -397,6 +600,79 @@ export async function rendererMetadataInventory(
   }
 }
 const calibrationLabels = ['1 SYNTHETIC ALPHA', '2 SYNTHETIC BETA'];
+
+export async function rendererCollectFiles(
+  state,
+  roots,
+  rawBytes,
+  canaries,
+  endpoint,
+  io = { lstat, open, opendir, flags: constants, allocate: Buffer.alloc },
+  limits = inventoryLimits,
+  clock = Date.now,
+) {
+  const entries = [];
+  rendererCheckpoint(state, 'ENUMERATE_STATE', 'INCOMPLETE');
+  const result = await rendererMetadataInventory(
+    roots,
+    endpoint,
+    io,
+    limits,
+    clock,
+    async (membership) => {
+      let F = 0,
+        N = 0,
+        S = rawBytes,
+        logCount = 0;
+      for (const [path, e] of membership) {
+        if (e.metadata[0] !== 'file') continue;
+        const size = inventoryNumber(e.metadata[3]);
+        rendererSize(state, size, false, e.surface);
+        F += size;
+        N++;
+        rendererSize(state, F, true);
+        S += size + Buffer.byteLength(path);
+        if (/\.log(?:$|[.-])/.test(path)) {
+          S += size;
+          logCount++;
+        }
+        if (['fixture.jsonl', 'inventory.json'].some((n) => path === posix.join(roots.evidence, n)))
+          S += size;
+      }
+      rendererCheckpoint(state, 'BUILD_CAPTURE', 'OVERFLOW');
+      collectionAdmit(S, collectionLimits.surfaces);
+      rendererWork(F, N, canaries.length, S);
+      rendererCheckpoint(state, 'NO_DIAGNOSTICS', 'INCOMPLETE');
+      assert.ok(logCount > 0);
+      for (const name of [
+        'binding.json',
+        'observations.json',
+        'fixture.jsonl',
+        'inventory.json',
+        'transcript.ansi',
+        'progress.jsonl',
+      ])
+        assert.equal(membership.get(posix.join(roots.evidence, name))?.metadata[0], 'file');
+      let collectedBytes = 0;
+      for (const [path, e] of membership) {
+        if (e.metadata[0] !== 'file') continue;
+        const bytes = await rendererReadFile(
+          state,
+          path,
+          e.surface,
+          collectedBytes,
+          io,
+          e.metadata,
+        );
+        collectedBytes += bytes.length;
+        entries.push({ path, bytes });
+      }
+    },
+  );
+  assert.equal(result.complete, true, 'COLLECTION_INCOMPLETE');
+  state.reason = 'NONE';
+  return entries;
+}
 
 // Collection has no dependency on the cell/style parser being investigated.
 // The adapter sends normal UI input. It never invokes a fixture callback itself.
@@ -697,7 +973,7 @@ export function rendererSize(state, size, total = false, surface) {
   assert.ok(total ? surface === undefined : ['state', 'evidence'].includes(surface));
   if (!total && size > 16777216 && !Object.hasOwn(state, 'overflow'))
     state.overflow = { surface, bytes: size };
-  assert.ok(size <= 16777216);
+  assert.ok(size <= (total ? collectionLimits.contents : collectionLimits.file));
   state.reason = 'NONE';
 }
 // One admitted allocation, bounded positional reads, then identity/EOF rechecks.
@@ -708,6 +984,7 @@ export async function rendererReadFile(
   surface,
   used,
   io = { lstat, open, allocate: Buffer.alloc },
+  expected,
 ) {
   rendererSize(state, used, true);
   const snapshot = async (action) => {
@@ -726,11 +1003,17 @@ export async function rendererReadFile(
     return stat;
   };
   const before = await snapshot(() => io.lstat(path, { bigint: true }));
+  if (expected)
+    assert.deepEqual(
+      ['file', ...['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].map((k) => before[k])],
+      expected,
+    );
   const size = Number(before.size);
   rendererSize(state, size, false, surface);
   rendererSize(state, used + size, true);
+  const flags = io.flags ?? constants;
   const handle = await rendererStep(state, 'READ_FILE', 'IO', () =>
-    io.open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)),
+    io.open(path, flags.O_RDONLY | (flags.O_NOFOLLOW ?? 0) | (flags.O_NONBLOCK ?? 0)),
   );
   const unchanged = (stat) => {
     rendererCheckpoint(state, 'READ_FILE', 'INCOMPLETE');
@@ -802,6 +1085,12 @@ export function rendererScan(captures, canaries, complete, overflow) {
     canaries.length >= 2 && canaries.every((s) => typeof s === 'string' && s.length >= 32),
     'CANARY_SET',
   );
+  const S = rendererSurfaces.reduce((n, s) => {
+    assert.ok(Buffer.isBuffer(captures[s]), 'MISSING_SURFACE');
+    return n + captures[s].length;
+  }, 0);
+  collectionAdmit(S, collectionLimits.surfaces);
+  rendererWork(0, 0, canaries.length, S);
   for (const surface of rendererSurfaces) {
     assert.ok(Buffer.isBuffer(captures[surface]), 'MISSING_SURFACE');
     for (const canary of canaries)

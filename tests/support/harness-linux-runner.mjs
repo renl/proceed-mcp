@@ -18,11 +18,12 @@ import { randomUUID, createHash } from 'node:crypto';
 import { hostBudgets } from './harness-host-plan.mjs';
 import {
   rendererPayload,
-  assertRendererExport,
   safeRendererDiagnostic,
   parseInventoryArchive,
   incompleteInventory,
   inventoryLimits,
+  parseRendererArchive,
+  rendererTransferDetails,
 } from './harness-renderer-observation.mjs';
 import {
   retainProgress,
@@ -101,7 +102,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       timeout,
       maxBuffer,
       windowsHide: true,
-      ...(rendererInventory && args[0] === 'cp' ? { encoding: 'buffer' } : {}),
+      ...(renderer && args[0] === 'cp' ? { encoding: 'buffer' } : {}),
     });
   };
   for (const name of ['plugin', 'client']) {
@@ -206,6 +207,8 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
     }
   };
   let created = false;
+  let rendererDiagnosticAttempted = false,
+    retainedRendererDiagnostic;
   let failure;
   let cleanup = 'UNRUN';
   try {
@@ -363,41 +366,49 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       assert.equal(waited.stdout.trim(), '0', 'INVENTORY_INCOMPLETE');
       assert.equal(inventory.complete, true, 'INVENTORY_INCOMPLETE');
     } else if (renderer) {
-      await command([
-        'cp',
-        `${name}:/run/proceed/evidence/renderer-diagnostic.json`,
-        join(run, 'renderer-diagnostic.private'),
-      ]);
-      try {
-        const diagnostic = safeRendererDiagnostic(
-          JSON.parse(await readFile(join(run, 'renderer-diagnostic.private'), 'utf8')),
+      {
+        rendererDiagnosticAttempted = true;
+        const diagnosticArchive = await command(
+          ['cp', `${name}:/run/proceed/evidence/renderer-diagnostic.json`, '-'],
+          3000,
+          false,
+          8192 + 4096,
         );
+        const diagnostic = safeRendererDiagnostic(
+          JSON.parse(
+            parseRendererArchive(
+              diagnosticArchive.stdout,
+              'renderer-diagnostic.json',
+              8192,
+            ).toString('utf8'),
+          ),
+        );
+        retainedRendererDiagnostic = diagnostic;
         await writeFile(join(run, 'renderer-diagnostic.json'), JSON.stringify(diagnostic));
         // Calibration failure does not bypass or skip full capture scanning.
-        await command([
-          'cp',
-          `${name}:/run/proceed/evidence/scan-pass.json`,
-          join(run, 'scan-pass.json'),
-        ]);
-        assertRendererExport(JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')));
-        for (const file of [
-          'binding.json',
-          'observations.json',
-          'fixture.jsonl',
-          'inventory.json',
-          'transcript.ansi',
-          'diagnostics.log',
-          'progress.jsonl',
-        ])
-          await command(['cp', `${name}:/run/proceed/evidence/${file}`, evidenceDestination(file)]);
+        const details = await rendererTransferDetails(async (file, maxBuffer) => {
+          // Cap transport BEFORE receiving or parsing. No filesystem docker cp.
+          return (
+            await command(
+              ['cp', `${name}:/run/proceed/evidence/${file}`, '-'],
+              3000,
+              false,
+              maxBuffer,
+            )
+          ).stdout;
+        });
+        // Retain nothing detailed until all eight members pass aggregate admission.
+        for (const [file, bytes] of details)
+          await writeFile(
+            file === 'scan-pass.json' ? join(run, file) : evidenceDestination(file),
+            bytes,
+          );
         assert.equal(waited.stdout.trim(), '0', 'RENDERER_CONTROL_FAILURE');
         assert.equal(diagnostic.status, 'PASS');
         if (rendererDiagnostic) {
           assert.equal(diagnostic.diagnostic.capture, 'DIAGNOSTIC_CAPTURE_PASS');
           assert.equal(diagnostic.diagnostic.profile, 'UNPROVEN');
         }
-      } finally {
-        await rm(join(run, 'renderer-diagnostic.private'), { force: true });
       }
     } else if (composition) {
       // Fixed phase/classification is not raw capture. Detailed assertion export
@@ -507,22 +518,27 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         hostExit: false,
       };
       try {
-        await command(
-          [
-            'cp',
-            `${name}:/run/proceed/evidence/renderer-diagnostic.json`,
-            join(run, 'renderer-diagnostic.private'),
-          ],
-          3000,
-          true,
-        );
-        diagnostic = safeRendererDiagnostic(
-          JSON.parse(await readFile(join(run, 'renderer-diagnostic.private'), 'utf8')),
-        );
+        if (rendererDiagnosticAttempted) {
+          assert.ok(retainedRendererDiagnostic);
+          diagnostic = retainedRendererDiagnostic;
+        } else {
+          rendererDiagnosticAttempted = true;
+          const archive = await command(
+            ['cp', `${name}:/run/proceed/evidence/renderer-diagnostic.json`, '-'],
+            3000,
+            true,
+            8192 + 4096,
+          );
+          diagnostic = safeRendererDiagnostic(
+            JSON.parse(
+              parseRendererArchive(archive.stdout, 'renderer-diagnostic.json', 8192).toString(
+                'utf8',
+              ),
+            ),
+          );
+        }
       } catch {
         /* fixed unknowns, not fabricated counts */
-      } finally {
-        await rm(join(run, 'renderer-diagnostic.private'), { force: true });
       }
       await writeFile(join(run, 'renderer-diagnostic.json'), JSON.stringify(diagnostic));
     }

@@ -1,5 +1,27 @@
 # Tasks
 
+## Gap RENDERER-MEASURED-COLLECTION-BUDGET - correction 1
+
+**Approved brief, recorded before implementation:** user-authorized static preparation and tests on inventory outcome `4c74cf9bffa0f07cf67593e6098e1e35292625b0`, code `9d5a933ba15827e460ca38faed8c0d8e7adf7363`. Entry HEAD matches the inventory outcome, index empty, only README/status overlays dirty and preserved unselected. Founder-visible success remains a genuine decision on the exact Proceed request. This is enabling diagnostic/proxy work, not actual collection, privacy, renderer, profile, product or release proof.
+
+**Scope:** existing renderer inner/observation and Linux runner support, affected existing tests and this tasks file only. Keep the reviewed whole-buffer reader, exact file identity, remaining-budget admission, bounded reads, EOF probe and path rechecks. Integrate the existing bounded two-pass metadata traversal with private capture membership and required logs. Inventory mode stays metadata-only with unchanged limits. No production, fixture behavior, spec/design, dependency, image, logging, README/status/archive or unrelated changes. No runtime/preflight, container/service, network/provider/model/Telegram/credential, unscanned capture inspection, external filesystem/home/global config/recovery, push/PR/archive/merge/deploy/publication or nested delegation.
+
+**Approved limits:** per-file 16777216 bytes unchanged, aggregate source contents 25165824, combined actual six logical surfaces 33554432, logical content processing 201326592 byte-visits, detailed export including the actual serialized scan marker 262144 bytes. Work is `W = 2F + N + (C + 2)S`, with actual source bytes F, one-byte EOF probes N, actual canary count C and combined actual six-surface bytes S. Account before costly allocations/operations. This is logical byte accounting, not a regex CPU, RSS or completion guarantee. Preserve every path, complete content, ordering, duplicated logs, hashes, UTF-8, current credential regex and both canaries. Full scans are mandatory. Refuse excess without truncation, exclusions or partial-detail fallback. Admit actual seven detail files plus marker and outer transfer/retention before copy/parsing, never unrestricted docker cp.
+
+**Metadata and lifecycle:** reuse two passes, at most 16384 entries/pass, 32768 visits total, 16382 regular files, depth 64, path 4096 UTF-8 bytes, retained paths 4194304 and accounted metadata 8388608 including temporary serialization. Preserve stream 1048576, outer 310000 ms, aggregate 300000, reserve 45000, ready 60000, shared interaction 15000 and inner 210000/240000 endpoints, pinned isolation and existing closed gates. Legacy diagnostics, decoder UNPROVEN, contradiction FAIL and profile prohibition remain.
+
+**Completion criteria and checks:** deterministic exact/above budgets, pre-allocation and pre-transfer admission, actual surfaces/marker, path metadata/membership/late leaks, complete secret coverage, regex/UTF-8/hash/order fidelity and no detail on refusal. Run affected native/static, format, syntax, strict structural and whitespace checks only. Freeze all nine execution inputs and commit only selected owned code/evidence, with final tasks-only commit identified. Independent combined test-only/boundary/decomposition review must pass before coordination separately dispatches exactly one capture-only run bounded to 310 seconds, no retry or follow-on qualification. That conditional authorization remains unconsumed. No re-ask absent material scope/risk change.
+
+| Check stage                            | State, owner and trigger                                                                                                       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Static preparation                     | IN PROGRESS, test engineering, this correction.                                                                                |
+| Independent review                     | UNRUN, coordination routes frozen candidate.                                                                                   |
+| Conditional capture                    | UNRUN, coordination dispatches only after review PASS.                                                                         |
+| Pre-merge / pre-exposure product proof | UNPROVEN, existing renderer/product gaps remain.                                                                               |
+| Post-deploy / deferred                 | No deploy authorized. Coordination owns disposition of collection refusal or missing product proof after this bounded package. |
+
+**Lifecycle:** path `.worktree/add-harness-approval-channel`, branch/change `add-harness-approval-channel`, owner test engineering, retained, next action static preparation then independent review, cleanup pending verified landing. No resources started.
+
 ## Size-only inventory - single authorized run PASS, no follow-on
 
 ### Actual-host inventory outcome

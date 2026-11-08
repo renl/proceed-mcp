@@ -30,6 +30,18 @@ import {
   parseRendererInventory,
   parseInventoryArchive,
   inventoryAdmit,
+  collectionLimits,
+  collectionAdmit,
+  rendererWork,
+  rendererBuildCapture,
+  rendererDetailAdmission,
+  rendererJsonBytes,
+  rendererDetailFiles,
+  rendererAttachFiles,
+  rendererTransferDetails,
+  parseRendererArchive,
+  rendererCollectFiles,
+  digest,
 } from './support/harness-renderer-observation.mjs';
 
 const metadataRoots = { state: '/run/proceed/state', evidence: '/run/proceed/evidence' };
@@ -47,6 +59,285 @@ const requiredInventoryNames = [
   'transcript.ansi',
   'progress.jsonl',
 ];
+
+test('measured collection uses exact independent ceilings and actual canary work', () => {
+  assert.deepEqual(collectionLimits, {
+    file: 16777216,
+    contents: 25165824,
+    surfaces: 33554432,
+    work: 201326592,
+    detail: 262144,
+  });
+  for (const limit of Object.values(collectionLimits)) {
+    collectionAdmit(limit, limit);
+    for (const value of [limit + 1, -1, NaN, Infinity, '1', 0.5, Number.MAX_SAFE_INTEGER + 1])
+      assert.throws(() => collectionAdmit(value, limit));
+  }
+  assert.equal(rendererWork(0, 0, 4, 33554432), 201326592);
+  assert.throws(() => rendererWork(0, 1, 4, 33554432));
+  assert.equal(rendererWork(18977624, 15, 2, 19050075), 114155563);
+  assert.throws(() => rendererWork(0, 0, 5, 33554432));
+});
+const collectionCanaries = ['a'.repeat(64), 'b'.repeat(64)];
+function captureEntries(log = Buffer.from('ordinary\n')) {
+  return [
+    { path: metadataRoots.state + '/unicode-\u00e9', bytes: Buffer.from('\u00e9\ufffd\n') },
+    ...requiredInventoryNames.map((name) => ({
+      path: metadataRoots.evidence + '/' + name,
+      bytes: Buffer.from(
+        name === 'fixture.jsonl' ? 'fixture' : name === 'inventory.json' ? '{}' : '',
+      ),
+    })),
+    { path: metadataRoots.state + '/host.log', bytes: log },
+  ];
+}
+test('actual six surfaces preserve complete paths, UTF-8, log duplication, order and hashes', () => {
+  const entries = captureEntries(),
+    raw = [Buffer.from('one'), Buffer.from('two')];
+  const capture = rendererBuildCapture(entries, metadataRoots, raw, collectionCanaries);
+  assert.deepEqual(capture.tui, Buffer.from('onetwo'));
+  assert.deepEqual(capture.diagnostics, entries.at(-1).bytes);
+  for (const [surface, root] of Object.entries(metadataRoots))
+    assert.deepEqual(
+      capture[surface],
+      Buffer.concat(
+        entries
+          .filter((e) => e.path.startsWith(root + '/'))
+          .flatMap((e) => [Buffer.from(e.path), e.bytes]),
+      ),
+    );
+  const scan = rendererScan(capture, collectionCanaries, true, false);
+  for (const s of rendererSurfaces) assert.equal(scan.hashes[s], digest(capture[s]));
+  rendererAttachFiles(scan, entries);
+  assert.deepEqual(
+    scan.files,
+    entries.map((e) => ({ path: e.path, sha256: digest(e.bytes), bytes: e.bytes.length })),
+  );
+});
+test('surface and work excess refuse before any concatenation including actual path/log duplication', () => {
+  const bytes = Buffer.alloc(16777216 - 2048, 120),
+    entries = captureEntries(bytes);
+  const base = rendererBuildCapture(entries, metadataRoots, [], collectionCanaries);
+  const used = Object.values(base).reduce((n, b) => n + b.length, 0);
+  const raw = Buffer.alloc(collectionLimits.surfaces - used, 120);
+  let calls = 0;
+  const concat = (...args) => {
+    calls++;
+    return Buffer.concat(...args);
+  };
+  const exact = rendererBuildCapture(entries, metadataRoots, [raw], collectionCanaries, concat);
+  assert.equal(
+    Object.values(exact).reduce((n, b) => n + b.length, 0),
+    collectionLimits.surfaces,
+  );
+  assert.equal(calls, 4);
+  for (const [buffers, canaries] of [
+    [[raw, Buffer.from('x')], collectionCanaries],
+    [[raw], [...collectionCanaries, 'c'.repeat(64), 'd'.repeat(64)]],
+  ]) {
+    calls = 0;
+    assert.throws(() => rendererBuildCapture(entries, metadataRoots, buffers, canaries, concat));
+    assert.equal(calls, 0);
+  }
+});
+test('full-buffer scans catch late canaries and unchanged credential regex on every surface and in paths', () => {
+  for (const s of rendererSurfaces)
+    for (const secret of [
+      ...collectionCanaries,
+      'cap_' + 'f'.repeat(64),
+      'sk-' + 'Q'.repeat(20),
+      'ghp_' + 'Z'.repeat(20),
+      'Bearer ' + 'A'.repeat(20),
+      '-----BEGIN RSA PRIVATE KEY-----',
+    ]) {
+      const capture = Object.fromEntries(
+        rendererSurfaces.map((name) => [
+          name,
+          Buffer.from(name === s ? 'x'.repeat(65535) + secret : '\u00e9 ordinary'),
+        ]),
+      );
+      assert.throws(() => rendererScan(capture, collectionCanaries, true, false), /SECRET/);
+    }
+  const entries = captureEntries();
+  entries[0].path += collectionCanaries[1];
+  assert.throws(
+    () =>
+      rendererScan(
+        rendererBuildCapture(entries, metadataRoots, [], collectionCanaries),
+        collectionCanaries,
+        true,
+        false,
+      ),
+    /SECRET/,
+  );
+  const splitUtf8 = Buffer.concat([
+    Buffer.from([0xc3]),
+    Buffer.from([0xa9]),
+    Buffer.from('Bearer ' + 'A'.repeat(20)),
+  ]);
+  const capture = Object.fromEntries(rendererSurfaces.map((s) => [s, splitUtf8]));
+  assert.throws(() => rendererScan(capture, collectionCanaries, true, false), /SECRET_PATTERN/);
+});
+test('exact actual scan marker and seven detail files admit together, never omit the marker', () => {
+  const capture = rendererBuildCapture(captureEntries(), metadataRoots, [], collectionCanaries);
+  const scan = rendererAttachFiles(
+    rendererScan(capture, collectionCanaries, true, false),
+    captureEntries(),
+  );
+  for (const text of [
+    '\u00e9\ud83d\ude00',
+    '\ud800\udc00\ud800\udc01',
+    '\ud800',
+    '\udc00',
+    '\"\\\n\t\u0000',
+  ])
+    assert.equal(rendererJsonBytes({ text }), Buffer.byteLength(JSON.stringify({ text })));
+  const marker = Buffer.byteLength(JSON.stringify(scan));
+  assert.equal(rendererJsonBytes(scan), marker);
+  const lengths = Object.fromEntries(
+    rendererDetailFiles.map((name, i) => [name, i ? 0 : collectionLimits.detail - marker]),
+  );
+  assert.equal(rendererDetailAdmission(scan, lengths), collectionLimits.detail);
+  lengths[rendererDetailFiles[0]]++;
+  assert.throws(() => rendererDetailAdmission(scan, lengths));
+  assert.throws(() =>
+    rendererAttachFiles({ ...scan, files: undefined }, [
+      { path: 'x'.repeat(collectionLimits.detail), bytes: Buffer.alloc(0) },
+    ]),
+  );
+});
+test('outer transfer caps each TAR before parsing, counts actual marker bytes and retains no partial result', async () => {
+  const scan = rendererScan(
+    Object.fromEntries(rendererSurfaces.map((s) => [s, Buffer.alloc(0)])),
+    collectionCanaries,
+    true,
+    false,
+  );
+  // Whitespace is actual transfer/export content, not reserialized JSON length.
+  const marker = Buffer.from(JSON.stringify(scan) + ' '.repeat(17));
+  for (const excess of [0, 1]) {
+    let used = 0,
+      calls = 0,
+      published = false;
+    const action = rendererTransferDetails(async (name, cap) => {
+      assert.equal(cap, collectionLimits.detail - used + 4096);
+      calls++;
+      const bytes =
+        name === 'scan-pass.json'
+          ? marker
+          : Buffer.alloc(name === 'progress.jsonl' ? collectionLimits.detail - used + excess : 0);
+      used += bytes.length;
+      return inventoryArchive(bytes, bytes.length, name);
+    }).then((details) => {
+      published = true;
+      return details;
+    });
+    if (excess) {
+      await assert.rejects(action);
+      assert.equal(published, false);
+    } else {
+      const details = await action;
+      assert.equal(
+        [...details.values()].reduce((n, b) => n + b.length, 0),
+        collectionLimits.detail,
+      );
+    }
+    assert.equal(calls, 8);
+  }
+  for (const index of [0, 124, 148, 156, 157, 345]) {
+    const archive = inventoryArchive(marker, marker.length, 'scan-pass.json');
+    archive[index] = 120;
+    assert.throws(() => parseRendererArchive(archive, 'scan-pass.json', collectionLimits.detail));
+  }
+  let calls = 0;
+  await assert.rejects(
+    rendererTransferDetails(async (name) => {
+      calls++;
+      return inventoryArchive(Buffer.from('{'), 1, name);
+    }),
+  );
+  assert.equal(calls, 1, 'no detail transfer follows refused marker');
+});
+test('private collection shares bounded traversal, exact identity, complete membership and closes on late changes', async () => {
+  const f = metadataFixture(() => {}, true);
+  f.nodes.set(metadataRoots.state + '/first', { size: 0n });
+  f.nodes.set(metadataRoots.state + '/nested', { directory: true, size: 0n });
+  f.nodes.set(metadataRoots.state + '/nested/child', { size: 0n });
+  f.nodes.set(metadataRoots.state + '/last', { size: 0n });
+  const entries = await f.collect();
+  assert.deepEqual(
+    entries.map((e) => e.path),
+    ['first', 'nested/child', 'last']
+      .map((name) => metadataRoots.state + '/' + name)
+      .concat(
+        [...f.nodes.keys()].filter(
+          (p) => p.startsWith(metadataRoots.evidence + '/') && !f.nodes.get(p).directory,
+        ),
+      ),
+  );
+  assert.equal(
+    f.reads,
+    17,
+    'each complete nonempty file plus one EOF probe, including empty files',
+  );
+  assert.ok(
+    entries.every((e) => e.bytes.equals(Buffer.alloc(Number(f.nodes.get(e.path).size), 120))),
+  );
+  for (const kind of ['identity', 'membership', 'directory', 'late-leak']) {
+    let changed = false,
+      bindingOpens = 0;
+    const bad = metadataFixture((op, path, nodes, pass) => {
+      if (changed) return;
+      if (op === 'contentread' && kind !== 'identity') {
+        changed = true;
+        if (kind === 'membership' || kind === 'late-leak')
+          nodes.set(metadataRoots.state + '/new.log', {
+            size: 64n,
+            bytes: Buffer.from(collectionCanaries[0]),
+          });
+        else
+          nodes.get(metadataRoots.evidence).metadata = { mtimeNs: metadataIdentity.mtimeNs + 1n };
+      } else if (
+        kind === 'identity' &&
+        op === 'open' &&
+        path.endsWith('binding.json') &&
+        ++bindingOpens === 2
+      ) {
+        changed = true;
+        nodes.get(path).metadata = { ino: metadataIdentity.ino + 1n };
+      }
+    }, true);
+    await assert.rejects(bad.collect(), undefined, kind);
+  }
+  const io = collectionIO(1);
+  await assert.rejects(
+    rendererReadFile({}, 'synthetic', 'state', 0, io, ['file', 1n, 999n, 1n, 3n, 4n]),
+  );
+  assert.deepEqual(io.calls.allocations, []);
+});
+test('private collection refuses metadata, source, surface and dynamic-work excess before content allocation', async () => {
+  for (const kind of ['source', 'file', 'surface', 'work', 'path', 'entries', 'required', 'logs']) {
+    const f = metadataFixture(() => {}, true);
+    if (kind === 'source') {
+      f.nodes.set(metadataRoots.state + '/one', { size: 16777216n });
+      f.nodes.set(metadataRoots.state + '/two', { size: 16777216n });
+    }
+    if (kind === 'file') f.nodes.set(metadataRoots.state + '/one', { size: 16777217n });
+    if (kind === 'surface' || kind === 'work')
+      f.nodes.set(metadataRoots.state + '/host.log', { size: 16777216n });
+    if (kind === 'path') f.nodes.set(metadataRoots.state + '/' + 'x'.repeat(4096), { size: 0n });
+    if (kind === 'required') f.nodes.delete(metadataRoots.evidence + '/binding.json');
+    if (kind === 'logs') f.nodes.delete(metadataRoots.evidence + '/host.log');
+    await assert.rejects(
+      f.collect(
+        kind === 'work' ? Array(8).fill('c'.repeat(64)) : collectionCanaries,
+        0,
+        kind === 'entries' ? { ...inventoryLimits, entries: 2n } : inventoryLimits,
+      ),
+    );
+    assert.equal(f.reads, 0);
+  }
+});
 
 test('shared admission invariant tests every approved bigint ceiling exactly and above without conversion', () => {
   for (const ceiling of [
@@ -74,7 +365,7 @@ test('shared admission invariant tests every approved bigint ceiling exactly and
   assert.equal(inventoryLimits.milliseconds, 30000);
   assert.equal(inventoryLimits.output, 8192);
 });
-function metadataFixture(hook = () => {}) {
+function metadataFixture(hook = () => {}, content = false) {
   const nodes = new Map(
     Object.values(metadataRoots).map((p) => [p, { directory: true, size: 0n }]),
   );
@@ -108,6 +399,7 @@ function metadataFixture(hook = () => {}) {
     closed++;
   };
   const io = {
+    allocate: Buffer.alloc,
     flags: { O_RDONLY: 0, O_NOFOLLOW: 131072, O_NONBLOCK: 2048 },
     async lstat(path, options) {
       assert.deepEqual(options, { bigint: true });
@@ -125,8 +417,16 @@ function metadataFixture(hook = () => {}) {
           hook('fstat', path, nodes, pass);
           return snapshot(path);
         },
-        read() {
+        read(buffer, offset, length, position) {
           reads++;
+          if (content) {
+            hook('contentread', path, nodes, pass);
+            const size = Number(nodes.get(path).size);
+            const bytesRead = Math.min(length, Math.max(0, size - position));
+            const bytes = nodes.get(path).bytes ?? Buffer.alloc(size, 120);
+            bytes.copy(buffer, offset, position, position + bytesRead);
+            return { bytesRead };
+          }
           throw new Error('CONTENT_READ_FORBIDDEN');
         },
         close,
@@ -156,6 +456,30 @@ function metadataFixture(hook = () => {}) {
   return {
     nodes,
     io,
+    async collect(
+      canaries = ['a'.repeat(64), 'b'.repeat(64)],
+      rawBytes = 0,
+      limits = inventoryLimits,
+    ) {
+      try {
+        return await rendererCollectFiles(
+          {},
+          metadataRoots,
+          rawBytes,
+          canaries,
+          30000,
+          io,
+          limits,
+          () => 0,
+        );
+      } finally {
+        assert.equal(active, 0);
+        assert.equal(opened, closed);
+      }
+    },
+    get reads() {
+      return reads;
+    },
     async run(limits = inventoryLimits, clock = () => 0, endpoint = 30000) {
       const result = await rendererMetadataInventory(metadataRoots, endpoint, io, limits, clock);
       assert.equal(active, 0);
@@ -492,9 +816,9 @@ test('inventory closed schema rejects accessors, hooks, unknown fields and unsaf
   assert.deepEqual(parseRendererInventory(Buffer.from(JSON.stringify(good).padEnd(8192))), good);
 });
 
-function inventoryArchive(payload, declared = payload.length) {
+function inventoryArchive(payload, declared = payload.length, name = 'renderer-inventory.json') {
   const header = Buffer.alloc(512);
-  header.write('renderer-inventory.json');
+  header.write(name);
   header.write(declared.toString(8).padStart(11, '0') + '\0', 124);
   header[156] = 48;
   header.fill(32, 148, 156);
@@ -537,13 +861,16 @@ test('inventory runtime branch has no scan/detail/profile fallback and skips dat
   assert.match(inner, /inventoryMode\s*\?\s*\[\]\s*:/);
   const inventoryBranch = inner.slice(
     inner.indexOf('if (inventoryMode) {\n      // No progress'),
-    inner.indexOf('const statePaths ='),
+    inner.indexOf('    } else {\n      const collectionEnd'),
   );
   assert.match(inventoryBranch, /rendererMetadataInventory/);
   assert.doesNotMatch(inventoryBranch, /readFile|rendererScan|digest|progress\(/);
   const outerBranch = runner.slice(
     runner.indexOf('if (rendererInventory) {\n      let inventory'),
-    runner.indexOf('} else if (renderer) {\n      await command'),
+    runner.indexOf(
+      '} else if (renderer) {',
+      runner.indexOf('if (rendererInventory) {\n      let inventory'),
+    ),
   );
   assert.match(outerBranch, /parseInventoryArchive/);
   assert.doesNotMatch(
@@ -771,22 +1098,12 @@ test('maintained diagnostic wiring keeps qualification, scan/export and lifecycl
   assert.match(inner, /hostExit = exited && closed && !!hostPid/);
   assert.match(inner, /productProfile: null/);
   assert.ok(inner.indexOf("'SCAN', overflow") < inner.indexOf("'EXPORT_DIAGNOSTICS'"));
-  assert.match(inner, /\['state', statePaths\],[\s\S]*\['evidence', evidencePaths\]/);
-  assert.match(inner, /rendererReadFile\(collection, path, surface, collectedBytes\)/);
-  assert.ok(inner.indexOf('rendererReadFile(collection, path') < inner.indexOf('entries.push'));
-  assert.match(inner, /collectedBytes \+= bytes.length/);
+  assert.match(inner, /rendererCollectFiles\(\s*collection,\s*\{ state: root, evidence \}/);
+  assert.match(inner, /rendererBuildCapture\(\s*entries,\s*\{ state: root, evidence \}/);
   assert.doesNotMatch(inner, /readFile\(path\)/);
-  for (const root of ['root', 'evidence'])
-    assert.ok(inner.includes(`.filter((e) => e.path.startsWith(${root} + '/'))`));
-  assert.equal(
-    (inner.match(/flatMap\(\(e\) => \[Buffer.from\(e.path\), e.bytes\]\)/g) ?? []).length,
-    2,
-  );
   assert.ok(
-    runner.indexOf(
-      'assertRendererExport(',
-      runner.indexOf('if (renderer) {', runner.indexOf("await progress('evidence'")),
-    ) < runner.indexOf("'binding.json'"),
+    runner.indexOf('const details = await rendererTransferDetails') <
+      runner.indexOf('for (const [file, bytes] of details)'),
   );
 });
 // Source-buffer model only. The marker remains on current A after selection moves.
@@ -987,9 +1304,9 @@ test('synthetic renderer emission preserves RGB/default/bold and never installs 
 });
 test('collection size, missing logs and stream overflow retain distinct closed facts', () => {
   const total = {};
-  rendererSize(total, 16777216, true);
+  rendererSize(total, 25165824, true);
   assert.deepEqual(total, { stage: 'TOTAL_SIZE', reason: 'NONE' });
-  assert.throws(() => rendererSize(total, 16777217, true));
+  assert.throws(() => rendererSize(total, 25165825, true));
   assert.deepEqual(total, { stage: 'TOTAL_SIZE', reason: 'OVERFLOW' });
   const state = {};
   assert.throws(() => rendererDiagnostics(state, []));
@@ -1110,11 +1427,11 @@ test('bounded collection admits exact/zero files and cumulative remainder before
   const first = collectionIO(12846400);
   const retained = await rendererReadFile({}, 'synthetic', 'state', 0, first);
   assert.equal(retained.length, 12846400);
-  for (const size of [3930816, 3930817]) {
+  for (const size of [12319424, 12319425]) {
     const io = collectionIO(size),
       state = {};
     const action = rendererReadFile(state, 'synthetic', 'evidence', retained.length, io);
-    if (size === 3930816) assert.equal((await action).length, size);
+    if (size === 12319424) assert.equal((await action).length, size);
     else {
       await assert.rejects(action);
       assert.deepEqual(state, { stage: 'TOTAL_SIZE', reason: 'OVERFLOW' });
@@ -1157,7 +1474,7 @@ test('bounded collection refuses unsafe metadata, symlinks and overflow before o
     assert.deepEqual(io.calls.allocations, []);
     assert.equal(io.calls.opens, 0);
   }
-  for (const used of [-1, NaN, Number.MAX_SAFE_INTEGER + 1, 16777217]) {
+  for (const used of [-1, NaN, Number.MAX_SAFE_INTEGER + 1, 25165825]) {
     const io = collectionIO(1);
     await assert.rejects(rendererReadFile({}, 'synthetic', 'state', used, io));
     assert.equal(io.calls.opens, 0);

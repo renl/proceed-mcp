@@ -24,8 +24,6 @@ import {
   assertRendererStyles,
   safeRendererDiagnostic,
   rendererStyleFacts,
-  rendererSize,
-  rendererReadFile,
   rendererDiagnostics,
   rendererCaptureCheck,
   assertRendererCursor,
@@ -34,6 +32,11 @@ import {
   rendererMetadataInventory,
   incompleteInventory,
   encodeRendererInventory,
+  rendererCollectFiles,
+  rendererBuildCapture,
+  rendererDetailAdmission,
+  rendererDetailFiles,
+  rendererAttachFiles,
 } from './harness-renderer-observation.mjs';
 
 const started = Date.now(),
@@ -454,57 +457,43 @@ try {
         clearTimeout(watchdog);
       }
     } else {
-      const statePaths = await rendererStep(collection, 'ENUMERATE_STATE', 'IO', () =>
-          files(root, collection),
-        ),
-        evidencePaths = await rendererStep(collection, 'ENUMERATE_EVIDENCE', 'IO', () =>
-          files(evidence, collection),
+      const collectionEnd = Math.min(end, Date.now() + 30000);
+      const watchdog = setTimeout(() => process.exit(1), Math.max(0, collectionEnd - Date.now()));
+      let entries;
+      try {
+        entries = await rendererCollectFiles(
+          collection,
+          { state: root, evidence },
+          rawBytes,
+          canaries,
+          collectionEnd,
         );
-      const entries = [];
-      let collectedBytes = 0;
-      for (const [surface, paths] of [
-        ['state', statePaths],
-        ['evidence', evidencePaths],
-      ]) {
-        for (const path of paths) {
-          const bytes = await rendererReadFile(collection, path, surface, collectedBytes);
-          collectedBytes += bytes.length;
-          entries.push({ path, bytes });
-        }
+      } finally {
+        clearTimeout(watchdog);
       }
-      rendererSize(
-        collection,
-        entries.reduce((n, e) => n + e.bytes.length, 0),
-        true,
-      );
       const at = (p) => entries.find((e) => e.path === join(evidence, p))?.bytes;
       const diagnostics = rendererDiagnostics(collection, entries);
       rendererCheckpoint(collection, 'BUILD_CAPTURE', 'INCOMPLETE');
-      const capture = {
-        tui: Buffer.concat(rawBuffers),
-        diagnostics: Buffer.concat(diagnostics.map((e) => e.bytes)),
-        fixture: at('fixture.jsonl'),
-        inventory: at('inventory.json'),
-        state: Buffer.concat(
-          entries
-            .filter((e) => e.path.startsWith(root + '/'))
-            .flatMap((e) => [Buffer.from(e.path), e.bytes]),
-        ),
-        evidence: Buffer.concat(
-          entries
-            .filter((e) => e.path.startsWith(evidence + '/'))
-            .flatMap((e) => [Buffer.from(e.path), e.bytes]),
-        ),
-      };
+      const capture = rendererBuildCapture(
+        entries,
+        { state: root, evidence },
+        rawBuffers,
+        canaries,
+      );
       scanReason = 'SCAN_REFUSED';
       const scan = await rendererStep(collection, 'SCAN', overflow ? 'OVERFLOW' : 'REFUSED', () =>
         rendererScan(capture, canaries, hostExit && diagnostics.length > 0, overflow),
       );
-      scan.files = entries.map((e) => ({
-        path: e.path,
-        sha256: digest(e.bytes),
-        bytes: e.bytes.length,
-      }));
+      rendererAttachFiles(scan, entries);
+      rendererDetailAdmission(
+        scan,
+        Object.fromEntries(
+          rendererDetailFiles.map((name) => [
+            name,
+            name === 'diagnostics.log' ? capture.diagnostics.length : at(name)?.length,
+          ]),
+        ),
+      );
       await rendererStep(collection, 'EXPORT_DIAGNOSTICS', 'IO', () =>
         writeFile(join(evidence, 'diagnostics.log'), capture.diagnostics),
       );
