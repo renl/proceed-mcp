@@ -1,5 +1,32 @@
 # Tasks
 
+## PRODUCT-PICKER-DISMISSAL-EXIT-HANDOFF - correction 2
+
+Independent static review FAILED correction 1: the entry clock check preceded live reads, transcript copying, hashing and decoding. Synchronous execution prevents event interleaving, not elapsed time. Entry HEAD `8588b07bffab0d7e4a72db7177496b3e8920d1ac`, executable prerequisite `5d73c6a7104671a32c6bfee40b94d3472940cd41`. One live inspection confirmed the change branch, empty index and only README/status overlays dirty. Both remain untouched and unselected.
+
+Correction criteria: after successful final dismissal validation, compare the injected monotonic clock strictly against the original fixed `pickerEnd` immediately before the sole owned exit callback. No await, repeated observation, hash/decode, renewed budget or timeout extension may follow admission. The callback retains only bounded milestone/key accounting and the one Ctrl+C write. Exact-deadline or late validation sends zero keys and records no EXIT_KEY. Existing bounded failure termination remains unchanged. Preserve every fresh-frame, geometry, generation, identity, prefix and exact host comparison constraint. No toast normalization or host comparison relaxation is authorized.
+
+The existing navigation suite executes the actual composition snapshot closure, actual dismissal validator and actual owned-exit closure with memory-only IO. Its injected clock starts before the deadline, then a synthetic validator operand advances it after hash/decode. Before-cutoff validation permits one Ctrl+C and rejects duplication. Exact-cutoff and late validation refuse with zero writes and no EXIT_KEY milestone. These are native deterministic proxies, not physical key receipt, rendered product or cleanup proof. Wrapper ENTRY/RETURN, marker timing and the 10000/2000 ms failure settlement remain unchanged.
+
+Review scope: `tests/support/harness-navigation-observation.mjs`, `tests/support/harness-composition-inner.mjs`, `tests/harness-navigation-observation.test.mjs` and this section. Only these paths are selected. Source criteria and prior static-observer correction constraints remain unchanged. Coordination owns focused independent review and gap disposition, not self-acceptance. No new decomposition or contract is introduced. The existing order-sensitive review trigger remains applicable to this correction.
+
+Final native Windows Node `v26.13.0`: 32/32 PASS, zero failures/skips/cancellations, exit 0 within 60000 ms. Three syntax checks, scoped Prettier write/check, selected whitespace and telemetry-disabled strict OpenSpec validation PASS within 30000 ms per command. No failed native assertion occurred. One read-only search used a nonexistent Linux runner filename, then repository glob resolved the maintained path. No runtime entrypoint, direct/indirect preflight or broader suite ran.
+
+Exact run sequence: `node node_modules/prettier/bin/prettier.cjs --ignore-path .gitignore --write` on the three review code/test paths and this tasks file, `node --check` on the three `.mjs` paths, `node --test tests/harness-navigation-observation.test.mjs tests/harness-composition-preparation.test.mjs`, then the same scoped Prettier `--check`, selected `git diff --check` and `OPENSPEC_TELEMETRY=0 openspec validate add-harness-approval-channel --strict`. The unchanged composition-preparation suite checks wrapper timing and current source wiring, not product runtime. Other correction-1 controls are unchanged, with their historical evidence reused only for that unchanged scope, not represented as rerun.
+
+Frozen inputs use the existing canonical SHA-256 of UTF-8 `JSON.stringify` over ordered `{path,sha256}` records. Payload is `qualificationPayload(git ls-files -- src bin)`, outer order is host entry/Linux runner/calibration test, product is `git ls-files -- package.json src bin`. Current hashes supersede correction 1 only for the changed paths and payload. Other per-path hashes remain unchanged. Hashing reads repository files only and grants no launch authority.
+
+| Input                                              | SHA-256                                                            |
+| -------------------------------------------------- | ------------------------------------------------------------------ |
+| 95-file payload manifest                           | `1d59d2958521b0b33f011df1e62821bf7f1fb38bdb42e2fc1c4655d6bfe785f2` |
+| 3-file outer manifest, unchanged                   | `52a34079f1a0ebc2636dc1df4af5f39f6462aeddee5db5eb84c2c95d305e06c0` |
+| 59-file product manifest, unchanged                | `ecf3bf969a09ecd10fd387625a444e6733d004c0ab9c8828a4ec03a841d33bfc` |
+| `tests/support/harness-navigation-observation.mjs` | `b28d65baa868bd398562e1780fe5dbba2ff2881902d1aac0f1b7e0af197cd627` |
+| `tests/support/harness-composition-inner.mjs`      | `e00c9a7dfb0b3c60a092ddcc4ec5ef8611d12636a9b674110eae752d46e7b1f7` |
+| `tests/harness-navigation-observation.test.mjs`    | `cba813ddd55bc265594ffaac1c7c7d18f81e5905bf9b7f55b2af9d274263534a` |
+
+Checks: pre-merge native/static controls PASS. Independent focused review UNRUN. Pre-exposure historical timely-cleanup FAIL remains, product cause UNKNOWN, no runtime/retry authorized. Post-deploy/deferred paired-human original-call proof UNRUN, maintainer/coordination owns separately authorized work. Founder-visible success remains that exact decision return. Output UNQUALIFIED, profile null. Worktree `.worktree/add-harness-approval-channel`, branch/change `add-harness-approval-channel`, test engineering owner, retained/cleanup pending verified landing. Next action is focused static review, cleanup evidence unchanged. No fresh capture authority follows.
+
 ## PRODUCT-PICKER-DISMISSAL-EXIT-HANDOFF - correction 1
 
 **Frozen executable/review candidate:** `5d73c6a7104671a32c6bfee40b94d3472940cd41`, parent `32e7478efbcf4144290b3450e27cd3e6ffc2a8c8`. Final code is exactly the seven hashed executable/test paths below. This finalization changes tasks only, with no code/test/dependency/configuration/baseline changes after the final 110/110 assertions and manifest freeze. Review the full candidate delta from that parent, then confirm the subsequent committed delta is tasks-only. README/status overlays remain untouched/unselected. Independent acceptance is UNRUN. No new runtime authority follows.

@@ -161,10 +161,12 @@ export function productPickerDismissal(raw, binding, previous, hostFrame) {
 
 export function issueProductPickerExit({ snapshot, exit, exitCount }) {
   assert.equal(exitCount(), 0);
-  const { raw, binding, previous, hostFrame } = snapshot();
+  const { raw, binding, previous, hostFrame, now, deadline } = snapshot();
   const dismissal = productPickerDismissal(raw, binding, previous, hostFrame);
   assert.equal(dismissal.supported, true, 'dismissal unproven');
-  exit(); // No asynchronous gap between final observation and the sole owned key.
+  // Hashing/decoding can consume the remaining budget even without an await.
+  assert.ok(now() < deadline, 'picker deadline elapsed during final validation');
+  exit(); // Only bounded key accounting follows admission, never more observation.
   return dismissal;
 }
 

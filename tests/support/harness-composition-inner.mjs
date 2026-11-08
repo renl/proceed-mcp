@@ -466,6 +466,8 @@ try {
               binding: captureBinding,
               previous: pickerEvidence.dismissalBaseline,
               hostFrame: readinessFrame,
+              now: () => performance.now(),
+              deadline: pickerEnd,
             };
           };
           pickerEvidence = await captureProductPicker({

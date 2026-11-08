@@ -253,6 +253,8 @@ test('fresh completed dismissal admits exactly one owned exit, all stale or ambi
         binding,
         previous: moved,
         hostFrame: '2.2.5 Ask anything',
+        now: () => 4,
+        deadline: 5,
       }),
       exitCount: () => exits,
       exit: () => exits++,
@@ -303,10 +305,17 @@ test('actual composition final-exit closure refuses live replacement, deadline a
   const finish = source.indexOf('\n          };', start);
   assert.ok(start > 0 && finish > start);
   const closure = source.slice(start + 'productExitSnapshot = '.length, finish) + '\n}';
+  const exitStart = source.indexOf('const ownedExit = () => {');
+  const exitFinish = source.indexOf('\n        };', exitStart);
+  assert.ok(exitStart > finish && exitFinish > exitStart);
+  const exitClosure = source.slice(exitStart + 'const ownedExit = '.length, exitFinish) + '\n}';
   const { moved } = productPair();
   for (const mutation of [
     'none',
     'deadline',
+    'validation-before',
+    'validation-exact',
+    'validation-late',
     'exit',
     'overflow',
     'run',
@@ -322,11 +331,29 @@ test('actual composition final-exit closure refuses live replacement, deadline a
       geometry: structuredClone(productBinding.geometry),
       snapshot: structuredClone(productSnapshot),
     };
-    let exits = 0;
+    const keys = { exit: 0 };
+    const writes = [];
+    const events = [];
+    let tick = mutation === 'deadline' ? 5 : 4;
+    let validationReads = 0;
+    const previous = { ...moved };
+    // This operand is read by the actual dismissal validator after snapshot
+    // acquisition and hash/decode. Move the injected clock DURING validation.
+    Object.defineProperty(previous, 'screen', {
+      get() {
+        validationReads++;
+        if (mutation.startsWith('validation-')) {
+          tick = { 'validation-before': 4.999, 'validation-exact': 5, 'validation-late': 6 }[
+            mutation
+          ];
+        }
+        return moved.screen;
+      },
+    });
     const context = {
       assert,
       Buffer,
-      performance: { now: () => (mutation === 'deadline' ? 5 : 4) },
+      performance: { now: () => tick },
       pickerEnd: 5,
       exited: mutation === 'exit',
       overflow: mutation === 'overflow',
@@ -339,19 +366,29 @@ test('actual composition final-exit closure refuses live replacement, deadline a
         mutation === 'partial'
           ? Buffer.concat([dismissedRaw(), Buffer.from('\x1b[?2026h')])
           : dismissedRaw(),
-      pickerEvidence: { dismissalBaseline: moved },
+      pickerEvidence: { dismissalBaseline: previous },
       readinessFrame: '2.2.5 Ask anything',
+      keys,
+      cleanupTiming: { record: (event) => events.push(event) },
+      child: { stdin: { write: (key) => writes.push(key) } },
     };
     if (mutation === 'run') live.run = 'replacement';
     if (mutation === 'setup') live.generation = 'replacement';
     if (mutation === 'resize') live.geometry.resizeSequence++;
     if (mutation === 'snapshot') live.snapshot.reverse();
     const snapshot = runInNewContext('(' + closure + ')', context, { timeout: 100 });
-    const execute = () =>
-      issueProductPickerExit({ snapshot, exitCount: () => exits, exit: () => exits++ });
-    if (mutation === 'none') execute();
+    const exit = runInNewContext('(' + exitClosure + ')', context, { timeout: 100 });
+    const execute = () => issueProductPickerExit({ snapshot, exitCount: () => keys.exit, exit });
+    const admitted = mutation === 'none' || mutation === 'validation-before';
+    if (admitted) {
+      execute();
+      assert.throws(execute); // No second key or retry, even before cutoff.
+    } else if (mutation.startsWith('validation-')) assert.throws(execute, /deadline elapsed/);
     else assert.throws(execute);
-    assert.equal(exits, mutation === 'none' ? 1 : 0);
+    assert.equal(keys.exit, admitted ? 1 : 0);
+    assert.deepEqual(writes, admitted ? ['\x03'] : []);
+    assert.deepEqual(events, admitted ? ['EXIT_KEY'] : []);
+    if (mutation.startsWith('validation-')) assert.equal(validationReads, 1);
   }
   assert.match(source, /allowExit: !pickerCapture \|\| dismissalAdmitted/);
   assert.match(source, /pickerEvidence.dismissal = issueProductPickerExit\(/);
