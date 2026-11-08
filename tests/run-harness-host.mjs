@@ -4,7 +4,11 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { pins, hostBudgets, launchBlockers } from './support/harness-host-plan.mjs';
 
-if (['--renderer-preflight', '--renderer-run'].includes(process.argv[2])) {
+if (['--renderer-diagnostic-preflight', '--renderer-diagnostic-run'].includes(process.argv[2])) {
+  assert.equal(process.argv.length, 3);
+  const { runLinuxHost } = await import('./support/harness-linux-runner.mjs');
+  await runLinuxHost(process.argv[2] === '--renderer-diagnostic-preflight', 'renderer-diagnostic');
+} else if (['--renderer-preflight', '--renderer-run'].includes(process.argv[2])) {
   assert.equal(process.argv.length, 3);
   const { runLinuxHost } = await import('./support/harness-linux-runner.mjs');
   await runLinuxHost(process.argv[2] === '--renderer-preflight', 'renderer');

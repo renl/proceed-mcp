@@ -51,10 +51,12 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       'parent-process',
       'composition',
       'renderer',
+      'renderer-diagnostic',
     ].includes(mode),
   );
   const parent = mode === 'parent-process';
-  const renderer = mode === 'renderer';
+  const rendererDiagnostic = mode === 'renderer-diagnostic';
+  const renderer = mode === 'renderer' || rendererDiagnostic;
   const composition = mode === 'composition';
   const helper = mode === 'helper-contract' || parent;
   if (helper && !parent) {
@@ -103,10 +105,15 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
     assert.equal(manifest.devDependencies[`@opencode/${name}`], '2.2.5');
     assert.equal(installed.version, '2.2.5');
   }
-  const image = JSON.parse((await command(['image', 'inspect', linuxImage])).stdout)[0];
-  assert.equal(image.Id, linuxImage);
-  assert.equal(image.Os, 'linux');
-  assert.equal(image.Architecture, 'amd64');
+  if (preflight && rendererDiagnostic) {
+    // Native CLI availability only. Do not contact the daemon or probe the image.
+    await command(['--version']);
+  } else {
+    const image = JSON.parse((await command(['image', 'inspect', linuxImage])).stdout)[0];
+    assert.equal(image.Id, linuxImage);
+    assert.equal(image.Os, 'linux');
+    assert.equal(image.Architecture, 'amd64');
+  }
   for (const path of payload) assert.ok((await lstat(join(root, path))).isFile());
   if (transport || helper || renderer) {
     // Owner README/status overlays are excluded. Every staged input must be clean.
@@ -123,6 +130,21 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
     cwd: root,
     timeout: 10000,
   });
+  if (rendererDiagnostic) {
+    await execute(
+      'git',
+      [
+        'diff',
+        '--quiet',
+        'HEAD',
+        '--',
+        'tests/run-harness-host.mjs',
+        'tests/support/harness-linux-runner.mjs',
+        'tests/harness-renderer-calibration.test.mjs',
+      ],
+      { cwd: root, timeout: 10000 },
+    );
+  }
   if (preflight) {
     console.log(
       JSON.stringify({
@@ -131,6 +153,14 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         checks: 'PASS',
         payload,
         budgets: hostBudgets,
+        ...(rendererDiagnostic
+          ? {
+              purpose: 'DIAGNOSTIC_CAPTURE_ONLY',
+              imageReadiness: 'UNPROVEN_PINNED_EVIDENCE_REUSED',
+              launchReadiness: 'UNPROVEN',
+              runtime: 'UNRUN',
+            }
+          : {}),
       }),
     );
     return;
@@ -220,8 +250,11 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         {
           candidate,
           image: linuxImage,
+          ...(rendererDiagnostic
+            ? { purpose: 'DIAGNOSTIC_CAPTURE_ONLY', profile: 'UNPROVEN' }
+            : {}),
           payload,
-          command: `node tests/run-harness-host.mjs ${renderer ? '--renderer-run' : composition ? '--composition-run' : parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
+          command: `node tests/run-harness-host.mjs ${rendererDiagnostic ? '--renderer-diagnostic-run' : renderer ? '--renderer-run' : composition ? '--composition-run' : parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
         },
         null,
         2,
@@ -259,6 +292,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
                 ? '/payload/tests/support/harness-setup-inner.mjs'
                 : '/payload/tests/support/harness-linux-inner.mjs',
       ...(firstOnly ? ['--first-exchange-only'] : []),
+      ...(rendererDiagnostic ? ['--diagnostic-capture'] : []),
       ...(helper && !parent ? ['/payload/' + helperEntry] : []),
     ]);
     created = true;
@@ -325,6 +359,10 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           await command(['cp', `${name}:/run/proceed/evidence/${file}`, evidenceDestination(file)]);
         assert.equal(waited.stdout.trim(), '0', 'RENDERER_CONTROL_FAILURE');
         assert.equal(diagnostic.status, 'PASS');
+        if (rendererDiagnostic) {
+          assert.equal(diagnostic.diagnostic.capture, 'DIAGNOSTIC_CAPTURE_PASS');
+          assert.equal(diagnostic.diagnostic.profile, 'UNPROVEN');
+        }
       } finally {
         await rm(join(run, 'renderer-diagnostic.private'), { force: true });
       }
@@ -564,6 +602,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           containerExit: progressState?.containerExit ?? 'UNRUN',
           elapsed: Date.now() - started,
           image: linuxImage,
+          ...(rendererDiagnostic
+            ? { purpose: 'DIAGNOSTIC_CAPTURE_ONLY', profile: 'UNPROVEN' }
+            : {}),
         },
         null,
         2,
@@ -572,7 +613,15 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
     await progress('complete', { cleanup });
     console.log(
       JSON.stringify(
-        { status: failure ? 'FAIL' : 'PASS', failure, cleanup, evidence: run },
+        {
+          status: failure ? 'FAIL' : 'PASS',
+          failure,
+          cleanup,
+          evidence: run,
+          ...(rendererDiagnostic
+            ? { purpose: 'DIAGNOSTIC_CAPTURE_ONLY', profile: 'UNPROVEN' }
+            : {}),
+        },
         null,
         2,
       ),

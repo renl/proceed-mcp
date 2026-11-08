@@ -23,6 +23,57 @@ export const rendererPayload = Object.freeze([
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const calibrationLabels = ['1 SYNTHETIC ALPHA', '2 SYNTHETIC BETA'];
 
+// Collection has no dependency on the cell/style parser being investigated.
+// The adapter sends normal UI input. It never invokes a fixture callback itself.
+export async function rendererDiagnosticSequence(
+  { key, wait, events, mark, progress, raw },
+  result,
+) {
+  const deadline = Date.now() + 15000;
+  const until = (predicate) => wait(predicate, Math.max(0, deadline - Date.now()));
+  await progress('initial');
+  key('ctrlG', '\x07');
+  mark('INITIAL_WAIT', 'DEADLINE');
+  await until(async () => (await events()).some((e) => e.phase === 'opening'));
+  for (const [index, stage] of [
+    [0, 'INITIAL_CURSOR_WAIT'],
+    [1, 'MOVED_CURSOR_WAIT'],
+  ]) {
+    if (index) {
+      await progress('moved');
+      key('arrowDown', '\x1b[B');
+    }
+    key('observe', '\x19');
+    mark(stage, 'DEADLINE');
+    await until(
+      async () => (await events()).filter((e) => e.phase === 'cursor').length === index + 1,
+    );
+    result[index ? 'BETA' : 'ALPHA'] = rendererCursor(
+      (await events()).filter((e) => e.phase === 'cursor')[index],
+    );
+    result[index ? 'movedRaw' : 'initialRaw'] = raw();
+  }
+  await progress('dismissed');
+  key('escape', '\x1b');
+  mark('DISMISS', 'DEADLINE');
+  await until(async () => (await events()).some((e) => e.phase === 'dismissed'));
+}
+
+export function rendererDiagnosticAnalysis(result, scanPassed) {
+  if (!scanPassed) return 'UNPROVEN';
+  try {
+    const before = rendererCells(result.initialRaw);
+    const after = rendererCells(result.movedRaw, before);
+    assertRendererCursor({}, result.ALPHA, 'ALPHA');
+    assertRendererCursor({}, result.BETA, 'BETA', true);
+    assertRendererStyles(before.labels, after.labels, {});
+    // Diagnostic collection can never qualify or install a selection profile.
+    return 'UNPROVEN';
+  } catch {
+    return 'FAIL';
+  }
+}
+
 // Reparse ASCII title spans plus the explicitly pinned bare-current-marker model.
 // No lexical emission (including a new copy elsewhere) can replace current cells.
 export function rendererCells(raw, previous, geometry = { rows: 40, columns: 120 }) {
@@ -341,6 +392,7 @@ export function safeRendererDiagnostic(value) {
   };
   inspect(value);
   const extended = Object.hasOwn(value, 'operation');
+  const diagnostic = Object.hasOwn(value, 'diagnostic');
   assert.deepEqual(
     Object.keys(value).sort(),
     [
@@ -355,9 +407,32 @@ export function safeRendererDiagnostic(value) {
       'scanReason',
       'status',
       ...(extended ? ['operation', 'collection', 'cursor', 'styles'] : []),
+      ...(diagnostic ? ['diagnostic'] : []),
     ].sort(),
   );
   assert.ok(['PASS', 'FAIL'].includes(value.status));
+  if (diagnostic) {
+    const d = value.diagnostic;
+    assert.deepEqual(Object.keys(d).sort(), ['ALPHA', 'BETA', 'analysis', 'capture', 'profile']);
+    assert.ok(['DIAGNOSTIC_CAPTURE_PASS', 'FAIL'].includes(d.capture));
+    assert.ok(['UNPROVEN', 'FAIL'].includes(d.analysis));
+    assert.equal(d.profile, 'UNPROVEN');
+    for (const label of ['ALPHA', 'BETA']) {
+      assert.deepEqual(Object.keys(d[label]).sort(), ['present', 'value']);
+      assert.equal(typeof d[label].present, 'boolean');
+      assert.ok(['ALPHA', 'BETA', 'OTHER', 'NONE'].includes(d[label].value));
+    }
+    if (d.capture === 'DIAGNOSTIC_CAPTURE_PASS') {
+      assert.equal(value.status, 'PASS');
+      assert.equal(value.failure, 'NONE');
+      assert.equal(value.scanReason, 'NONE');
+      assert.equal(value.cleanup, true);
+      assert.equal(value.hostExit, true);
+      assert.deepEqual(value.counts, { ctrlG: 1, arrowDown: 1, observe: 2, escape: 1, enter: 0 });
+      assert.equal(d.ALPHA.present, true);
+      assert.equal(d.BETA.present, true);
+    }
+  }
   assert.ok(
     [
       'NONE',

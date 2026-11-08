@@ -19,6 +19,8 @@ import {
   rendererSize,
   rendererDiagnostics,
   rendererCells,
+  rendererDiagnosticSequence,
+  rendererDiagnosticAnalysis,
 } from './support/harness-renderer-observation.mjs';
 const alpha = '1 SYNTHETIC ALPHA',
   beta = '2 SYNTHETIC BETA';
@@ -32,6 +34,177 @@ const paint = (row, style, label) => `\x1b[${row};3H${style}${label}`;
 const initialCells = begin + paint(3, selected, alpha) + paint(4, ordinary, beta) + end;
 const movedCells = begin + paint(3, current, alpha) + paint(4, selected, beta) + end;
 const marker = '\u25cf';
+
+test('capture-first sequence retains callbacks despite unsupported pre/post movement rendering', async () => {
+  for (const [first, second, values] of [
+    ['\u754c', initialCells + movedCells, ['alpha', 'beta']],
+    [initialCells, '\x1b[31munsupported', ['alpha', 'beta']],
+    ['\u754c', '\u25cf\ufe0f', ['beta', 'alpha']],
+    [initialCells, initialCells + movedCells, ['private', undefined]],
+  ]) {
+    const keys = [],
+      records = [],
+      budgets = [],
+      result = {};
+    let observed = 0;
+    await rendererDiagnosticSequence(
+      {
+        key(name) {
+          keys.push(name);
+          if (name === 'ctrlG') records.push({ phase: 'opening' });
+          if (name === 'observe') records.push({ phase: 'cursor', value: values[observed++] });
+          if (name === 'escape') records.push({ phase: 'dismissed' });
+        },
+        async wait(predicate, budget) {
+          budgets.push(budget);
+          assert.ok(await predicate());
+        },
+        async events() {
+          return records;
+        },
+        mark() {},
+        async progress() {},
+        raw: () => (observed === 1 ? first : second),
+      },
+      result,
+    );
+    assert.deepEqual(keys, ['ctrlG', 'observe', 'arrowDown', 'observe', 'escape']);
+    assert.ok(budgets.every((b, i) => b <= 15000 && (!i || b <= budgets[i - 1])));
+    assert.equal(result.ALPHA.present, true);
+    assert.equal(result.BETA.present, true);
+    assert.equal(rendererDiagnosticAnalysis(result, false), 'UNPROVEN');
+    assert.equal(rendererDiagnosticAnalysis(result, true), 'FAIL');
+    assert.ok(!JSON.stringify([result.ALPHA, result.BETA]).includes('private'));
+  }
+});
+
+test('diagnostic missing response, deadline, stream overflow or key write failure stops without retry', async () => {
+  for (const fault of ['first', 'second', 'deadline', 'overflow', 'write']) {
+    const keys = [],
+      records = [],
+      result = {},
+      operation = {};
+    let observed = 0;
+    await assert.rejects(
+      rendererDiagnosticSequence(
+        {
+          key(name) {
+            keys.push(name);
+            if (fault === 'write' && name === 'observe') throw new Error('synthetic');
+            if (name === 'ctrlG') records.push({ phase: 'opening' });
+            if (name === 'observe') {
+              observed++;
+              if (!(fault === 'first' || (fault === 'second' && observed === 2)))
+                records.push({ phase: 'cursor', value: 'alpha' });
+            }
+          },
+          async wait(predicate) {
+            if (fault === 'overflow') rendererCaptureCheck(operation, true, false);
+            if (fault === 'deadline' || !(await predicate())) {
+              operation.reason = 'DEADLINE';
+              throw new Error('synthetic');
+            }
+          },
+          events: async () => records,
+          mark: (stage, reason) => rendererCheckpoint(operation, stage, reason),
+          async progress() {},
+          raw: () => '\u754c',
+        },
+        result,
+      ),
+    );
+    assert.equal(keys.filter((k) => k === 'ctrlG').length, 1);
+    assert.ok(keys.filter((k) => k === 'arrowDown').length <= 1);
+    assert.ok(keys.filter((k) => k === 'observe').length <= 2);
+    assert.equal(rendererDiagnosticAnalysis(result, false), 'UNPROVEN');
+    if (fault === 'second') {
+      assert.equal(operation.stage, 'MOVED_CURSOR_WAIT');
+      assert.equal(result.ALPHA.value, 'ALPHA');
+      assert.equal(result.BETA, undefined);
+    }
+  }
+});
+
+test('diagnostic successful synthetic style analysis still cannot qualify a profile', () => {
+  assert.equal(
+    rendererDiagnosticAnalysis(
+      {
+        initialRaw: initialCells,
+        movedRaw: initialCells + movedCells,
+        ALPHA: { present: true, value: 'ALPHA' },
+        BETA: { present: true, value: 'BETA' },
+      },
+      true,
+    ),
+    'UNPROVEN',
+  );
+});
+
+test('diagnostic capture admission is separate from analysis and refuses incomplete controls', () => {
+  const value = {
+    status: 'PASS',
+    failure: 'NONE',
+    phase: 'dismissed',
+    scanReason: 'NONE',
+    bytes: 10,
+    frames: 0,
+    counts: { ctrlG: 1, arrowDown: 1, observe: 2, escape: 1, enter: 0 },
+    runtime: { host: '2.2.5', bun: 'UNKNOWN' },
+    cleanup: true,
+    hostExit: true,
+    diagnostic: {
+      capture: 'DIAGNOSTIC_CAPTURE_PASS',
+      analysis: 'FAIL',
+      profile: 'UNPROVEN',
+      ALPHA: { present: true, value: 'BETA' },
+      BETA: { present: true, value: 'OTHER' },
+    },
+  };
+  assert.deepEqual(safeRendererDiagnostic(value), value);
+  for (const patch of [
+    { hostExit: false },
+    { cleanup: false },
+    { scanReason: 'SCAN_REFUSED' },
+    { counts: { ...value.counts, observe: 1 } },
+    { diagnostic: { ...value.diagnostic, profile: 'PASS' } },
+    { diagnostic: { ...value.diagnostic, analysis: 'PASS' } },
+    { diagnostic: { ...value.diagnostic, BETA: { present: false, value: 'NONE' } } },
+    { diagnostic: { ...value.diagnostic, ALPHA: { present: true, value: 'private' } } },
+  ])
+    assert.throws(() => safeRendererDiagnostic({ ...value, ...patch }));
+});
+
+test('maintained diagnostic wiring keeps qualification, scan/export and lifecycle boundaries', async () => {
+  const inner = await readFile(
+    new URL('./support/harness-renderer-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const runner = await readFile(
+    new URL('./support/harness-linux-runner.mjs', import.meta.url),
+    'utf8',
+  );
+  const entry = await readFile(new URL('./run-harness-host.mjs', import.meta.url), 'utf8');
+  assert.match(entry, /--renderer-diagnostic-preflight/);
+  assert.match(entry, /--renderer-diagnostic-run/);
+  assert.match(runner, /preflight && rendererDiagnostic[\s\S]*command\(\['--version'\]\)/);
+  assert.match(runner, /rendererDiagnostic \? \['--diagnostic-capture'\] : \[\]/);
+  assert.ok(
+    inner.indexOf('rendererDiagnosticAnalysis(diagnosticSamples, true)') >
+      inner.indexOf("'EXPORT_SCAN'"),
+  );
+  assert.match(
+    inner,
+    /if \(diagnosticMode\) \{[\s\S]*rendererDiagnosticSequence\([\s\S]*\} else \{[\s\S]*assertRendererStyles\(before, after, operation\)/,
+  );
+  assert.match(inner, /if \(!diagnosticMode\)/);
+  assert.match(inner, /hostExit = exited && closed && !!hostPid/);
+  assert.ok(
+    runner.indexOf(
+      'assertRendererExport(',
+      runner.indexOf('if (renderer) {', runner.indexOf("await progress('evidence'")),
+    ) < runner.indexOf("'binding.json'"),
+  );
+});
 // Source-buffer model only. The marker remains on current A after selection moves.
 const decorated = (a, b, absolute = false) =>
   begin +
@@ -424,11 +597,18 @@ test('renderer full-scope privacy controls refuse each missing or leaking surfac
     const missing = clean();
     delete missing[surface];
     assert.throws(() => rendererScan(missing, canaries, true, false));
-    const leak = clean();
-    leak[surface] = Buffer.from(canaries[0]);
-    assert.throws(() => rendererScan(leak, canaries, true, false));
-    leak[surface] = Buffer.from('cap_' + 'a'.repeat(64));
-    assert.throws(() => rendererScan(leak, canaries, true, false));
+    for (const secret of [
+      ...canaries,
+      'cap_' + 'a'.repeat(64),
+      'sk-' + 'x'.repeat(32),
+      'ghp_' + 'x'.repeat(32),
+      'Bearer ' + 'x'.repeat(32),
+      '-----BEGIN SYNTHETIC PRIVATE KEY-----',
+    ]) {
+      const leak = clean();
+      leak[surface] = Buffer.from(secret);
+      assert.throws(() => rendererScan(leak, canaries, true, false));
+    }
   }
   assert.throws(() => rendererScan(clean(), canaries, false, false));
   assert.throws(() => rendererScan(clean(), canaries, true, true));

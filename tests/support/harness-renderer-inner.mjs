@@ -28,6 +28,8 @@ import {
   rendererDiagnostics,
   rendererCaptureCheck,
   assertRendererCursor,
+  rendererDiagnosticSequence,
+  rendererDiagnosticAnalysis,
 } from './harness-renderer-observation.mjs';
 
 const started = Date.now(),
@@ -52,6 +54,9 @@ let cleanup = false,
 let hostPid;
 const counts = { ctrlG: 0, arrowDown: 0, observe: 0, escape: 0, enter: 0 };
 const samples = {};
+const diagnosticMode = process.argv[2] === '--diagnostic-capture';
+const diagnosticSamples = {};
+let diagnosticAnalysis = 'UNPROVEN';
 const operation = { stage: 'POLICY', reason: 'ASSERT' };
 const collection = { stage: 'UNRUN', reason: 'NONE' };
 let cursor = { present: false, value: 'NONE' };
@@ -242,49 +247,58 @@ try {
   hostPid = Number.isSafeInteger(setup.pid) && setup.pid > 1 ? setup.pid : undefined;
   runtime.bun = /^\d+\.\d+\.\d+$/.test(setup.bun ?? '') ? setup.bun : 'UNKNOWN';
   assert.equal(setup.themeMode, 'dark');
-  await progress('initial');
-  key('ctrlG', '\x07');
-  mark('INITIAL_WAIT', 'DEADLINE');
-  await wait(() => {
-    try {
-      rendererCells(raw);
-      return true;
-    } catch {
-      return false; // Partial/unsupported output is never a qualified sample.
-    }
-  });
-  key('observe', '\x19');
-  mark('INITIAL_CURSOR_WAIT', 'DEADLINE');
-  await wait(async () => (await events()).filter((e) => e.phase === 'cursor').length === 1);
-  cursor = rendererCursor((await events()).find((e) => e.phase === 'cursor'));
-  assertRendererCursor(operation, cursor, 'ALPHA');
-  samples.initial = rendererCells(raw);
-  await progress('moved');
-  key('arrowDown', '\x1b[B');
-  mark('MOVED_WAIT', 'DEADLINE');
-  await wait(() => {
-    try {
-      const moved = rendererCells(raw, samples.initial);
-      assertRendererStyles(samples.initial.labels, moved.labels, {});
-      return true;
-    } catch {
-      return false;
-    }
-  });
-  key('observe', '\x19');
-  mark('MOVED_CURSOR_WAIT', 'DEADLINE');
-  await wait(async () => (await events()).filter((e) => e.phase === 'cursor').length === 2);
-  cursor = rendererCursor((await events()).filter((e) => e.phase === 'cursor')[1]);
-  assertRendererCursor(operation, cursor, 'BETA', true);
-  samples.moved = rendererCells(raw, samples.initial);
-  const before = samples.initial.labels,
-    after = samples.moved.labels;
-  styles = rendererStyleFacts(before, after);
-  assertRendererStyles(before, after, operation);
-  await progress('dismissed');
-  key('escape', '\x1b');
-  mark('DISMISS', 'DEADLINE');
-  await wait(async () => (await events()).some((e) => e.phase === 'dismissed'));
+  if (diagnosticMode) {
+    await rendererDiagnosticSequence(
+      { key, wait, events, mark, progress, raw: () => raw },
+      diagnosticSamples,
+    );
+  } else {
+    await progress('initial');
+    key('ctrlG', '\x07');
+    mark('INITIAL_WAIT', 'DEADLINE');
+    await wait(() => {
+      try {
+        rendererCells(raw);
+        return true;
+      } catch {
+        return false; // Partial/unsupported output is never a qualified sample.
+      }
+    });
+    key('observe', '\x19');
+    mark('INITIAL_CURSOR_WAIT', 'DEADLINE');
+    await wait(async () => (await events()).filter((e) => e.phase === 'cursor').length === 1);
+    cursor = rendererCursor((await events()).find((e) => e.phase === 'cursor'));
+    assertRendererCursor(operation, cursor, 'ALPHA');
+    samples.initial = rendererCells(raw);
+    await progress('moved');
+    key('arrowDown', '\x1b[B');
+    mark('MOVED_WAIT', 'DEADLINE');
+    await wait(() => {
+      try {
+        const moved = rendererCells(raw, samples.initial);
+        assertRendererStyles(samples.initial.labels, moved.labels, {});
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    key('observe', '\x19');
+    mark('MOVED_CURSOR_WAIT', 'DEADLINE');
+    await wait(async () => (await events()).filter((e) => e.phase === 'cursor').length === 2);
+    cursor = rendererCursor((await events()).filter((e) => e.phase === 'cursor')[1]);
+    assertRendererCursor(operation, cursor, 'BETA', true);
+    samples.moved = rendererCells(raw, samples.initial);
+    const before = samples.initial.labels,
+      after = samples.moved.labels;
+    styles = rendererStyleFacts(before, after);
+    assertRendererStyles(before, after, operation);
+  }
+  if (!diagnosticMode) {
+    await progress('dismissed');
+    key('escape', '\x1b');
+    mark('DISMISS', 'DEADLINE');
+    await wait(async () => (await events()).some((e) => e.phase === 'dismissed'));
+  }
   assert.equal(
     (await events()).some((e) => e.phase === 'fixture-choice'),
     false,
@@ -404,6 +418,16 @@ try {
           hostExit,
           cellWidths: 'UNKNOWN',
           productProfile: null,
+          ...(diagnosticMode
+            ? {
+                diagnostic: {
+                  ALPHA: diagnosticSamples.ALPHA,
+                  BETA: diagnosticSamples.BETA,
+                  initialBytes: Buffer.byteLength(diagnosticSamples.initialRaw ?? ''),
+                  movedBytes: Buffer.byteLength(diagnosticSamples.movedRaw ?? ''),
+                },
+              }
+            : {}),
         }),
       ),
     );
@@ -459,6 +483,8 @@ try {
       writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(scan)),
     );
     scanReason = 'NONE';
+    // Parsing is deliberately downstream of frozen complete-surface privacy proof.
+    if (diagnosticMode) diagnosticAnalysis = rendererDiagnosticAnalysis(diagnosticSamples, true);
   } catch {
     scanReason =
       collection.reason === 'OVERFLOW'
@@ -478,7 +504,9 @@ try {
           failure,
           phase: failedPhase,
           scanReason,
-          frames: emittedLabels(raw).frames,
+          frames: diagnosticMode
+            ? (raw.match(/\x1b\[\?2026l/g) ?? []).length
+            : emittedLabels(raw).frames,
           bytes: Buffer.byteLength(raw),
           counts,
           runtime: {
@@ -491,6 +519,17 @@ try {
           collection,
           cursor,
           styles,
+          ...(diagnosticMode
+            ? {
+                diagnostic: {
+                  capture: failure === 'NONE' ? 'DIAGNOSTIC_CAPTURE_PASS' : 'FAIL',
+                  analysis: diagnosticAnalysis,
+                  profile: 'UNPROVEN',
+                  ALPHA: diagnosticSamples.ALPHA ?? { present: false, value: 'NONE' },
+                  BETA: diagnosticSamples.BETA ?? { present: false, value: 'NONE' },
+                },
+              }
+            : {}),
         }),
       ),
     );
