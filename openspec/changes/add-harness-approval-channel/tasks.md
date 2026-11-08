@@ -2,6 +2,15 @@
 
 ## PRODUCT-EVIDENCE-RETAINED-MAPPING - correction 1 and complete offline inventory
 
+**Frozen executable/review candidate:** `6ebc62dd9aac183beb7e84aa33186b42453197e0`, parent `f58d47ec0a7d7448c43c5df2fad1e88bf6931469`. Final Windows Node `v26.13.0` native 110/110 PASS, zero failures/skips/cancellations, bounded exit 0. Four syntax checks, owner-scoped format check, selected whitespace and telemetry-disabled strict OpenSpec structural validation PASS within 30000 ms. The maintained product inventory invocation reproduced the exact closed report hash below after final code formatting. There were no failed native checks during this correction. This completion increment is tasks-only, with no code/test/dependency/configuration/baseline change after those assertions. Independent acceptance remains UNRUN, and both U+2299 and trailing OSC 12 need consolidated disposition. Estimated 100% of the bounded correction, fresh admission, complete lexical inventory and review-ready brief is delivered, not product/feature/release verification.
+
+| Frozen executable path                               | SHA-256                                                            |
+| ---------------------------------------------------- | ------------------------------------------------------------------ |
+| `tests/support/harness-composition-retention.mjs`    | `285938baa61617bfeb4bb1ea2b8eeb8c9acebef467185e815395a0d74e86390d` |
+| `tests/support/harness-renderer-token-inventory.mjs` | `9ca24eb14a108359d74d95cb9b6029022f539ca0110c3f60c8151d687e9c5e6b` |
+| `tests/harness-renderer-calibration.test.mjs`        | `d150086a8e79ce62c7b70b308f489a7c39abcf8fd5b405e1939ecc5ae511c330` |
+| `tests/harness-renderer-token-inventory.test.mjs`    | `b036bf96fd1ddf4550b20cab25ecd31faf76e92fb15453079876be87db6d990b` |
+
 Entry HEAD `f58d47ec0a7d7448c43c5df2fad1e88bf6931469`, index empty, only README/status overlays dirty. Both overlays remain unselected. Scope is existing test-owned retention/inventory helpers, their existing native suites and this active tasks file. Runner, decoder, production, contracts, dependencies and frozen evidence are unchanged. Founder-visible success remains a genuine paired human decision on the exact request returned to its original waiting call. These controls, admission and lexical analysis are enabling proxies, not product proof.
 
 ### Superseding complete-set admission
@@ -69,13 +78,13 @@ Native controls passed 110/110 before final evidence freeze. New assertions test
 
 Decomposition checklist: 1 YES (retained mapping feeds inventory), 2 NO (frozen inputs preserved), 3 NO (no receiver/process), 4 YES (marker -> complete mapped admission -> lexical analysis), 5 NO (no split runtime setup). Request one combined Architect/test-only proof-chain review through coordination. No normative public/cross-component contract or new external integration is introduced. Existing real-boundary proof gates remain unchanged.
 
-| Stage                                          | State / owner / trigger                                                                                  |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Pre-merge bounded static controls              | Native 110/110 PASS. Final static checks pending completion increment. Test engineering owns correction. |
-| Fresh retained admission / lexical inventory   | PASS for the exact five mapped files and complete lexical coverage only. No new scan/runtime proof.      |
-| Independent correction acceptance              | UNRUN. Coordination routes the frozen candidate and the two consolidated source gaps.                    |
-| Pre-exposure product readiness / qualification | Historical FAIL, UNQUALIFIED/profile null. No waiver or new runtime authority.                           |
-| Post-deploy / deferred human-decision proof    | UNRUN. Maintainer/coordination owns separately authorized future work before exposure.                   |
+| Stage                                          | State / owner / trigger                                                                                                    |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Pre-merge bounded static controls              | Native 110/110, four syntax, scoped format/whitespace and strict structural checks PASS. Test engineering owns correction. |
+| Fresh retained admission / lexical inventory   | PASS for the exact five mapped files and complete lexical coverage only. No new scan/runtime proof.                        |
+| Independent correction acceptance              | UNRUN. Coordination routes the frozen candidate and the two consolidated source gaps.                                      |
+| Pre-exposure product readiness / qualification | Historical FAIL, UNQUALIFIED/profile null. No waiver or new runtime authority.                                             |
+| Post-deploy / deferred human-decision proof    | UNRUN. Maintainer/coordination owns separately authorized future work before exposure.                                     |
 
 Review all four changed test-owned paths and this tasks brief against entry HEAD. Supporting read-only routes are `harness-linux-runner.mjs:189-195,638-649,688-741`, inner close/collect/export and the unchanged canonical decoder. Worktree path `.worktree/add-harness-approval-channel`, branch/change `add-harness-approval-channel`, owner test engineering, retained, cleanup pending verified landing. Next action is independent static review and consolidated source-gap disposition. No new runtime, host/container/broker/services, auth/provider/model/Telegram, credentials, external filesystem recovery, dependency/build/image, push/PR/archive/merge/deploy/publication, unrelated cleanup or nested agent occurred. The only network action was the authorized exact public width-map fetch.
 
