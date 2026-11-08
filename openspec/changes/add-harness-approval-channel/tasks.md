@@ -1,5 +1,40 @@
 # Tasks
 
+## Overflow-operands diagnostic - single authorized attempt FAIL, no retry
+
+**Authority and frozen binding:** the user explicitly said proceed to exactly one isolated capture-only diagnostic, with no retry or follow-on qualification. Entry HEAD and reviewed candidate `d159ef5feb1f77c6bd38d2365c6acb7c1740d077` match exactly. Prior outcome `3935322eeb79b7e824ab1352c60e81c6c430cae3` is an ancestor. Branch is `add-harness-approval-channel`, entry index empty, only README/status overlays dirty and preserved unselected. All nine execution inputs match the six-payload/three-outer manifests: use the frozen no-launch table below with the three newer hashes in the overflow correction table replacing their older entries. No drift, repair or refreeze occurred. Supplied independent static review PASS and affected 41/41 native/scoped checks are reused for their unchanged assertion scope, not independently rerun.
+
+**Admission and execution:** maintained metadata-only `node tests/run-harness-host.mjs --renderer-diagnostic-preflight` PASS, exit 0 within 30000 ms, with runtime UNRUN and image/launch readiness UNPROVEN. Then exactly one `node tests/run-harness-host.mjs --renderer-diagnostic-run`, outer bound 310000 ms, actual exit 1. Maintained verdict elapsed 3812 ms, final progress 3813 ms. Aggregate 300000 ms, teardown reserve 45000 ms, readiness 60000 ms, shared interaction 15000 ms and inner 210000/240000 ms limits are unchanged. Execution-time policy/image admission PASS for `sha256:a8302764b5f4896690dcba9cdbe27755f6c0f4f88db92974a029f8499f3700cb`, network none, private PID namespace, init true, exactly one read-only payload mount, no build or pull. Windows native orchestrator Node `v26.13.0`, pinned Linux amd64 host OpenCode `2.2.5`, embedded Bun `1.4.4`. Detailed binary/theme/terminal binding is not scan-admitted for inspection.
+
+**Closed outcome:** outer `RENDERER_CONTROL_OR_EXPORT_FAILURE`, inner `SCAN_REFUSED` at `dismissed`, collection `PER_FILE_SIZE/OVERFLOW`. Safe first-overflow operands are exactly `{ surface: "state", bytes: 12846400 }`. This exceeds the unchanged 4194304 per-file bound. Total 16777216 and stream 1048576 bounds remain unchanged. No filename, path, content or underlying cause is established. Prior overflow cause remains UNKNOWN, and no DEBUG-log attribution is made. Capture FAIL, analysis UNPROVEN, profile UNPROVEN/uninstalled. Composition `selectionProfile` remains null. Closed key counters are Ctrl+G 1, Down 1, observe 2, Escape 1, Enter 0. Both public callback slots are present, first ALPHA and second BETA. The 30022 bytes and 10 completed update delimiters are closed counters, not qualified rendered frames or style proof. Public fixture readiness, observation, movement and dismissal precede owned exit and attempted frozen collection. No approval request or decision occurred.
+
+| Check                                                 | Result                                                                                             |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Candidate, nine input hashes and image/policy binding | PASS, exact reviewed candidate and pinned inputs.                                                  |
+| Capture collection / complete frozen scan             | FAIL / REFUSED at per-file overflow. No complete scan admission.                                   |
+| Outer detailed export admission                       | REFUSED. No scan-admitted detailed findings, raw inspection, fallback export or recovery access.   |
+| Renderer analysis / installed profile                 | UNPROVEN / none, `selectionProfile: null`.                                                         |
+| Fixture Cleanup                                       | PASS, closed diagnostic `cleanup: true`.                                                           |
+| Actual host exit                                      | PASS, closed diagnostic `hostExit: true`, independent of container/outer exit 1.                   |
+| Exact container absence                               | PASS, maintained runner confirms exact owned container absent and private PID namespace destroyed. |
+| Product, pre-exposure, post-deploy and deferred proof | UNRUN/UNPROVEN, existing owners and triggers unchanged.                                            |
+
+**Safe evidence:** ignored `.scratch/harness-host/run-linux-i1Mizw/`, restricted to closed metadata and manifests. SHA-256:
+
+| Record                       | SHA-256                                                            |
+| ---------------------------- | ------------------------------------------------------------------ |
+| `candidate.json`             | `9d35940b842381179a40907aac5cb8ae30f926b88f54de44e427cb3282fb3055` |
+| `input-integrity.json`       | `cf2a9721b988a289cd01ec292f517eb27d1ac2304b841a303ebaaf4ef01b0b06` |
+| `outer-input-integrity.json` | `707b9d4c52c9421592cbdd06020ad297b68040f483f61b858aabed9c3edb950a` |
+| `policy.json`                | `a4d136da6c4e5875625ff9bb35c454244089e8f87599dab297a8085f14ed7c43` |
+| `progress.json`              | `57f2168b848fd50330b4ffdce7cced23b3f1fbcdc8d6153d5f466e96c262332b` |
+| `renderer-diagnostic.json`   | `41fcb7e6d14d4278348017910e36cf5320934074667639879c9a2e15a4e96a31` |
+| `verdict.json`               | `21f8a4f78d84ab383e007aeb6673f1122717742d55f0c0fae96bc446e67f025e` |
+
+**Disposition and lifecycle:** authorization consumed. Actual overflow remains unresolved, but this attempt establishes the safe state-surface byte operand. Founder-visible success remains a genuine decision on the exact Proceed request and is not proven by this diagnostic/proxy work. No credentials, product broker/helper exchange, models/providers, Telegram or external networking, global-config/home/private-data/recovery access, additional runtime, qualification, limit/exclusion/policy change or container-preservation workaround. Only this active tasks outcome is selected for commit. No source/test/spec/design/README/status/archive/dependency changes, push/PR/archive/merge/deploy/publication or unrelated cleanup. Worktree `.worktree/add-harness-approval-channel`, branch/change `add-harness-approval-channel`, owner test engineering, status retained, cleanup pending verified landing. Next action is coordination disposition of the unresolved overflow and missing renderer/product proof. Any further attempt requires new authorization.
+
+**Finalization checks:** tasks-only repository Prettier write/check, telemetry-disabled strict OpenSpec structural validation and selected whitespace checks PASS within 30000 ms per command. Structural validation is not behavioral proof. Finalization remains docs-only. README/status overlay SHA-256 values are preserved as `81d90772a3fae032d934976af082118473e0c88d9bf5bb115e3f4a11f3b715c5` and `caab46b4f2bb29cabe4cb4ab04f0b1d8686dbd91b688bceead00c5168caa2e15`, respectively, and neither file is selected.
+
 ## Collection overflow operands - first static correction
 
 **Gap `RENDERER-COLLECTION-OVERFLOW-OPERANDS`, correction 1:** entry HEAD `3935322eeb79b7e824ab1352c60e81c6c430cae3`, reviewed code `82c48b5632a183c0942352ce86d79b114c4a1657`, entry evidence `b6336aaa23a93343369736a89b1dd7c01f6c587f`. Live branch is `add-harness-approval-channel`, entry index empty, only README/status overlays dirty and left unselected. Authorized edits are this record and the three executable paths below. Founder-visible success remains a genuine decision on the exact Proceed request. These native controls are diagnostic/proxy proof only.
