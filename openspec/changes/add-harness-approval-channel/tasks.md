@@ -2,6 +2,8 @@
 
 ## PRODUCT-PICKER-DISMISSAL-EXIT-HANDOFF - correction 1
 
+**Frozen executable/review candidate:** `5d73c6a7104671a32c6bfee40b94d3472940cd41`, parent `32e7478efbcf4144290b3450e27cd3e6ffc2a8c8`. Final code is exactly the seven hashed executable/test paths below. This finalization changes tasks only, with no code/test/dependency/configuration/baseline changes after the final 110/110 assertions and manifest freeze. Review the full candidate delta from that parent, then confirm the subsequent committed delta is tasks-only. README/status overlays remain untouched/unselected. Independent acceptance is UNRUN. No new runtime authority follows.
+
 ### Frozen checks and inputs
 
 Final native Windows Node `v26.13.0`: 110/110 PASS, zero failures/skips/cancellations, exit 0 within 60000 ms. Seven syntax checks, scoped repository Prettier write/check, selected whitespace and telemetry-disabled strict OpenSpec structural validation PASS. Earlier 109/109 and 110/110 native executions preceded added controls or changed code. No native assertion failed. Two patch anchors missed formatter-expanded text and made no edit before correction. Structural checks and synthetic tests are not runtime proof.
