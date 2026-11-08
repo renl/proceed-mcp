@@ -15,6 +15,7 @@ import {
 } from './harness-linux-plan.mjs';
 import {
   emittedLabels,
+  rendererCells,
   rendererScan,
   digest,
   rendererCheckpoint,
@@ -244,40 +245,40 @@ try {
   await progress('initial');
   key('ctrlG', '\x07');
   mark('INITIAL_WAIT', 'DEADLINE');
-  await wait(
-    () =>
-      Object.keys(emittedLabels(raw).labels).length === 2 &&
-      raw.lastIndexOf('\x1b[?2026l') >
-        Math.max(raw.lastIndexOf('1 SYNTHETIC ALPHA'), raw.lastIndexOf('2 SYNTHETIC BETA')),
-  );
+  await wait(() => {
+    try {
+      rendererCells(raw);
+      return true;
+    } catch {
+      return false; // Partial/unsupported output is never a qualified sample.
+    }
+  });
   key('observe', '\x19');
   mark('INITIAL_CURSOR_WAIT', 'DEADLINE');
   await wait(async () => (await events()).filter((e) => e.phase === 'cursor').length === 1);
   cursor = rendererCursor((await events()).find((e) => e.phase === 'cursor'));
   assertRendererCursor(operation, cursor, 'ALPHA');
-  samples.initial = { byteEnd: Buffer.byteLength(raw), emission: emittedLabels(raw) };
+  samples.initial = rendererCells(raw);
   await progress('moved');
-  const boundary = raw.length;
   key('arrowDown', '\x1b[B');
   mark('MOVED_WAIT', 'DEADLINE');
-  await wait(
-    () =>
-      raw.length > boundary &&
-      raw.slice(boundary).includes('SYNTHETIC') &&
-      raw.lastIndexOf('\x1b[?2026l') > boundary,
-  );
+  await wait(() => {
+    try {
+      const moved = rendererCells(raw, samples.initial);
+      assertRendererStyles(samples.initial.labels, moved.labels, {});
+      return true;
+    } catch {
+      return false;
+    }
+  });
   key('observe', '\x19');
   mark('MOVED_CURSOR_WAIT', 'DEADLINE');
   await wait(async () => (await events()).filter((e) => e.phase === 'cursor').length === 2);
   cursor = rendererCursor((await events()).filter((e) => e.phase === 'cursor')[1]);
   assertRendererCursor(operation, cursor, 'BETA', true);
-  samples.moved = {
-    byteEnd: Buffer.byteLength(raw),
-    emission: emittedLabels(raw),
-    changedEmission: emittedLabels(raw.slice(boundary)),
-  };
-  const before = samples.initial.emission.labels,
-    after = samples.moved.emission.labels;
+  samples.moved = rendererCells(raw, samples.initial);
+  const before = samples.initial.labels,
+    after = samples.moved.labels;
   styles = rendererStyleFacts(before, after);
   assertRendererStyles(before, after, operation);
   await progress('dismissed');

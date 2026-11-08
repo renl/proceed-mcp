@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   rendererScan,
   rendererSurfaces,
@@ -16,7 +17,116 @@ import {
   rendererStyleFacts,
   rendererSize,
   rendererDiagnostics,
+  rendererCells,
 } from './support/harness-renderer-observation.mjs';
+const alpha = '1 SYNTHETIC ALPHA',
+  beta = '2 SYNTHETIC BETA';
+const begin = '\x1b[?2026h',
+  end = '\x1b[?2026l';
+// SYNTHETIC operands, not an actual-host theme or emitted-color profile.
+const selected = '\x1b[0;1;38;2;10;10;10;48;2;250;178;131m';
+const current = '\x1b[0;38;2;250;178;131m';
+const ordinary = '\x1b[0;38;2;238;238;238m';
+const paint = (row, style, label) => `\x1b[${row};3H${style}${label}`;
+const initialCells = begin + paint(3, selected, alpha) + paint(4, ordinary, beta) + end;
+const movedCells = begin + paint(3, current, alpha) + paint(4, selected, beta) + end;
+
+test('finite fixture keeps current ALPHA, observes live selection through Ctrl+Y and sends physical Down', async () => {
+  const fixture = await readFile(
+    new URL('./fixtures/harness-renderer/tui.ts', import.meta.url),
+    'utf8',
+  );
+  const inner = await readFile(
+    new URL('./support/harness-renderer-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(fixture, /current: 'alpha'/);
+  assert.match(
+    fixture,
+    /bind: 'ctrl\+y',[\s\S]*onTrigger: \(value\) => record\(\{ phase: 'cursor', value \}\)/,
+  );
+  assert.ok(inner.includes("key('arrowDown', '\\x1b[B')"));
+  assert.ok(rendererPayload.includes('tests/support/harness-composition-readiness.mjs'));
+  const projector = await readFile(
+    new URL('./support/harness-composition-readiness.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.doesNotMatch(projector, /^import /m, 'staged projector has no unstaged dependencies');
+});
+
+test('completed current cells bind unique finite rows, positions, transcript and independent roles', () => {
+  const before = rendererCells(initialCells);
+  const after = rendererCells(initialCells + movedCells, before);
+  assertRendererCursor({}, rendererCursor({ value: 'alpha' }), 'ALPHA');
+  assertRendererCursor({}, rendererCursor({ value: 'beta' }), 'BETA', true);
+  assertRendererStyles(before.labels, after.labels, {});
+  assert.notEqual(before.labels[beta].fg, after.labels[alpha].fg);
+  assert.deepEqual(after.positions, { [alpha]: { row: 2, col: 2 }, [beta]: { row: 3, col: 2 } });
+  assert.equal(after.frames, 2);
+  assert.equal(after.byteEnd, Buffer.byteLength(initialCells + movedCells));
+  assert.equal(after.profileInstalled, false);
+});
+
+test('fragmented cursor/SGR repaint and split labels need no fresh whole literal emission', () => {
+  const before = rendererCells(initialCells);
+  const fragments =
+    begin +
+    [...alpha].map((ch, i) => paint(3, current, ch).replace('[3;3H', `[3;${i + 3}H`)).join('') +
+    [...beta].map((ch, i) => paint(4, selected, ch).replace('[4;3H', `[4;${i + 3}H`)).join('') +
+    end;
+  assert.equal(fragments.includes('SYNTHETIC'), false);
+  const after = rendererCells(initialCells + fragments, before);
+  assertRendererStyles(before.labels, after.labels, {});
+  const split = initialCells.replace('SYNTHETIC', 'SYN\x1b[1mTHETIC');
+  assert.deepEqual(rendererCells(split).labels, before.labels);
+  // An incomplete transport fragment is refused until the same bytes complete.
+  for (const cut of [begin.length + 2, initialCells.length - 1])
+    assert.throws(() => rendererCells(initialCells.slice(0, cut)));
+});
+
+test('stale emissions, missing/duplicate/misplaced rows and unsupported updates fail closed', () => {
+  const before = rendererCells(initialCells);
+  const invalid = [
+    initialCells, // No completed update after the pinned sample.
+    initialCells + begin + selected + end, // SGR does not restyle existing cells.
+    initialCells + begin + paint(8, selected, alpha) + end,
+    initialCells + begin + '\x1b[3;1H\x1b[2K' + paint(8, selected, alpha) + end,
+    initialCells + begin + '\x1b[4;1H\x1b[2K' + end,
+    initialCells + begin + '\x1b[3;3H\x1b[31m1' + end,
+    initialCells + begin + '\x1b[3;3H\u25031' + end,
+    initialCells + begin + '\x1b[3;3H\x1b[2C' + end,
+    initialCells + begin + paint(3, current, alpha) + end.slice(0, -1),
+    initialCells + begin + '\x1b[41;1H' + end,
+    initialCells + begin + '\x1b[3;120HXX' + end,
+    initialCells + '\x1b[?1049h' + movedCells,
+    initialCells + '\x1b[2J' + movedCells,
+    initialCells + begin + begin + end + end,
+    initialCells.replace('238;238;238', '237;238;238') + movedCells,
+  ];
+  for (const raw of invalid)
+    assert.throws(() => {
+      const after = rendererCells(raw, before);
+      assertRendererStyles(before.labels, after.labels, {});
+    });
+  for (const raw of [
+    begin + paint(3, selected, alpha) + end,
+    begin + paint(3, selected, alpha + alpha) + paint(4, ordinary, beta) + end,
+    begin + paint(3, selected, 'prefix ' + alpha) + paint(4, ordinary, beta) + end,
+    begin + paint(3, selected, alpha) + paint(5, ordinary, beta) + end,
+    begin +
+      paint(3, selected, alpha.slice(0, 1)) +
+      current +
+      alpha.slice(1) +
+      paint(4, ordinary, beta) +
+      end,
+    'x'.repeat(1048577),
+  ])
+    assert.throws(() => rendererCells(raw));
+  assert.throws(() => rendererCells(initialCells + movedCells, before, { rows: 41, columns: 120 }));
+  assert.throws(() =>
+    rendererCells(initialCells + movedCells, { ...before, geometry: { rows: 41, columns: 120 } }),
+  );
+});
 test('synthetic renderer emission preserves RGB/default/bold and never installs a profile', () => {
   const result = emittedLabels(
     '\x1b[0m\x1b[38;2;238;238;238m2 SYNTHETIC BETA\x1b[1;48;2;250;178;131;38;2;10;10;10m1 SYNTHETIC ALPHA\x1b[?2026l',
@@ -123,7 +233,7 @@ test('missing/wrong cursor and missing/unsupported/style assertions cannot mask 
     [{ ...after, [label]: { ...normal, supported: false } }, 'STYLE_SUPPORTED'],
     [before, 'STYLE_BACKGROUND'],
     [{ ...after, [label]: { ...normal, bold: true } }, 'STYLE_BOLD'],
-    [{ ...after, [label]: { ...normal, fg: 'other' } }, 'STYLE_SWAP'],
+    [{ ...after, [other]: { ...active, fg: 'other' } }, 'STYLE_SWAP'],
   ]) {
     assert.throws(
       () => assertRendererStyles(before, changed, state),

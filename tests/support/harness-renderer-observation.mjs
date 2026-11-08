@@ -1,7 +1,8 @@
-// TEST ONLY. Lexical emission evidence, NOT a screen emulator or product profile.
+// TEST ONLY. Bounded current-cell evidence, NOT a host-qualified product profile.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { compositionCurrentFrame } from './harness-composition-readiness.mjs';
 
 export const rendererSurfaces = Object.freeze([
   'tui',
@@ -15,10 +16,101 @@ export const rendererPayload = Object.freeze([
   'tests/fixtures/harness-renderer/tui.ts',
   'tests/support/harness-renderer-inner.mjs',
   'tests/support/harness-renderer-observation.mjs',
+  'tests/support/harness-composition-readiness.mjs',
   'tests/support/harness-linux-plan.mjs',
   'tests/support/harness-host-plan.mjs',
 ]);
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const calibrationLabels = ['1 SYNTHETIC ALPHA', '2 SYNTHETIC BETA'];
+
+// Reparse the bounded transcript using the existing ASCII/truecolor projector.
+// No lexical emission (including a new copy elsewhere) can replace current cells.
+export function rendererCells(raw, previous, geometry = { rows: 40, columns: 120 }) {
+  assert.equal(typeof raw, 'string');
+  assert.ok(Buffer.byteLength(raw) <= 1048576, 'CAPTURE_LIMIT');
+  assert.deepEqual(geometry, { rows: 40, columns: 120 }, 'RESIZED');
+  const close = '\x1b[?2026l';
+  const frameEnd = raw.lastIndexOf(close) + close.length;
+  assert.ok(frameEnd >= close.length, 'NO_COMPLETED_UPDATE');
+  let syncing = false,
+    frames = 0;
+  for (const token of raw.match(/\x1b\[\?2026[hl]/g) ?? []) {
+    if (token.endsWith('h')) {
+      assert.equal(syncing, false, 'NESTED_UPDATE');
+      syncing = true;
+    } else {
+      assert.equal(syncing, true, 'UNMATCHED_UPDATE');
+      syncing = false;
+      frames++;
+    }
+  }
+  assert.equal(syncing, false, 'INCOMPLETE_UPDATE');
+  for (const match of raw.matchAll(/\x1b\[(\d*);?(\d*)[Hf]/g)) {
+    assert.ok(+(match[1] || 1) >= 1 && +(match[1] || 1) <= geometry.rows);
+    assert.ok(+(match[2] || 1) >= 1 && +(match[2] || 1) <= geometry.columns);
+  }
+  if (previous) {
+    assert.deepEqual(previous.geometry, geometry, 'RESIZED');
+    assert.equal(
+      digest(raw.slice(0, previous.offset)),
+      previous.transcriptHash,
+      'TRANSCRIPT_REPLACED',
+    );
+    assert.ok(frameEnd > previous.offset && frames > previous.frames, 'STALE_UPDATE');
+    assert.doesNotMatch(
+      raw.slice(previous.offset),
+      /\x1b\[(?:[23]J|\?1049[hl])/,
+      'GENERATION_RESET',
+    );
+  }
+  const frame = compositionCurrentFrame(raw, { styled: true });
+  assert.ok(frame && typeof frame.text === 'string', 'UNSUPPORTED_OR_INCOMPLETE');
+  const rows = frame.text.split('\n');
+  assert.ok(
+    rows.length <= geometry.rows && rows.every((r) => r.length <= geometry.columns),
+    'FRAME_OVERFLOW',
+  );
+  const labels = {},
+    positions = {};
+  for (const label of calibrationLabels) {
+    const occurrences = [];
+    rows.forEach((line, row) => {
+      for (let col = line.indexOf(label); col >= 0; col = line.indexOf(label, col + 1))
+        occurrences.push({ row, col });
+    });
+    assert.equal(occurrences.length, 1, 'MISSING_OR_DUPLICATE_LABEL');
+    const position = occurrences[0];
+    assert.equal(rows[position.row].trim(), label, 'MISPLACED_LABEL');
+    const cells = frame.styles[position.row]?.slice(position.col, position.col + label.length);
+    assert.equal(cells?.length, label.length, 'MISSING_STYLE');
+    for (const cell of cells) assert.deepEqual(cell, cells[0], 'MIXED_STYLE');
+    assert.ok(cells[0], 'MISSING_STYLE');
+    labels[label] = { ...cells[0], supported: true };
+    positions[label] = position;
+  }
+  assert.equal(
+    positions[calibrationLabels[1]].row,
+    positions[calibrationLabels[0]].row + 1,
+    'ROW_ORDER',
+  );
+  assert.equal(
+    positions[calibrationLabels[1]].col,
+    positions[calibrationLabels[0]].col,
+    'ROW_ALIGNMENT',
+  );
+  if (previous) assert.deepEqual(positions, previous.positions, 'LABEL_MOVED');
+  return {
+    labels,
+    positions,
+    geometry: { ...geometry },
+    frames,
+    frameEnd,
+    offset: raw.length,
+    byteEnd: Buffer.byteLength(raw),
+    transcriptHash: digest(raw),
+    profileInstalled: false,
+  };
+}
 export const operationStages = Object.freeze([
   'UNRUN',
   'POLICY',
@@ -166,10 +258,11 @@ export function assertRendererStyles(before, after, state) {
   assert.equal(after[labels[0]].bold, false);
   assert.equal(after[labels[1]].bold, true);
   rendererCheckpoint(state, 'STYLE_SWAP', 'ASSERT');
-  for (const attribute of ['fg', 'bg']) {
-    assert.deepEqual(before[labels[0]][attribute], after[labels[1]][attribute]);
-    assert.deepEqual(before[labels[1]][attribute], after[labels[0]][attribute]);
-  }
+  // Selected styling transfers to BETA. ALPHA remains current, not ordinary
+  // inactive: its form-field-selected foreground need not equal BETA's text.base.
+  assert.deepEqual(before[labels[0]].fg, after[labels[1]].fg);
+  assert.deepEqual(before[labels[0]].bg, after[labels[1]].bg);
+  assert.deepEqual(before[labels[1]].bg, after[labels[0]].bg);
   state.reason = 'NONE';
 }
 export function rendererScan(captures, canaries, complete, overflow) {
