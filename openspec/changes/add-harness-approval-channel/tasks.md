@@ -16,6 +16,8 @@ Authorized edits are the existing test-owned navigation/readiness/composition/ru
 
 ### Capture-only candidate - static completion and frozen review inputs
 
+**Frozen executable candidate:** `0d1c005a7331fa61c7ca47670e810ad78684b829`, parent `9057763199b3335c9de39f9d1dcb3d7f9ce3a030`. Review exactly the twelve executable/test paths in the frozen table below plus this tasks brief. Product/source baseline remains unchanged. The final evidence increment changes this tasks file only, with no code/test/dependency/configuration/baseline change after the final 99/99 assertions and manifest freeze. Scoped Prettier check, selected whitespace and telemetry-disabled `openspec validate add-harness-approval-channel --strict` PASS within 30000 ms. Structure is not behavior proof. Estimated 100% of this bounded static-preparation deliverable is complete, not independent acceptance or product/release readiness. Coordination owns independent combined review and any later separate synthetic setup/capture authorization.
+
 Founder-visible success is still a genuine paired human decision on the exact request delivered to its original waiting call. This candidate makes later safe product observation possible. All native controls below are enabling proxies, not product, rendering, privacy, installed-first-use or release proof.
 
 - [x] Separate maintained `--product-picker-capture-run` host dispatch and `--product-picker-capture` inner branch. No preflight alias, profile installation or automatic qualification. The legacy composition route remains closed by its null profile.
