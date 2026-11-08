@@ -164,7 +164,7 @@ export function compositionSourceFrame(ansi) {
       continue;
     }
     if (token === '\x1b[?2027h') {
-      // Only the eight lone scalars below are modeled under all width methods.
+      // Only the nine lone scalars below are modeled under all width methods.
       if (syncing || frames) return bad('UNSAFE_UNICODE_PHASE');
       continue;
     }
@@ -199,7 +199,11 @@ export function compositionSourceFrame(ansi) {
     if (token.startsWith('\x1b')) return bad('UNSUPPORTED_CONTROL');
     // Source map ranges and exhaustive utf8_test:2047-2063 at the pinned SHA.
     // No cluster, combining/variation selector, C1 or unknown scalar is skipped.
-    if (!/^[\x20-\x7e\u00b7\u2026\u2503\u2579\u2580\u2584\u2588\u25cf]$/.test(token))
+    // U+203A: tests/unicode-width-map.zon:13 (202F..205F), width 1.
+    // tests/utf8_test.zig:2047-2063 checks every scalar in every WidthMethod.
+    // utf8.zig charWidth/eawToWidth and GraphemeWidthState do not license
+    // clusters here. VS16/ZWJ/combining scalars still refuse the whole prefix.
+    if (!/^[\x20-\x7e\u00b7\u2026\u203a\u2503\u2579\u2580\u2584\u2588\u25cf]$/.test(token))
       return bad('UNSUPPORTED_GLYPH');
     if (tainted || row === null || col === null) return bad('UNKNOWN_PAINT_POSITION');
     if (!syncing) return bad('UNSYNCHRONIZED_PAINT');
@@ -500,6 +504,10 @@ export function compositionSnapshot(input) {
   const age = (value) => (integer(now) && integer(value) && value <= now ? now - value : null);
   return {
     admitted: Object.values(checks).every((value) => value === true),
+    provenance: compositionGuardProvenance({
+      ...compositionGuardProvenance(get('provenance')),
+      requestSequence: own(request, 'request'),
+    }),
     checks,
     failed: Object.keys(checks).filter((name) => checks[name] !== true),
     currentOffset: integer(frameToken) ? frameToken : null,
@@ -513,6 +521,41 @@ export function compositionSnapshot(input) {
 
 export function compositionAdmission(input) {
   return compositionSnapshot(input).admitted;
+}
+
+// One actual-mode route for loop and final render diagnostics. Never fall back
+// to the unstyled observer when source decoding refuses a cumulative prefix.
+export function compositionReadinessFrame(ansi, pickerCapture) {
+  return pickerCapture ? (compositionSourceFrame(ansi).text ?? '') : compositionCurrentFrame(ansi);
+}
+
+// Closed diagnostics only. No raw identity, frame, path, log or error text.
+function compositionGuardProvenance(input) {
+  const select = (name, values) => {
+    const value = own(input, name);
+    return values.includes(value) ? value : 'UNKNOWN';
+  };
+  const hash = own(input, 'prefixSha256');
+  const sequence = own(input, 'requestSequence');
+  return {
+    observer: select('observer', ['SOURCE_LAYOUT', 'UNSTYLED']),
+    operands: select('operands', ['LOOP_SAMPLE', 'LAST_LOOP_SAMPLE_NOT_CURRENT']),
+    activation: select('activation', ['OBSERVED', 'NOT_OBSERVED']),
+    prefixSha256: typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash) ? hash : null,
+    requestSequence: integer(sequence) && sequence > 0 ? sequence : null,
+  };
+}
+
+// Do not claim a fresh asynchronous activation read at failure/cleanup. Preserve
+// all last-loop operands together, including the exact mode and prefix binding.
+export function compositionLastGuardSample(state) {
+  return {
+    ...state,
+    provenance: {
+      ...own(state, 'provenance'),
+      operands: 'LAST_LOOP_SAMPLE_NOT_CURRENT',
+    },
+  };
 }
 
 export function compositionCanRequestFresh(state, snapshot) {
@@ -557,6 +600,7 @@ export function compositionGuardJournal() {
         admitted: Object.values(checks).every((v) => v),
         checks,
         failed: Object.keys(checks).filter((name) => !checks[name]),
+        provenance: compositionGuardProvenance(own(snapshot, 'provenance')),
       };
       for (const name of [
         'currentOffset',

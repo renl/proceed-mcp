@@ -30,7 +30,14 @@ export const productCaptureFiles = Object.freeze([
 // state/evidence schema closed while adapting only this private product route.
 export function productCaptureReadFile(state, path, surface, used, io, expected) {
   assert.ok(['state', 'evidence', 'diagnostics', 'journal', 'api'].includes(surface));
-  return rendererReadFile(state, path, surface === 'evidence' ? 'evidence' : 'state', used, io, expected);
+  return rendererReadFile(
+    state,
+    path,
+    surface === 'evidence' ? 'evidence' : 'state',
+    used,
+    io,
+    expected,
+  );
 }
 
 export async function productCaptureInputs(stateRoot, wirePath, io) {
@@ -62,7 +69,8 @@ export async function productCaptureLogs(
       assert.ok(Buffer.byteLength(path) <= Number(inventoryLimits.path));
       assert.ok(accounting.paths <= Number(inventoryLimits.paths));
       assert.equal(entry.isSymbolicLink(), false);
-      if (entry.isDirectory()) chunks.push(await productCaptureLogs(path, accounting, depth + 1, io, now));
+      if (entry.isDirectory())
+        chunks.push(await productCaptureLogs(path, accounting, depth + 1, io, now));
       else if (/\.log(?:[.-].*)?$/.test(entry.name)) {
         const bytes = await productCaptureReadFile({}, path, 'diagnostics', accounting.bytes, io);
         accounting.bytes += bytes.length;
@@ -217,7 +225,13 @@ const freeze = (value) => {
   for (const item of Object.values(value)) if (item && typeof item === 'object') freeze(item);
   return Object.freeze(value);
 };
-export function failureSnapshot({ error, phase, keys, state, now, deadline }) {
+export function failureSnapshot({ error, phase, keys, state, now, deadline, lastLoopGuard }) {
+  let sampledGuard = null;
+  if (lastLoopGuard) {
+    const projection = compositionGuardJournal();
+    projection.record('loopadmit', lastLoopGuard);
+    sampledGuard = projection.value().records[0];
+  }
   return freeze({
     phase: phases.has(phase) ? phase : 'UNLISTED_PHASE',
     errorCode: compositionErrorCode(error),
@@ -228,6 +242,7 @@ export function failureSnapshot({ error, phase, keys, state, now, deadline }) {
       }),
     ),
     guard: compositionSnapshot({ ...state, now, deadline }),
+    lastLoopGuard: sampledGuard,
   });
 }
 
@@ -392,11 +407,19 @@ export function safeCompositionDiagnostic(input) {
     const journal = compositionGuardJournal();
     journal.record('finalrefuse', own(at, 'guard'));
     const { sequence, stage, ...guard } = journal.value().records[0];
+    let lastLoopGuard = null;
+    if (own(at, 'lastLoopGuard')) {
+      const sampled = compositionGuardJournal();
+      sampled.record('loopadmit', own(at, 'lastLoopGuard'));
+      const { sequence, stage, ...projection } = sampled.value().records[0];
+      lastLoopGuard = projection;
+    }
     failureAt = {
       phase: phases.has(own(at, 'phase')) ? own(at, 'phase') : 'UNLISTED_PHASE',
       errorCode: compositionErrorCode({ code: own(at, 'errorCode') }),
       keys: keys(own(at, 'keys')),
       guard,
+      lastLoopGuard,
     };
   }
   const life = get('lifecycle');

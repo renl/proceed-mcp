@@ -12,7 +12,10 @@ import {
   scanFrozenComposition,
   compositionScanReason,
 } from './support/harness-composition-retention.mjs';
-import { transportFixtureAuthorities, freezeTransportSecrets } from './support/harness-transport-fixtures.mjs';
+import {
+  transportFixtureAuthorities,
+  freezeTransportSecrets,
+} from './support/harness-transport-fixtures.mjs';
 import { readFile } from 'node:fs/promises';
 import {
   compositionCurrentFrame,
@@ -598,7 +601,8 @@ test('product collector reuses bounded complete traversal, refuses metadata race
 test('actual product readiness and final input routes adapt semantic labels without opening renderer schema', async () => {
   const f = metadataFixture(() => {}, true, true);
   const wire = '/run/proceed/qualification-private/composition-wire.jsonl';
-  const add = (path, text) => f.nodes.set(path, { bytes: Buffer.from(text), size: BigInt(Buffer.byteLength(text)) });
+  const add = (path, text) =>
+    f.nodes.set(path, { bytes: Buffer.from(text), size: BigInt(Buffer.byteLength(text)) });
   add(metadataRoots.state + '/journal.log', 'complete journal');
   add(wire, '');
   add(metadataRoots.state + '/host.log', 'complete diagnostics');
@@ -617,21 +621,35 @@ test('actual product readiness and final input routes adapt semantic labels with
   }
   assert.throws(() => productCaptureReadFile({}, 'unused', 'fixture', 0, f.io));
   f.nodes.get(metadataRoots.state + '/host.log').size = 16777217n;
-  await assert.rejects(productCaptureLogs(metadataRoots.state, { ...accounting, bytes: 0 }, 0, f.io));
+  await assert.rejects(
+    productCaptureLogs(metadataRoots.state, { ...accounting, bytes: 0 }, 0, f.io),
+  );
   f.descriptorBalance();
-  await assert.rejects(productCaptureLogs(metadataRoots.state, { ...accounting, deadline: 0 }, 0, f.io));
-  const inner = await readFile(new URL('./support/harness-composition-inner.mjs', import.meta.url), 'utf8');
+  await assert.rejects(
+    productCaptureLogs(metadataRoots.state, { ...accounting, deadline: 0 }, 0, f.io),
+  );
+  const inner = await readFile(
+    new URL('./support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
   assert.match(inner, /return productCaptureLogs\(root, accounting, depth\)/);
-  assert.match(inner, /productCaptureInputs\(\s*h.state,\s*'\/run\/proceed\/qualification-private\/composition-wire.jsonl'/);
+  assert.match(
+    inner,
+    /productCaptureInputs\(\s*h.state,\s*'\/run\/proceed\/qualification-private\/composition-wire.jsonl'/,
+  );
   assert.doesNotMatch(inner, /rendererReadFile/);
 });
 
 function producedTransportAuthorities() {
-  return transportFixtureAuthorities({
-    operator: { credential: 'hop_' + '1'.repeat(64) },
-    control: 'control-' + '2'.repeat(64),
-    owner: 'owner-' + '3'.repeat(64),
-  }, '4'.repeat(64), 'hop_' + '5'.repeat(64));
+  return transportFixtureAuthorities(
+    {
+      operator: { credential: 'hop_' + '1'.repeat(64) },
+      control: 'control-' + '2'.repeat(64),
+      owner: 'owner-' + '3'.repeat(64),
+    },
+    '4'.repeat(64),
+    'hop_' + '5'.repeat(64),
+  );
 }
 
 test('actual transport producer freezes every distinct authority once and rejects incomplete or malformed coverage', async () => {
@@ -648,10 +666,17 @@ test('actual transport producer freezes every distinct authority once and reject
   assert.ok(final.includes(late));
   assert.equal(frozen.length, 5);
   for (const secret of final) {
-    assert.throws(() => freezeTransportSecrets({ ...produced, secrets: produced.secrets.filter((s) => s !== secret) }));
+    assert.throws(() =>
+      freezeTransportSecrets({
+        ...produced,
+        secrets: produced.secrets.filter((s) => s !== secret),
+      }),
+    );
   }
   for (const invalid of ['', ' ', ' padded ', null, undefined, 1, {}, Buffer.from('x')]) {
-    assert.throws(() => freezeTransportSecrets({ ...produced, secrets: [...produced.secrets, invalid] }));
+    assert.throws(() =>
+      freezeTransportSecrets({ ...produced, secrets: [...produced.secrets, invalid] }),
+    );
     const broken = producedTransportAuthorities();
     broken.authorities.roles.unenrolled = invalid;
     assert.throws(() => freezeTransportSecrets(broken));
@@ -659,7 +684,9 @@ test('actual transport producer freezes every distinct authority once and reject
   assert.throws(() => freezeTransportSecrets({ ...produced, secrets: [...produced.secrets, ,] }));
   for (const invalid of [null, {}, 'not-an-array', []])
     assert.throws(() => freezeTransportSecrets({ ...produced, secrets: invalid }));
-  assert.throws(() => freezeTransportSecrets({ ...produced, secrets: [...produced.secrets, 'unexpected-authority'] }));
+  assert.throws(() =>
+    freezeTransportSecrets({ ...produced, secrets: [...produced.secrets, 'unexpected-authority'] }),
+  );
   for (const invalid of ['', null, undefined, 1]) {
     const broken = producedTransportAuthorities();
     broken.authorities.base[0] = invalid;
@@ -672,18 +699,52 @@ test('actual transport producer freezes every distinct authority once and reject
   aliased.authorities.roles.unenrolled = aliased.authorities.base[0];
   assert.throws(() => freezeTransportSecrets(aliased));
   const captures = Object.fromEntries(compositionSurfaces.map((s) => [s, Buffer.from('clean')]));
-  assert.equal(scanFrozenComposition({ captures, secrets: final, complete: true, overflow: false, measured: true }).scan.status, 'PASS');
-  for (const surface of compositionSurfaces) for (const secret of final) {
-    assert.throws(() => scanFrozenComposition({
-      captures: { ...captures, [surface]: Buffer.from('prefix' + secret + 'suffix') },
-      secrets: final, complete: true, overflow: false, measured: true,
-    }), (error) => compositionScanReason(error) === 'SECRET_MATCH');
-  }
-  assert.throws(() => scanFrozenComposition({ captures, secrets: produced.secrets, complete: true, overflow: false }),
-    (error) => compositionScanReason(error) === 'SECRET_SET');
-  const inner = await readFile(new URL('./support/harness-composition-inner.mjs', import.meta.url), 'utf8');
-  const transport = await readFile(new URL('./support/harness-transport-fixtures.mjs', import.meta.url), 'utf8');
-  assert.match(inner, /let controlsClosed = false;\s*try \{\s*requiredSecrets = freezeTransportSecrets\(controls\)/);
+  assert.equal(
+    scanFrozenComposition({
+      captures,
+      secrets: final,
+      complete: true,
+      overflow: false,
+      measured: true,
+    }).scan.status,
+    'PASS',
+  );
+  for (const surface of compositionSurfaces)
+    for (const secret of final) {
+      assert.throws(
+        () =>
+          scanFrozenComposition({
+            captures: { ...captures, [surface]: Buffer.from('prefix' + secret + 'suffix') },
+            secrets: final,
+            complete: true,
+            overflow: false,
+            measured: true,
+          }),
+        (error) => compositionScanReason(error) === 'SECRET_MATCH',
+      );
+    }
+  assert.throws(
+    () =>
+      scanFrozenComposition({
+        captures,
+        secrets: produced.secrets,
+        complete: true,
+        overflow: false,
+      }),
+    (error) => compositionScanReason(error) === 'SECRET_SET',
+  );
+  const inner = await readFile(
+    new URL('./support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const transport = await readFile(
+    new URL('./support/harness-transport-fixtures.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    inner,
+    /let controlsClosed = false;\s*try \{\s*requiredSecrets = freezeTransportSecrets\(controls\)/,
+  );
   assert.match(transport, /const authoritySet = transportFixtureAuthorities\(/);
   assert.match(transport, /const key = authorities.roles\[id\]/);
 });
@@ -1371,14 +1432,19 @@ test('finite source layout preserves indexed identity, asymmetric inactive style
 });
 
 test('source scalar support is finite and rejects clusters rather than ignoring them', () => {
-  const glyphs = '\u00b7\u2026\u2503\u2579\u2580\u2584\u2588\u25cf';
+  const glyphs = '\u00b7\u2026\u203a\u2503\u2579\u2580\u2584\u2588\u25cf';
   const paint = (s) => begin + '\x1b[1;1H' + s + end;
   const decoded = compositionSourceFrame(paint(glyphs + 'Z'));
   assert.equal(decoded.supported, true);
   assert.equal(decoded.text, glyphs + 'Z');
-  assert.deepEqual(decoded.cursor, { row: 0, col: 9 });
+  assert.deepEqual(decoded.cursor, { row: 0, col: 10 });
   for (const bad of [
     '\u25cf\ufe0f',
+    '\u203a\ufe0f',
+    '\u203a\u200d\u203a',
+    '\u203a\u0301',
+    '\u2039',
+    '\u2299',
     '\u2588\u200d\u2588',
     'e\u0301',
     '\u4e00',

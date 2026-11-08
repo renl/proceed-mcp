@@ -1,6 +1,7 @@
 // TEST ONLY. Scripted fault controls, never actual host/cleanup/privacy proof.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { compositionSnapshot } from './support/harness-composition-readiness.mjs';
 import {
   waitCompositionPhase,
   failureSnapshot,
@@ -218,6 +219,34 @@ test('safe failure snapshot drops paths, IDs, accessors, raw errors and arbitrar
   assert.equal(reads, 0);
   assert.equal(result.phase, 'UNLISTED_PHASE');
   assert.equal(JSON.stringify(result).includes('SECRET'), false);
+});
+
+test('failure export preserves the bounded last-loop projection independently of later failure checks', () => {
+  const loop = compositionSnapshot({
+    now: 2,
+    deadline: 10,
+    activation: { run: 'SECRET', setup: 'SECRET' },
+    provenance: {
+      observer: 'SOURCE_LAYOUT',
+      operands: 'LOOP_SAMPLE',
+      activation: 'OBSERVED',
+      prefixSha256: 'b'.repeat(64),
+      raw: 'SECRET',
+    },
+    frameToken: 42,
+    request: { request: 7 },
+  });
+  const at = failureSnapshot({ state: null, now: 10, deadline: 10, lastLoopGuard: loop });
+  const exported = safeCompositionDiagnostic({ failureAt: at });
+  assert.equal(exported.failureAt.guard.checks.originalDeadlineOpen, false);
+  assert.equal(exported.failureAt.lastLoopGuard.checks.originalDeadlineOpen, true);
+  assert.equal(exported.failureAt.lastLoopGuard.checks.activationPresent, true);
+  assert.equal(exported.failureAt.lastLoopGuard.currentOffset, 42);
+  assert.equal(exported.failureAt.lastLoopGuard.provenance.requestSequence, 7);
+  assert.equal(exported.failureAt.lastLoopGuard.provenance.prefixSha256, 'b'.repeat(64));
+  assert.equal(exported.failureAt.guard.provenance.activation, 'UNKNOWN');
+  assert.doesNotMatch(JSON.stringify(exported), /SECRET|"raw":/);
+  assert.ok(Object.isFrozen(at.lastLoopGuard));
 });
 
 test('outer progress appends phase history and preserves the first observed container exit', () => {

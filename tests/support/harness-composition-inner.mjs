@@ -34,17 +34,14 @@ import {
   productCaptureInputs,
   productCaptureLogs,
 } from './harness-composition-retention.mjs';
-import {
-  digest,
-  collectionAdmit,
-  collectionLimits,
-} from './harness-renderer-observation.mjs';
+import { digest, collectionAdmit, collectionLimits } from './harness-renderer-observation.mjs';
 import {
   awaitCompositionKeyAdmission,
   compositionRenderEvidence,
   compositionErrorCode,
   compositionCurrentFrame,
-  compositionSourceFrame,
+  compositionReadinessFrame,
+  compositionLastGuardSample,
   compositionActivation,
   compositionSnapshot,
   compositionCanRequestFresh,
@@ -99,8 +96,12 @@ const keys = { ctrlG: 0, enter: 0, exit: 0 };
 let readinessFrame = '';
 let readinessObservation;
 const guardJournal = compositionGuardJournal();
-const recordGuard = (stage, snapshot) => guardJournal.record(stage, snapshot);
-let lastGuardState, readGuardFiles, readinessEnd;
+let lastLoopGuard;
+const recordGuard = (stage, snapshot) => {
+  guardJournal.record(stage, snapshot);
+  if (stage === 'loopadmit') lastLoopGuard = structuredClone(snapshot);
+};
+let lastGuardState, readinessEnd;
 let failureAt;
 let priorPids = new Set();
 let lifecycle = { exitObserved: false, closeObserved: false, termination: 'NOT_REQUESTED' };
@@ -353,14 +354,6 @@ try {
             return null;
           }
         };
-        readGuardFiles = () => ({
-          // Cleanup entry does not repeat the asynchronous loader read. Do not
-          // present its earlier activation snapshot as current activation.
-          activation: null,
-          response: readObservation('composition-selector-response.json'),
-          responseReadAt: Date.now(),
-          live: readObservation('composition-live.json'),
-        });
         let request,
           requestWrittenAt,
           sequence = 0;
@@ -375,14 +368,18 @@ try {
               binding.hostRun = activation.run;
               binding.hostSetup = activation.setup;
             }
-            const frame = pickerCapture
-              ? (compositionSourceFrame(transcript.toString()).text ?? '')
-              : compositionCurrentFrame(transcript.toString());
+            const frame = compositionReadinessFrame(transcript.toString(), pickerCapture);
             const frameToken = transcript.length;
             const response = readObservation('composition-selector-response.json');
             const responseReadAt = response ? Date.now() : undefined;
             const live = readObservation('composition-live.json');
             lastGuardState = {
+              provenance: {
+                observer: pickerCapture ? 'SOURCE_LAYOUT' : 'UNSTYLED',
+                operands: 'LOOP_SAMPLE',
+                activation: activation ? 'OBSERVED' : 'NOT_OBSERVED',
+                prefixSha256: digest(transcript),
+              },
               binding,
               activation,
               frame,
@@ -600,16 +597,15 @@ try {
           );
       } catch (error) {
         errorCode = compositionErrorCode(error);
-        // Freeze failure-time operands before Ctrl+C, cleanup files or phase changes.
+        // Preserve the last complete loop sample, not reconstructed failure-time
+        // operands. No new file reads or substitute decoder may alter its binding.
         failureAt = failureSnapshot({
+          lastLoopGuard,
           error,
           phase,
           keys,
           state: {
-            ...lastGuardState,
-            ...readGuardFiles?.(),
-            frame: compositionCurrentFrame(transcript.toString()),
-            frameToken: transcript.length,
+            ...compositionLastGuardSample(lastGuardState),
             exited,
             overflow,
           },
@@ -640,10 +636,7 @@ try {
         recordGuard(
           'CleanupENTRY',
           compositionSnapshot({
-            ...lastGuardState,
-            ...readGuardFiles?.(),
-            frame: compositionCurrentFrame(transcript.toString()),
-            frameToken: transcript.length,
+            ...compositionLastGuardSample(lastGuardState),
             exited,
             overflow,
             now: Date.now(),
@@ -675,7 +668,9 @@ try {
         productCleanup = (await exists(join(evidence, 'composition-cleanup.json')))
           ? 'OBSERVED'
           : 'UNRUN';
-        renderEvidence = compositionRenderEvidence(compositionCurrentFrame(transcript.toString()));
+        renderEvidence = compositionRenderEvidence(
+          compositionReadinessFrame(transcript.toString(), pickerCapture),
+        );
         // Failure captures stay private unless the SAME complete raw scan passes.
         // Close is not graceful exit. Forced exit is eligible only after actual
         // writer absence and every required input is available and bounded.
@@ -703,7 +698,8 @@ try {
               );
               await writeFile(join(evidence, 'composition-observations.json'), observations);
               const { journal, api } = await productCaptureInputs(
-                h.state, '/run/proceed/qualification-private/composition-wire.jsonl',
+                h.state,
+                '/run/proceed/qualification-private/composition-wire.jsonl',
               );
               const telegram = Buffer.from(JSON.stringify(h.fixture.calls));
               const extras = [journal, api, telegram, transcript].map((bytes) => ({ bytes }));

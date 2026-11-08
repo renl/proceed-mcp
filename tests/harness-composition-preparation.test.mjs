@@ -10,6 +10,8 @@ import {
   compositionErrorCode,
   productReadyText,
   compositionCurrentFrame,
+  compositionReadinessFrame,
+  compositionLastGuardSample,
   compositionActivation,
   compositionAdmission,
   compositionSnapshot,
@@ -23,6 +25,108 @@ import { scanRequiredCaptures } from './support/harness-transport-fixtures.mjs';
 import { assertDetailedTransportExport } from './support/harness-runtime-transport.mjs';
 
 const readyFrame = `2.2.5\nAsk anything\n┃  ${productReadyText}  ┃`;
+
+test('actual capture readiness route never substitutes the unstyled failure observer', async () => {
+  const paint = (s) => '\x1b[?2026h\x1b[1;1H' + s + '\x1b[?2026l';
+  const prefix = paint('2.2.5 Ask anything \u203a');
+  assert.equal(compositionReadinessFrame(prefix, true), '2.2.5 Ask anything \u203a');
+  const unsafe = prefix + paint('\u203a\ufe0f');
+  assert.equal(compositionReadinessFrame(unsafe, true), '');
+  assert.notEqual(compositionReadinessFrame(unsafe, false), '');
+  assert.equal(compositionReadinessFrame(prefix + '\x1b[?2026h', true), '');
+  assert.equal(compositionReadinessFrame(prefix + '\x1b[?1049l', true), '');
+  const inner = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    inner,
+    /const frame = compositionReadinessFrame\(transcript.toString\(\), pickerCapture\)/,
+  );
+  const catchStart = inner.indexOf('} catch (error) {');
+  const failure = inner.slice(catchStart, inner.indexOf('// One exit key only', catchStart));
+  assert.equal((failure.match(/compositionLastGuardSample\(lastGuardState\)/g) ?? []).length, 2);
+  assert.doesNotMatch(failure, /compositionCurrentFrame|readObservation|activation: null/);
+  assert.doesNotMatch(inner, /readGuardFiles/);
+  assert.match(
+    inner,
+    /compositionRenderEvidence\(\s*compositionReadinessFrame\(transcript.toString\(\), pickerCapture\)/,
+  );
+});
+
+test('failure and cleanup preserve exact last-loop operands and closed provenance, not current activation', () => {
+  const state = {
+    activation: { run: 'private-run', setup: 'private-setup' },
+    binding: {
+      hostRun: 'private-run',
+      hostSetup: 'private-setup',
+      run: 'r',
+      generation: 'g',
+      session: 's',
+    },
+    live: { run: 'r', generation: 'g', live: true },
+    request: { run: 'r', generation: 'g', request: 3, frameToken: 123, frame: readyFrame },
+    response: {
+      run: 'r',
+      generation: 'g',
+      request: 3,
+      session: 's',
+      live: true,
+      commandEligible: true,
+    },
+    frame: readyFrame,
+    frameToken: 123,
+    exited: false,
+    overflow: false,
+    provenance: {
+      observer: 'SOURCE_LAYOUT',
+      operands: 'LOOP_SAMPLE',
+      activation: 'OBSERVED',
+      prefixSha256: 'a'.repeat(64),
+    },
+  };
+  const sample = compositionLastGuardSample(state);
+  for (const name of [
+    'activation',
+    'binding',
+    'request',
+    'response',
+    'live',
+    'frame',
+    'frameToken',
+  ])
+    assert.equal(sample[name], state[name]);
+  const result = compositionSnapshot({ ...sample, now: 10, deadline: 10 });
+  assert.equal(result.checks.activationPresent, true);
+  assert.equal(result.checks.hostRunMatch, true);
+  assert.equal(result.checks.originalDeadlineOpen, false);
+  assert.equal(result.provenance.operands, 'LAST_LOOP_SAMPLE_NOT_CURRENT');
+  assert.equal(result.provenance.requestSequence, 3);
+  assert.equal(result.provenance.prefixSha256, 'a'.repeat(64));
+  assert.equal(compositionSnapshot(null).provenance.activation, 'UNKNOWN');
+  const absent = compositionSnapshot({
+    ...sample,
+    activation: null,
+    provenance: { ...sample.provenance, activation: 'NOT_OBSERVED' },
+  });
+  assert.equal(absent.provenance.activation, 'NOT_OBSERVED');
+  assert.equal(absent.admitted, false);
+  for (const delta of [
+    { response: { ...state.response, generation: 'stale' } },
+    { response: { ...state.response, request: 2 } },
+    { frameToken: 124 },
+    { frame: 'changed' },
+  ])
+    assert.equal(
+      compositionSnapshot({ ...sample, ...delta, now: 1, deadline: 10 }).admitted,
+      false,
+    );
+  const journal = compositionGuardJournal();
+  journal.record('CleanupENTRY', result);
+  const serialized = JSON.stringify(journal.value());
+  for (const secret of ['private-run', 'private-setup', readyFrame])
+    assert.ok(!serialized.includes(secret));
+});
 
 test('composition stages its maintained runner and uses the actual public product entry/context', async () => {
   const payload = qualificationPayload(['src/harness/tui-entry.js', 'bin/proceed-mcp.js']);
@@ -770,7 +874,10 @@ test('capture host entry dispatch is separate, skips setup pending probe, freeze
   assert.match(inner, /configBytes:[\s\S]*environment: env/);
   assert.match(inner, /resolvedTheme: null,\s*designMode: null,\s*effectiveColorDepth: null/);
   assert.match(inner, /const \{ journal, api \} = await productCaptureInputs\(/);
-  assert.match(await source('support/harness-composition-retention.mjs'), /assert.equal\(api.length, 0\)/);
+  assert.match(
+    await source('support/harness-composition-retention.mjs'),
+    /assert.equal\(api.length, 0\)/,
+  );
   assert.match(inner, /collectProductCapture\(/);
 });
 
