@@ -33,6 +33,12 @@ import {
 } from './support/harness-renderer-observation.mjs';
 
 const metadataRoots = { state: '/run/proceed/state', evidence: '/run/proceed/evidence' };
+const metadataIdentity = {
+  dev: 9007199254740992n,
+  ino: 9007199254740996n,
+  mtimeNs: 1794096000000000000n,
+  ctimeNs: 1794096000000000004n,
+};
 const requiredInventoryNames = [
   'binding.json',
   'observations.json',
@@ -82,17 +88,16 @@ function metadataFixture(hook = () => {}) {
   const snapshot = (path) => {
     const node = nodes.get(path);
     if (!node) throw new Error('synthetic missing');
-    return {
-      dev: 1n,
-      ino: 2n,
-      mtimeNs: 3n,
-      ctimeNs: 4n,
+    const result = {
+      ...metadataIdentity,
       size: node.size,
       isFile: () => !node.directory && !node.special,
       isDirectory: () => !!node.directory,
       isSymbolicLink: () => !!node.link,
       ...node.metadata,
     };
+    for (const field of node.omitMetadata ?? []) delete result[field];
+    return result;
   };
   const acquire = () => {
     assert.equal(active++, 0, 'one descriptor at a time');
@@ -205,6 +210,92 @@ test('metadata inventory has two complete stable passes, no content reads and fa
   assert.equal(JSON.stringify(result).includes('PASS'), false);
 });
 
+test('inventory admits exact epoch-ns and large identities without exporting internal metadata', async () => {
+  const baseline = await metadataFixture().run();
+  assert.equal(baseline.complete, true);
+  for (const field of Object.keys(metadataIdentity)) {
+    const f = metadataFixture();
+    f.nodes.get(metadataRoots.evidence + '/host.log').metadata = {
+      [field]: metadataIdentity[field] + 1n,
+    };
+    assert.deepEqual(await f.run(), baseline, field);
+    assert.equal(JSON.stringify(baseline).includes(metadataIdentity[field].toString()), false);
+  }
+  for (const field of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
+    for (const target of [metadataRoots.evidence, metadataRoots.evidence + '/host.log']) {
+      const f = metadataFixture();
+      f.nodes.get(target).omitMetadata = [field];
+      assert.deepEqual(await f.run(), incompleteInventory(), `absent ${field}`);
+    }
+    for (const bad of [undefined, null, 1, '1', -1n, NaN]) {
+      const f = metadataFixture();
+      f.nodes.get(metadataRoots.evidence + '/host.log').metadata = { [field]: bad };
+      assert.deepEqual(await f.run(), incompleteInventory(), `${field}: ${String(bad)}`);
+    }
+  }
+});
+
+test('inventory detects one-bit identity/timestamp changes at descriptor, path and pass comparisons', async () => {
+  for (const field of Object.keys(metadataIdentity)) {
+    const original = metadataIdentity[field];
+    // These distinct bigint operands collapse to the same Number. A lossy
+    // comparison would incorrectly admit every instability below.
+    assert.equal(Number(original), Number(original + 1n));
+    for (const [event, occurrence, directory] of [
+      ['fstat', 1, false],
+      ['lstat', 2, false],
+      ['lstat', 3, false],
+      ['lstat', 2, true],
+      ['lstat', 3, true],
+    ]) {
+      let seen = 0;
+      const target = directory ? metadataRoots.evidence : metadataRoots.evidence + '/host.log';
+      const f = metadataFixture((op, path, nodes) => {
+        if (op === event && path === target && ++seen === occurrence)
+          nodes.get(path).metadata = { [field]: original + 1n };
+      });
+      assert.deepEqual(
+        await f.run(),
+        incompleteInventory(),
+        `${field}: ${event} ${occurrence}, directory ${directory}`,
+      );
+      assert.equal(seen, occurrence);
+    }
+  }
+});
+
+test('inventory charges longer exact internal decimal records against the same retained budget', async () => {
+  const cutoff = async (wide) => {
+    const fixture = () => {
+      const f = metadataFixture();
+      if (wide)
+        f.nodes.get(metadataRoots.evidence + '/host.log').metadata = {
+          ino: 10n ** 80n,
+          mtimeNs: 10n ** 80n + 1n,
+        };
+      return f;
+    };
+    let low = 1n,
+      high = inventoryLimits.retained;
+    while (low < high) {
+      const mid = (low + high) / 2n;
+      if ((await fixture().run({ ...inventoryLimits, retained: mid })).complete) high = mid;
+      else low = mid + 1n;
+    }
+    assert.equal((await fixture().run({ ...inventoryLimits, retained: low })).complete, true);
+    assert.deepEqual(
+      await fixture().run({ ...inventoryLimits, retained: low - 1n }),
+      incompleteInventory(),
+    );
+    return low;
+  };
+  const ordinary = await cutoff(false),
+    wide = await cutoff(true);
+  // Both passes charge twice each serialized record. Only these two decimal
+  // fields grow. Their exact lengths must affect admission, not just equality.
+  assert.equal(wide - ordinary, 4n * BigInt(81 - 16 + 81 - 19));
+});
+
 test('inventory entry/visit/file/depth ceilings admit exact values and refuse above', async () => {
   for (const [key, exact] of [
     ['entries', 9n],
@@ -285,8 +376,9 @@ test('metadata rejects missing evidence/logs, unsafe bigint metadata and all obs
       if (op === 'fstat' && path === target && !changed) {
         changed = true;
         if (fault === 'growth') nodes.get(path).size++;
-        if (fault === 'replacement') nodes.get(path).metadata = { ino: 9n };
-        if (fault === 'rewrite') nodes.get(path).metadata = { mtimeNs: 9n };
+        if (fault === 'replacement') nodes.get(path).metadata = { ino: metadataIdentity.ino + 1n };
+        if (fault === 'rewrite')
+          nodes.get(path).metadata = { mtimeNs: metadataIdentity.mtimeNs + 1n };
       }
       if (
         passes === 2 &&
@@ -301,7 +393,7 @@ test('metadata rejects missing evidence/logs, unsafe bigint metadata and all obs
         path === metadataRoots.evidence &&
         fault === 'directory'
       )
-        nodes.get(path).metadata = { ctimeNs: 9n };
+        nodes.get(path).metadata = { ctimeNs: metadataIdentity.ctimeNs + 1n };
       if (op === 'open' && fault === 'unreadable') throw new Error('private');
       if (op === 'dirread' && fault === 'traversal') throw new Error('private');
     });

@@ -195,8 +195,14 @@ export async function rendererMetadataInventory(
       assert.equal(s.isSymbolicLink(), false);
       const kind = s.isFile() ? 'file' : s.isDirectory() ? 'directory' : 'refused';
       assert.notEqual(kind, 'refused');
-      const values = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].map((key) => safeBig(s[key]));
-      return [kind, ...values.map(String)];
+      const values = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].map((key) => {
+        const value = s[key];
+        assert.ok(typeof value === 'bigint' && value >= 0n);
+        // Only sizes feed exported arithmetic. Identity and epoch nanoseconds
+        // stay exact bigint, independent of the exported safe-integer ceiling.
+        return key === 'size' ? safeBig(value) : value;
+      });
+      return [kind, ...values];
     };
     const same = (a, b) => assert.deepEqual(a, b);
     const passes = [];
@@ -226,7 +232,11 @@ export async function rendererMetadataInventory(
           const before = metadata(await call(() => io.lstat(path, { bigint: true })));
           if (depth === 0n) assert.equal(before[0], 'directory');
           assert.equal(entries.has(path), false);
-          const record = JSON.stringify({ surface, metadata: before });
+          // Decimal strings preserve every bigint bit in the charged internal
+          // record. Neither this record nor identity/timestamps are exported.
+          const record = JSON.stringify({ surface, metadata: before }, (_, value) =>
+            typeof value === 'bigint' ? value.toString() : value,
+          );
           const extra = 2n * inventoryBytes(record) + 256n;
           charge(path, extra);
           entries.set(path, { surface, metadata: before, record });
@@ -299,7 +309,7 @@ export async function rendererMetadataInventory(
     for (const [path, { surface, metadata: m }] of passes[0]) {
       check();
       const root = totals[surface],
-        size = BigInt(m[3]);
+        size = m[3];
       root.entries++;
       pathBytes += inventoryBytes(path);
       if (m[0] !== 'file') continue;
