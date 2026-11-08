@@ -17,6 +17,7 @@ import {
   assertRendererStyles,
   rendererStyleFacts,
   rendererSize,
+  rendererReadFile,
   rendererDiagnostics,
   rendererCells,
   rendererDiagnosticSequence,
@@ -239,9 +240,19 @@ test('maintained diagnostic wiring keeps qualification, scan/export and lifecycl
   );
   assert.match(inner, /if \(!diagnosticMode\)/);
   assert.match(inner, /hostExit = exited && closed && !!hostPid/);
+  assert.match(inner, /productProfile: null/);
+  assert.ok(inner.indexOf("'SCAN', overflow") < inner.indexOf("'EXPORT_DIAGNOSTICS'"));
   assert.match(inner, /\['state', statePaths\],[\s\S]*\['evidence', evidencePaths\]/);
-  assert.match(inner, /rendererSize\(collection, bytes.length, false, surface\)/);
-  assert.ok(inner.indexOf('rendererSize(collection, bytes.length') < inner.indexOf('entries.push'));
+  assert.match(inner, /rendererReadFile\(collection, path, surface, collectedBytes\)/);
+  assert.ok(inner.indexOf('rendererReadFile(collection, path') < inner.indexOf('entries.push'));
+  assert.match(inner, /collectedBytes \+= bytes.length/);
+  assert.doesNotMatch(inner, /readFile\(path\)/);
+  for (const root of ['root', 'evidence'])
+    assert.ok(inner.includes(`.filter((e) => e.path.startsWith(${root} + '/'))`));
+  assert.equal(
+    (inner.match(/flatMap\(\(e\) => \[Buffer.from\(e.path\), e.bytes\]\)/g) ?? []).length,
+    2,
+  );
   assert.ok(
     runner.indexOf(
       'assertRendererExport(',
@@ -463,20 +474,20 @@ test('collection size, missing logs and stream overflow retain distinct closed f
 test('per-file exact bound accepts, first overflow retains only explicit root and exact bytes', () => {
   for (const surface of ['state', 'evidence']) {
     const state = {};
-    for (const bytes of [0, 4194304]) {
+    for (const bytes of [0, 4194304, 12846400, 16777216]) {
       rendererSize(state, bytes, false, surface);
       assert.deepEqual(state, { stage: 'PER_FILE_SIZE', reason: 'NONE' });
     }
-    assert.throws(() => rendererSize(state, 4194305, false, surface));
+    assert.throws(() => rendererSize(state, 16777217, false, surface));
     assert.deepEqual(state, {
       stage: 'PER_FILE_SIZE',
       reason: 'OVERFLOW',
-      overflow: { surface, bytes: 4194305 },
+      overflow: { surface, bytes: 16777217 },
     });
     assert.throws(() =>
-      rendererSize(state, 9000000, false, surface === 'state' ? 'evidence' : 'state'),
+      rendererSize(state, 18000000, false, surface === 'state' ? 'evidence' : 'state'),
     );
-    assert.deepEqual(state.overflow, { surface, bytes: 4194305 });
+    assert.deepEqual(state.overflow, { surface, bytes: 16777217 });
   }
   for (const [bytes, surface, total = false] of [
     [4194305, undefined],
@@ -495,6 +506,161 @@ test('per-file exact bound accepts, first overflow retains only explicit root an
     assert.throws(() => rendererSize(state, bytes, total, surface));
     assert.equal(Object.hasOwn(state, 'overflow'), false);
   }
+});
+// Deterministic I/O fault injection. No host, resource, filesystem fixture or service.
+function collectionIO(size, fault) {
+  const calls = { allocations: [], reads: [], opens: 0, closes: 0 };
+  const stat = () => ({
+    size: typeof size === 'number' && Number.isSafeInteger(size) ? BigInt(size) : size,
+    dev: 1n,
+    ino: 2n,
+    mtimeNs: 3n,
+    ctimeNs: 4n,
+    isFile: () => fault !== 'directory',
+    isSymbolicLink: () => fault === 'symlink',
+  });
+  let stats = 0,
+    paths = 0;
+  return {
+    calls,
+    async lstat() {
+      paths++;
+      const value = stat();
+      if (paths > 1 && fault === 'path-replacement') value.ino++;
+      if (paths > 1 && fault === 'late-symlink') value.isSymbolicLink = () => true;
+      return value;
+    },
+    allocate(bytes) {
+      calls.allocations.push(bytes);
+      return Buffer.alloc(bytes);
+    },
+    async open(_path, flags) {
+      calls.opens++;
+      assert.equal(typeof flags, 'number');
+      if (fault === 'open') throw new Error('synthetic');
+      return {
+        async stat() {
+          stats++;
+          const value = stat();
+          if (fault === 'open-replacement') value.ino++;
+          if (stats > 1 && fault === 'growth-stat') value.size++;
+          if (stats > 1 && fault === 'rewrite') value.mtimeNs++;
+          return value;
+        },
+        async read(buffer, offset, length, position) {
+          calls.reads.push({ length, position });
+          assert.ok(length <= 65536 && offset + length <= buffer.length);
+          if (fault === 'read') throw new Error('synthetic');
+          if (fault === 'incomplete') return { bytesRead: 0 };
+          if (fault === 'invalid-read') return { bytesRead: length + 1 };
+          const bytesRead =
+            position === size
+              ? fault === 'growth-read'
+                ? 1
+                : 0
+              : Math.min(length, fault === 'partial' ? 3 : length);
+          buffer.fill(120, offset, offset + bytesRead);
+          return { bytesRead };
+        },
+        async close() {
+          calls.closes++;
+        },
+      };
+    },
+  };
+}
+test('bounded collection admits exact/zero files and cumulative remainder before allocation', async () => {
+  for (const size of [0, 17, 16777216]) {
+    const io = collectionIO(size);
+    const bytes = await rendererReadFile({}, 'synthetic', 'state', 0, io);
+    assert.equal(bytes.length, size);
+    assert.deepEqual(io.calls.allocations, [size]);
+    assert.equal(io.calls.closes, 1);
+    assert.ok(io.calls.reads.every((r) => r.position <= size));
+  }
+  const first = collectionIO(12846400);
+  const retained = await rendererReadFile({}, 'synthetic', 'state', 0, first);
+  assert.equal(retained.length, 12846400);
+  for (const size of [3930816, 3930817]) {
+    const io = collectionIO(size),
+      state = {};
+    const action = rendererReadFile(state, 'synthetic', 'evidence', retained.length, io);
+    if (size === 3930816) assert.equal((await action).length, size);
+    else {
+      await assert.rejects(action);
+      assert.deepEqual(state, { stage: 'TOTAL_SIZE', reason: 'OVERFLOW' });
+      assert.deepEqual(io.calls, { allocations: [], reads: [], opens: 0, closes: 0 });
+    }
+  }
+  const partial = collectionIO(17, 'partial');
+  assert.equal((await rendererReadFile({}, 'synthetic', 'state', 0, partial)).length, 17);
+});
+test('bounded collection refuses unsafe metadata, symlinks and overflow before open/allocation', async () => {
+  for (const size of [
+    -1,
+    NaN,
+    Infinity,
+    1.5,
+    undefined,
+    '12',
+    Number.MAX_SAFE_INTEGER + 1,
+    9007199254740992n,
+    16777217,
+  ]) {
+    const io = collectionIO(size),
+      state = {};
+    await assert.rejects(rendererReadFile(state, 'synthetic', 'state', 0, io));
+    assert.deepEqual(io.calls, { allocations: [], reads: [], opens: 0, closes: 0 });
+    if (size === 16777217)
+      assert.deepEqual(state, {
+        stage: 'PER_FILE_SIZE',
+        reason: 'OVERFLOW',
+        overflow: { surface: 'state', bytes: 16777217 },
+      });
+    else assert.equal(Object.hasOwn(state, 'overflow'), false);
+  }
+  for (const fault of ['symlink', 'directory']) {
+    const io = collectionIO(10, fault),
+      state = {};
+    await assert.rejects(rendererReadFile(state, 'synthetic', 'state', 0, io));
+    assert.equal(state.stage, fault === 'symlink' ? 'SYMLINK' : 'READ_FILE');
+    assert.equal(state.reason, 'INCOMPLETE');
+    assert.deepEqual(io.calls.allocations, []);
+    assert.equal(io.calls.opens, 0);
+  }
+  for (const used of [-1, NaN, Number.MAX_SAFE_INTEGER + 1, 16777217]) {
+    const io = collectionIO(1);
+    await assert.rejects(rendererReadFile({}, 'synthetic', 'state', used, io));
+    assert.equal(io.calls.opens, 0);
+    assert.deepEqual(io.calls.allocations, []);
+  }
+});
+test('bounded collection fails closed on growth, replacement, rewrite and incomplete reads, closing handles', async () => {
+  for (const fault of [
+    'open',
+    'open-replacement',
+    'growth-stat',
+    'growth-read',
+    'rewrite',
+    'path-replacement',
+    'late-symlink',
+    'incomplete',
+    'invalid-read',
+    'read',
+  ]) {
+    const io = collectionIO(17, fault),
+      state = {};
+    await assert.rejects(rendererReadFile(state, 'synthetic', 'evidence', 0, io));
+    assert.equal(io.calls.closes, fault === 'open' ? 0 : 1);
+    assert.equal(state.reason, ['open', 'read'].includes(fault) ? 'IO' : 'INCOMPLETE');
+    if (fault === 'open-replacement') assert.deepEqual(io.calls.allocations, []);
+  }
+});
+test('bounded native regular-file read returns the entire admitted source', async () => {
+  const path = new URL('./support/harness-renderer-observation.mjs', import.meta.url);
+  const state = {};
+  assert.deepEqual(await rendererReadFile(state, path, 'evidence', 0), await readFile(path));
+  assert.equal(state.reason, 'NONE');
 });
 test('native injected read/write/parse/scan/export failures retain stage without inspecting exceptions', async () => {
   const secret = 'cap_' + 'a'.repeat(64);
@@ -745,4 +911,27 @@ test('renderer full-scope privacy controls refuse each missing or leaking surfac
   assert.throws(() => assertRendererExport({ status: 'PASS', scope: 'product' }));
   assert.ok(rendererPayload.every((p) => p.startsWith('tests/')));
   assert.ok(!rendererPayload.some((p) => p.startsWith('src/')));
+});
+test('complete scans detect path and late content secrets beyond the former file limit before export', () => {
+  const canaries = ['a'.repeat(40), 'b'.repeat(40)];
+  for (const surface of rendererSurfaces) {
+    for (const secret of [...canaries, 'cap_' + 'c'.repeat(64), 'Bearer ' + 'x'.repeat(32)]) {
+      for (const position of ['path', 'late-content']) {
+        const captures = Object.fromEntries(
+          rendererSurfaces.map((s) => [s, Buffer.from('synthetic')]),
+        );
+        captures[surface] = Buffer.concat([
+          Buffer.from(position === 'path' ? `/synthetic/${secret}/file` : '/synthetic/file'),
+          Buffer.alloc(4194305, 120),
+          Buffer.from(position === 'late-content' ? secret : 'clean'),
+        ]);
+        let detailedExport = false;
+        assert.throws(() => {
+          assertRendererExport(rendererScan(captures, canaries, true, false));
+          detailedExport = true;
+        });
+        assert.equal(detailedExport, false);
+      }
+    }
+  }
 });

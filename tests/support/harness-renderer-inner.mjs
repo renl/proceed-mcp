@@ -25,6 +25,7 @@ import {
   safeRendererDiagnostic,
   rendererStyleFacts,
   rendererSize,
+  rendererReadFile,
   rendererDiagnostics,
   rendererCaptureCheck,
   assertRendererCursor,
@@ -438,13 +439,14 @@ try {
         files(evidence, collection),
       );
     const entries = [];
+    let collectedBytes = 0;
     for (const [surface, paths] of [
       ['state', statePaths],
       ['evidence', evidencePaths],
     ]) {
       for (const path of paths) {
-        const bytes = await rendererStep(collection, 'READ_FILE', 'IO', () => readFile(path));
-        rendererSize(collection, bytes.length, false, surface);
+        const bytes = await rendererReadFile(collection, path, surface, collectedBytes);
+        collectedBytes += bytes.length;
         entries.push({ path, bytes });
       }
     }
