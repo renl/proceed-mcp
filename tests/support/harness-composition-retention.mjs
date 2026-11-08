@@ -26,6 +26,55 @@ export const productCaptureFiles = Object.freeze([
   'progress.jsonl',
 ]);
 
+// Filesystem categories are not product scan meanings. Keep the renderer's
+// state/evidence schema closed while adapting only this private product route.
+export function productCaptureReadFile(state, path, surface, used, io, expected) {
+  assert.ok(['state', 'evidence', 'diagnostics', 'journal', 'api'].includes(surface));
+  return rendererReadFile(state, path, surface === 'evidence' ? 'evidence' : 'state', used, io, expected);
+}
+
+export async function productCaptureInputs(stateRoot, wirePath, io) {
+  const journal = await productCaptureReadFile({}, stateRoot + '/journal.log', 'journal', 0, io);
+  const api = await productCaptureReadFile({}, wirePath, 'api', journal.length, io);
+  assert.equal(api.length, 0);
+  return { journal, api };
+}
+
+export async function productCaptureLogs(
+  root,
+  accounting,
+  depth = 0,
+  io = { lstat, open, opendir, flags: constants, allocate: Buffer.alloc },
+  now = Date.now,
+) {
+  assert.ok(depth <= Number(inventoryLimits.depth) && now() < accounting.deadline);
+  const chunks = [];
+  const directory = await io.opendir(root, { bufferSize: 1 });
+  try {
+    for (;;) {
+      assert.ok(now() < accounting.deadline);
+      const entry = await directory.read();
+      if (!entry) break;
+      const path = root + '/' + entry.name;
+      accounting.entries++;
+      accounting.paths += Buffer.byteLength(path);
+      assert.ok(accounting.entries <= Number(inventoryLimits.entries));
+      assert.ok(Buffer.byteLength(path) <= Number(inventoryLimits.path));
+      assert.ok(accounting.paths <= Number(inventoryLimits.paths));
+      assert.equal(entry.isSymbolicLink(), false);
+      if (entry.isDirectory()) chunks.push(await productCaptureLogs(path, accounting, depth + 1, io, now));
+      else if (/\.log(?:[.-].*)?$/.test(entry.name)) {
+        const bytes = await productCaptureReadFile({}, path, 'diagnostics', accounting.bytes, io);
+        accounting.bytes += bytes.length;
+        chunks.push(bytes);
+      }
+    }
+  } finally {
+    await directory.close();
+  }
+  return Buffer.concat(chunks);
+}
+
 // Reuse traversal/read admission, NOT the renderer surface set or scan marker.
 export async function collectProductCapture(
   roots,
@@ -66,7 +115,7 @@ export async function collectProductCapture(
       rendererWork(planned, N, secrets.length, S);
       for (const [path, e] of membership) {
         if (e.metadata[0] !== 'file') continue;
-        const bytes = await rendererReadFile(state, path, e.surface, F, io, e.metadata);
+        const bytes = await productCaptureReadFile(state, path, e.surface, F, io, e.metadata);
         F += bytes.length;
         entries.push({ path, bytes });
       }
@@ -271,8 +320,8 @@ export function compositionScanReason(error, stage) {
 export function scanFrozenComposition({ captures, secrets, complete, overflow, measured = false }) {
   if (complete !== true) scanRefuse('INCOMPLETE');
   if (overflow !== false) scanRefuse('OVERFLOW');
-  // Four role authorities plus every generated negative-fixture authority.
-  // The driver passes the complete pinned transportFixtures set unchanged.
+  // The driver validates complete producer coverage and normalizes duplicates
+  // once before freezing. This scan boundary still refuses malformed sets.
   if (!(
     Array.isArray(secrets) &&
     secrets.length >= 4 &&

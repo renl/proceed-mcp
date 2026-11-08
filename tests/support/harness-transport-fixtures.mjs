@@ -22,6 +22,38 @@ export function scanRequiredCaptures(captures, secrets, required) {
   return { status: 'PASS', surfaces: required };
 }
 
+const transportRoles = Object.freeze([
+  'enrolled', 'unenrolled', 'owner', 'control', 'foreign', 'plaintext', 'wrong-psk',
+]);
+
+// Pure producer shared by real fixture setup and memory-only integration controls.
+export function transportFixtureAuthorities(h, channel, unenrolled) {
+  const base = [h.operator.credential, channel, h.control, h.owner];
+  const roles = Object.fromEntries(transportRoles.map((id) => [id,
+    id === 'owner' ? h.owner : id === 'control' ? h.control :
+      id === 'unenrolled' ? unenrolled : h.operator.credential,
+  ]));
+  return { authorities: { base, roles }, secrets: [...base, ...Object.values(roles)] };
+}
+
+// The only normalization boundary. Validate the complete producer ledger before
+// deduplication, then require exact coverage of every base and generated role.
+export function freezeTransportSecrets({ authorities: { base, roles }, secrets }) {
+  const valid = (s) => typeof s === 'string' && s.length > 0 && s.trim() === s;
+  assert.ok(Array.isArray(base) && base.length === 4 && Array.from(base).every(valid));
+  assert.equal(new Set(base).size, 4);
+  assert.ok(roles && typeof roles === 'object' && !Array.isArray(roles));
+  assert.ok(transportRoles.every((id) => Object.hasOwn(roles, id)));
+  const generated = Object.values(roles);
+  assert.ok(generated.every(valid));
+  assert.equal(base.includes(roles.unenrolled), false);
+  assert.ok(Array.isArray(secrets) && Array.from(secrets).every(valid));
+  const expected = new Set([...base, ...generated]);
+  const unique = [...new Set(secrets)];
+  assert.deepEqual(new Set(unique), expected);
+  return Object.freeze(unique);
+}
+
 export async function transportFixtures(h) {
   const root = '/run/proceed/qualification-private';
   const servers = [],
@@ -32,7 +64,10 @@ export async function transportFixtures(h) {
     hits = {};
   const lock = await lockAt(h.state);
   const secret = lock.channel.psk;
-  const secrets = [h.operator.credential, secret, h.control, h.owner];
+  const authoritySet = transportFixtureAuthorities(
+    h, secret, `hop_${randomBytes(32).toString('hex')}`,
+  );
+  const { secrets, authorities } = authoritySet;
   const later = (fn, ms) => {
     const t = setTimeout(() => {
       timers.delete(t);
@@ -149,27 +184,11 @@ export async function transportFixtures(h) {
     });
     servers.push(wrongRelay);
     const wrongPort = await listen(wrongRelay);
-    for (const id of [
-      'enrolled',
-      'unenrolled',
-      'owner',
-      'control',
-      'foreign',
-      'plaintext',
-      'wrong-psk',
-    ]) {
+    for (const id of Object.keys(authorities.roles)) {
       const port = id === 'plaintext' ? plaintext : id === 'wrong-psk' ? wrongPort : lock.port;
       const lockFile = await record(`role-${id}`, port);
       const keyFile = join(root, `role-${id}`, 'key');
-      const key =
-        id === 'owner'
-          ? h.owner
-          : id === 'control'
-            ? h.control
-            : id === 'unenrolled'
-              ? `hop_${randomBytes(32).toString('hex')}`
-              : h.operator.credential;
-      secrets.push(key);
+      const key = authorities.roles[id];
       await writeFile(keyFile, `${key}\n`, { mode: 0o600 });
       roleCases.push({
         id,
@@ -306,6 +325,7 @@ export async function transportFixtures(h) {
       },
       proxy: `http://127.0.0.1:${trapPort}`,
       secrets,
+      authorities,
       async assertObserved() {
         assert.equal(hits.trap, 0, 'redirect/proxy trap must receive no connection');
         for (const id of ['plaintext', 'wrong-psk', 'handshake-stall', 'relay']) {

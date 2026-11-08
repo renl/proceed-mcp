@@ -6,7 +6,13 @@ import {
   transferProductCapture,
   productCaptureFiles,
   compositionSurfaces,
+  productCaptureInputs,
+  productCaptureLogs,
+  productCaptureReadFile,
+  scanFrozenComposition,
+  compositionScanReason,
 } from './support/harness-composition-retention.mjs';
+import { transportFixtureAuthorities, freezeTransportSecrets } from './support/harness-transport-fixtures.mjs';
 import { readFile } from 'node:fs/promises';
 import {
   compositionCurrentFrame,
@@ -375,7 +381,7 @@ test('shared admission invariant tests every approved bigint ceiling exactly and
   assert.equal(inventoryLimits.milliseconds, 30000);
   assert.equal(inventoryLimits.output, 8192);
 });
-function metadataFixture(hook = () => {}, content = false) {
+function metadataFixture(hook = () => {}, content = false, nested = false) {
   const nodes = new Map(
     Object.values(metadataRoots).map((p) => [p, { directory: true, size: 0n }]),
   );
@@ -401,11 +407,13 @@ function metadataFixture(hook = () => {}, content = false) {
     return result;
   };
   const acquire = () => {
-    assert.equal(active++, 0, 'one descriptor at a time');
+    if (!nested) assert.equal(active, 0, 'one descriptor at a time');
+    active++;
     opened++;
   };
   const close = async () => {
-    assert.equal(active--, 1);
+    assert.ok(active > 0);
+    active--;
     closed++;
   };
   const io = {
@@ -453,7 +461,13 @@ function metadataFixture(hook = () => {}, content = false) {
       return {
         async read() {
           hook('dirread', path, nodes, pass);
-          return index < names.length ? { name: names[index++].slice(path.length + 1) } : null;
+          if (index === names.length) return null;
+          const entryPath = names[index++];
+          return {
+            name: entryPath.slice(path.length + 1),
+            isDirectory: () => !!nodes.get(entryPath).directory,
+            isSymbolicLink: () => !!nodes.get(entryPath).link,
+          };
         },
         close,
       };
@@ -581,8 +595,101 @@ test('product collector reuses bounded complete traversal, refuses metadata race
   }
 });
 
+test('actual product readiness and final input routes adapt semantic labels without opening renderer schema', async () => {
+  const f = metadataFixture(() => {}, true, true);
+  const wire = '/run/proceed/qualification-private/composition-wire.jsonl';
+  const add = (path, text) => f.nodes.set(path, { bytes: Buffer.from(text), size: BigInt(Buffer.byteLength(text)) });
+  add(metadataRoots.state + '/journal.log', 'complete journal');
+  add(wire, '');
+  add(metadataRoots.state + '/host.log', 'complete diagnostics');
+  const accounting = { entries: 0, paths: 0, bytes: 0, deadline: Date.now() + 5000 };
+  const diagnostics = await productCaptureLogs(metadataRoots.state, accounting, 0, f.io);
+  assert.deepEqual(diagnostics, Buffer.from('complete journalcomplete diagnostics'));
+  assert.equal(accounting.bytes, diagnostics.length);
+  const inputs = await productCaptureInputs(metadataRoots.state, wire, f.io);
+  assert.deepEqual(inputs, { journal: Buffer.from('complete journal'), api: Buffer.alloc(0) });
+  f.descriptorBalance();
+  add(wire, 'unexpected exchange');
+  await assert.rejects(productCaptureInputs(metadataRoots.state, wire, f.io));
+  f.descriptorBalance();
+  for (const surface of ['diagnostics', 'journal', 'api']) {
+    await assert.rejects(rendererReadFile({}, metadataRoots.state + '/host.log', surface, 0, f.io));
+  }
+  assert.throws(() => productCaptureReadFile({}, 'unused', 'fixture', 0, f.io));
+  f.nodes.get(metadataRoots.state + '/host.log').size = 16777217n;
+  await assert.rejects(productCaptureLogs(metadataRoots.state, { ...accounting, bytes: 0 }, 0, f.io));
+  f.descriptorBalance();
+  await assert.rejects(productCaptureLogs(metadataRoots.state, { ...accounting, deadline: 0 }, 0, f.io));
+  const inner = await readFile(new URL('./support/harness-composition-inner.mjs', import.meta.url), 'utf8');
+  assert.match(inner, /return productCaptureLogs\(root, accounting, depth\)/);
+  assert.match(inner, /productCaptureInputs\(\s*h.state,\s*'\/run\/proceed\/qualification-private\/composition-wire.jsonl'/);
+  assert.doesNotMatch(inner, /rendererReadFile/);
+});
+
+function producedTransportAuthorities() {
+  return transportFixtureAuthorities({
+    operator: { credential: 'hop_' + '1'.repeat(64) },
+    control: 'control-' + '2'.repeat(64),
+    owner: 'owner-' + '3'.repeat(64),
+  }, '4'.repeat(64), 'hop_' + '5'.repeat(64));
+}
+
+test('actual transport producer freezes every distinct authority once and rejects incomplete or malformed coverage', async () => {
+  const produced = producedTransportAuthorities();
+  assert.equal(produced.secrets.length, 11);
+  const frozen = freezeTransportSecrets(produced);
+  assert.equal(frozen.length, 5);
+  assert.equal(Object.isFrozen(frozen), true);
+  const late = 'late-role-' + '6'.repeat(64);
+  produced.authorities.roles.late = late;
+  produced.secrets.push(late, produced.authorities.base[0]);
+  const final = freezeTransportSecrets(produced);
+  assert.equal(final.length, 6);
+  assert.ok(final.includes(late));
+  assert.equal(frozen.length, 5);
+  for (const secret of final) {
+    assert.throws(() => freezeTransportSecrets({ ...produced, secrets: produced.secrets.filter((s) => s !== secret) }));
+  }
+  for (const invalid of ['', ' ', ' padded ', null, undefined, 1, {}, Buffer.from('x')]) {
+    assert.throws(() => freezeTransportSecrets({ ...produced, secrets: [...produced.secrets, invalid] }));
+    const broken = producedTransportAuthorities();
+    broken.authorities.roles.unenrolled = invalid;
+    assert.throws(() => freezeTransportSecrets(broken));
+  }
+  assert.throws(() => freezeTransportSecrets({ ...produced, secrets: [...produced.secrets, ,] }));
+  for (const invalid of [null, {}, 'not-an-array', []])
+    assert.throws(() => freezeTransportSecrets({ ...produced, secrets: invalid }));
+  assert.throws(() => freezeTransportSecrets({ ...produced, secrets: [...produced.secrets, 'unexpected-authority'] }));
+  for (const invalid of ['', null, undefined, 1]) {
+    const broken = producedTransportAuthorities();
+    broken.authorities.base[0] = invalid;
+    assert.throws(() => freezeTransportSecrets(broken));
+  }
+  const missingRole = producedTransportAuthorities();
+  delete missingRole.authorities.roles.unenrolled;
+  assert.throws(() => freezeTransportSecrets(missingRole));
+  const aliased = producedTransportAuthorities();
+  aliased.authorities.roles.unenrolled = aliased.authorities.base[0];
+  assert.throws(() => freezeTransportSecrets(aliased));
+  const captures = Object.fromEntries(compositionSurfaces.map((s) => [s, Buffer.from('clean')]));
+  assert.equal(scanFrozenComposition({ captures, secrets: final, complete: true, overflow: false, measured: true }).scan.status, 'PASS');
+  for (const surface of compositionSurfaces) for (const secret of final) {
+    assert.throws(() => scanFrozenComposition({
+      captures: { ...captures, [surface]: Buffer.from('prefix' + secret + 'suffix') },
+      secrets: final, complete: true, overflow: false, measured: true,
+    }), (error) => compositionScanReason(error) === 'SECRET_MATCH');
+  }
+  assert.throws(() => scanFrozenComposition({ captures, secrets: produced.secrets, complete: true, overflow: false }),
+    (error) => compositionScanReason(error) === 'SECRET_SET');
+  const inner = await readFile(new URL('./support/harness-composition-inner.mjs', import.meta.url), 'utf8');
+  const transport = await readFile(new URL('./support/harness-transport-fixtures.mjs', import.meta.url), 'utf8');
+  assert.match(inner, /let controlsClosed = false;\s*try \{\s*requiredSecrets = freezeTransportSecrets\(controls\)/);
+  assert.match(transport, /const authoritySet = transportFixtureAuthorities\(/);
+  assert.match(transport, /const key = authorities.roles\[id\]/);
+});
+
 test('product exports require all six product meanings, every secret, exact frozen bytes and aggregate admission before retention', async () => {
-  const secrets = ['a', 'b', 'c', 'd'].map((s) => s.repeat(64));
+  const secrets = freezeTransportSecrets(producedTransportAuthorities());
   const details = Object.fromEntries(productCaptureFiles.map((n) => [n, Buffer.from(n)]));
   const captures = Object.fromEntries(compositionSurfaces.map((s) => [s, Buffer.from('safe')]));
   captures.tui = details['transcript.ansi'];
@@ -597,13 +704,16 @@ test('product exports require all six product meanings, every secret, exact froz
     assert.deepEqual(frozen.details[file], details[file]);
   }
   assert.deepEqual(frozen.scan.surfaces, compositionSurfaces);
+  const transferred = [];
   const transfer = async (name, cap) => {
+    transferred.push(name);
     const b = name === 'scan-pass.json' ? Buffer.from(JSON.stringify(frozen.scan)) : details[name];
     const archive = inventoryArchive(b, b.length, name);
     assert.ok(archive.length <= cap);
     return archive;
   };
   assert.equal((await transferProductCapture(transfer)).size, 5);
+  assert.deepEqual(transferred, ['scan-pass.json', ...productCaptureFiles]);
   await assert.rejects(
     transferProductCapture(async (name, cap) =>
       name === 'transcript.ansi'

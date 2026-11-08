@@ -11,7 +11,6 @@ import {
   readdir,
   rename,
   cp,
-  opendir,
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { networkInterfaces } from 'node:os';
@@ -22,7 +21,7 @@ import {
   withQualificationBroker,
   confirmQualificationEnrollment,
 } from './harness-qualification-setup.mjs';
-import { transportFixtures } from './harness-transport-fixtures.mjs';
+import { transportFixtures, freezeTransportSecrets } from './harness-transport-fixtures.mjs';
 import {
   waitCompositionPhase,
   failureSnapshot,
@@ -32,13 +31,13 @@ import {
   persistCompositionDiagnostic,
   collectProductCapture,
   productCaptureExport,
+  productCaptureInputs,
+  productCaptureLogs,
 } from './harness-composition-retention.mjs';
 import {
   digest,
-  rendererReadFile,
   collectionAdmit,
   collectionLimits,
-  inventoryLimits,
 } from './harness-renderer-observation.mjs';
 import {
   awaitCompositionKeyAdmission,
@@ -148,32 +147,7 @@ async function logs(
   depth = 0,
 ) {
   if (pickerCapture) {
-    assert.ok(depth <= Number(inventoryLimits.depth) && Date.now() < accounting.deadline);
-    const chunks = [];
-    const directory = await opendir(root, { bufferSize: 1 });
-    try {
-      for (;;) {
-        assert.ok(Date.now() < accounting.deadline);
-        const entry = await directory.read();
-        if (!entry) break;
-        const path = join(root, entry.name);
-        accounting.entries++;
-        accounting.paths += Buffer.byteLength(path);
-        assert.ok(accounting.entries <= Number(inventoryLimits.entries));
-        assert.ok(Buffer.byteLength(path) <= Number(inventoryLimits.path));
-        assert.ok(accounting.paths <= Number(inventoryLimits.paths));
-        assert.equal(entry.isSymbolicLink(), false);
-        if (entry.isDirectory()) chunks.push(await logs(path, accounting, depth + 1));
-        else if (/\.log(?:[.-].*)?$/.test(entry.name)) {
-          const bytes = await rendererReadFile({}, path, 'diagnostics', accounting.bytes);
-          accounting.bytes += bytes.length;
-          chunks.push(bytes);
-        }
-      }
-    } finally {
-      await directory.close();
-    }
-    return Buffer.concat(chunks);
+    return productCaptureLogs(root, accounting, depth);
   }
   const chunks = [];
   for (const e of await readdir(root, { withFileTypes: true })) {
@@ -282,9 +256,10 @@ try {
         };
       }
       const controls = await transportFixtures(h);
-      const requiredSecrets = Object.freeze(controls.secrets.slice());
+      let requiredSecrets;
       let controlsClosed = false;
       try {
+        requiredSecrets = freezeTransportSecrets(controls);
         assert.match(
           execFileSync('/usr/local/bin/opencode', ['--version'], {
             env,
@@ -727,19 +702,9 @@ try {
                 }),
               );
               await writeFile(join(evidence, 'composition-observations.json'), observations);
-              const journal = await rendererReadFile(
-                {},
-                join(h.state, 'journal.log'),
-                'journal',
-                0,
+              const { journal, api } = await productCaptureInputs(
+                h.state, '/run/proceed/qualification-private/composition-wire.jsonl',
               );
-              const api = await rendererReadFile(
-                {},
-                '/run/proceed/qualification-private/composition-wire.jsonl',
-                'api',
-                journal.length,
-              );
-              assert.equal(api.length, 0);
               const telegram = Buffer.from(JSON.stringify(h.fixture.calls));
               const extras = [journal, api, telegram, transcript].map((bytes) => ({ bytes }));
               const entries = await collectProductCapture(

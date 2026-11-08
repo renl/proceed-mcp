@@ -769,7 +769,8 @@ test('capture host entry dispatch is separate, skips setup pending probe, freeze
   assert.match(inner, /brokerObserver: true, captureOnly: pickerCapture/);
   assert.match(inner, /configBytes:[\s\S]*environment: env/);
   assert.match(inner, /resolvedTheme: null,\s*designMode: null,\s*effectiveColorDepth: null/);
-  assert.match(inner, /assert.equal\(api.length, 0\)/);
+  assert.match(inner, /const \{ journal, api \} = await productCaptureInputs\(/);
+  assert.match(await source('support/harness-composition-retention.mjs'), /assert.equal\(api.length, 0\)/);
   assert.match(inner, /collectProductCapture\(/);
 });
 
