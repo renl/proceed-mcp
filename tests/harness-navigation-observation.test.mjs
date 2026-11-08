@@ -7,6 +7,27 @@ import {
   assertCurrentIdentityFrame,
   confirmRenderedNavigation,
 } from './support/harness-navigation-observation.mjs';
+import { compositionCurrentFrame } from './support/harness-composition-readiness.mjs';
+
+// Synthetic RGB operands, NOT evidence of the pinned host's actual theme.
+const profile = {
+  renderer: 'normal',
+  selected: { fg: '10,20,30', bg: '40,50,60', bold: true },
+  normal: { fg: '70,80,90', bg: '1,2,3', bold: false },
+};
+const sgr = (s) =>
+  `\x1b[0;38;2;${s.fg.replaceAll(',', ';')};48;2;${s.bg.replaceAll(',', ';')}${s.bold ? ';1' : ''}m`;
+const ansiPicker = (selected = 2) =>
+  '\x1b[?2026h\x1b[2J\x1b[H' +
+  'Select the Proceed session\r\n' +
+  [1, 2]
+    .map(
+      (n) =>
+        sgr(profile[n === selected ? 'selected' : 'normal']) + `    Session ${n} equal preview`,
+    )
+    .join('\r\n') +
+  '\x1b[0m\x1b[?2026l';
+const styledPicker = (n = 2) => compositionCurrentFrame(ansiPicker(n), { styled: true });
 
 const session = {
   ordinal: 'Session 2',
@@ -27,8 +48,7 @@ const message = (s = session) =>
 const geometry = { width: 100, height: 50, resizeSequence: 0 };
 const frame = (s = session) =>
   ['Open Proceed question?', message(s), '', 'Open question   Cancel'].join('\n');
-const picker =
-  'Select the Proceed session\n    Session 1 equal preview\n\u2503    Session 2 equal preview';
+const picker = styledPicker().text;
 
 test('lossless labelled blocks reconstruct full title and exact ID, not prefix/includes', () => {
   assert.ok(assertIdentityMessage(message(), session) > 0);
@@ -54,24 +74,75 @@ test('lossless labelled blocks reconstruct full title and exact ID, not prefix/i
   assert.throws(() => assertCurrentIdentityFrame(frame(), session, { width: 80, height: 24 }));
 });
 
-test('live selection bar, not current dot or text elsewhere, identifies the unique ordinal', () => {
-  assert.equal(highlightedOrdinal(picker), 'Session 2');
-  for (const altered of [
-    '',
-    picker.replace('\u2503', '\u25cf'),
-    picker.replace('\u2503', ' '),
-    picker + '\n\u2503    Session 1',
-    picker + '\nOpen Proceed question?',
+test('identical plain frames retain different normal selection styles', () => {
+  assert.equal(styledPicker(1).text, styledPicker(2).text);
+  assert.equal(highlightedOrdinal(styledPicker(1), profile), 'Session 1');
+  assert.equal(highlightedOrdinal(styledPicker(2), profile), 'Session 2');
+  assert.throws(() => highlightedOrdinal(styledPicker(), null));
+  assert.throws(() => highlightedOrdinal(picker, profile));
+});
+
+test('focus, bold alone, ambiguous/unknown styles and incomplete mutations refuse', () => {
+  for (const edit of [
+    (s) => {
+      s.styles[1] = s.styles[2];
+    },
+    (s) => {
+      s.styles[2] = s.styles[1];
+    },
+    (s) => {
+      s.styles[2][5] = { ...profile.selected, bg: '9,9,9' };
+    },
+    (s) => {
+      s.styles[2] = s.styles[2].map(() => ({ ...profile.normal, bold: true }));
+    },
+    (s) => {
+      s.text += '\nOpen Proceed question?';
+    },
+  ]) {
+    const s = structuredClone(styledPicker());
+    edit(s);
+    assert.throws(() => highlightedOrdinal(s, profile));
+  }
+  for (const suffix of [
+    '\x1b[?2026h',
+    '\x1b[',
+    '\x1b[?2026h\x1b[2J\x1b[?2026l',
+    '\x1b[?2026h\x1b[2;5H\x1b[0mSession 1\x1b[?2026l',
+    '\x1b[?2026h\x1b[3m\x1b[?2026l',
+    '\x1b[?2026h\x1b[1A\x1b[?2026l',
+    '\x1b[?2026h\x1b[?3h\x1b[?2026l',
+    '\x1b[?2026h\x1b[38;5;1m\x1b[?2026l',
+    '\x1b]4;1;rgb:ff/00/00\x07',
+    '\x1b[?2026h\x1b[38;2;;1;2m\x1b[?2026l',
+    '\x1b[?2026h\x1b[1;301HX\x1b[?2026l',
+    '\x1b[?2026h\x1b[1;1H\u0301\x1b[?2026l',
   ])
-    assert.throws(() => highlightedOrdinal(altered));
+    assert.throws(() =>
+      highlightedOrdinal(compositionCurrentFrame(ansiPicker() + suffix, { styled: true }), profile),
+    );
+  const focus = compositionCurrentFrame(
+    ansiPicker() +
+      '\x1b[?2026h\x1b[1;1H' +
+      sgr(profile.selected) +
+      'Select the Proceed session\x1b[?2026l',
+    { styled: true },
+  );
+  assert.equal(highlightedOrdinal(focus, profile), 'Session 2');
+  const repainted = compositionCurrentFrame(
+    ansiPicker() + '\x1b[?2026h\x1b[3;1H\x1b[0m\x1b[2K' + '    Session 2 equal preview\x1b[?2026l',
+    { styled: true },
+  );
+  assert.throws(() => highlightedOrdinal(repainted, profile));
 });
 
 async function control(mutate = () => {}) {
   const writes = [];
-  const selected = { frame: picker, token: 10 };
+  const selected = { frame: picker, styledFrame: styledPicker(), token: 10, geometry };
   const confirmed = { frame: frame(), token: 20, geometry };
   let stage = 'picker';
   const driver = {
+    selectionProfile: profile,
     stdin: { write: (key) => writes.push(key) },
     waitHighlightedSession: async () => selected,
     waitIdentityConfirmation: async () => {
@@ -111,6 +182,16 @@ test('stale, ambiguous or replaced picker refuses first Enter, stale/resize/fore
       (s) => {
         s.frame += '\n\u2503    Session 1';
       },
+      (s) => {
+        s.geometry.resizeSequence++;
+      },
+      ...(stage === 'picker'
+        ? [
+            (s) => {
+              s.styledFrame = styledPicker(1);
+            },
+          ]
+        : []),
       ...(stage === 'confirmation'
         ? [
             (s) => {

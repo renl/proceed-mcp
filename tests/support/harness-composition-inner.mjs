@@ -26,6 +26,7 @@ import {
   failureSnapshot,
   settleCompositionHost,
   scanFrozenComposition,
+  compositionScanReason,
   persistCompositionDiagnostic,
 } from './harness-composition-retention.mjs';
 import {
@@ -63,6 +64,7 @@ let transcript = Buffer.alloc(0);
 let errorCode,
   renderEvidence,
   scanStatus = 'UNRUN';
+let scanReason = 'UNRUN';
 let productCleanup = 'UNRUN',
   hostExit = 'UNRUN';
 let commandEligibility = 'UNRUN';
@@ -374,6 +376,7 @@ try {
           assert.ok(!exited && !overflow && Date.now() < navigationEnd);
           return {
             frame: compositionCurrentFrame(transcript.toString()),
+            styledFrame: compositionCurrentFrame(transcript.toString(), { styled: true }),
             token: transcript.length,
             geometry: live.geometry,
           };
@@ -397,6 +400,9 @@ try {
         };
         await confirmRenderedNavigation(
           {
+            // BLOCKED: exact pinned normal-theme RGB/style evidence is not yet
+            // supplied. Never infer it from the brightest/boldest captured row.
+            selectionProfile: null,
             stdin: {
               write(key) {
                 keys.enter++;
@@ -405,7 +411,9 @@ try {
             },
             currentNavigationFrame: navigationFrame,
             waitHighlightedSession: () =>
-              waitNavigation('rendered-product-session-picker', (s) => highlightedOrdinal(s.frame)),
+              waitNavigation('rendered-product-session-picker', (s) =>
+                highlightedOrdinal(s.styledFrame, null),
+              ),
             waitIdentityConfirmation: (session) =>
               waitNavigation('rendered-product-session-picker', (s) =>
                 assertCurrentIdentityFrame(s.frame, session, s.geometry),
@@ -508,6 +516,7 @@ try {
           hostExit,
           productCleanup,
           rawScan: scanStatus,
+          scanReason,
           elapsed: Date.now() - started,
         });
         throw error;
@@ -556,6 +565,7 @@ try {
         // Close is not graceful exit. Forced exit is eligible only after actual
         // writer absence and every required input is available and bounded.
         if (child) {
+          let scanStage = 'COLLECTION';
           try {
             await controls.close();
             controlsClosed = true;
@@ -581,7 +591,10 @@ try {
               // Explicitly created before launch. Absence refuses the full scan.
               api: await readFile(wirePath),
             };
-            assert.ok(captures.diagnostics.length > 0);
+            if (!captures.diagnostics.length) {
+              scanStage = 'MISSING';
+              throw Error('missing diagnostics');
+            }
             const lines = diagnosticBytes
               .toString()
               .split('\n')
@@ -618,19 +631,23 @@ try {
             // Freeze the exact detailed exports, complete capture set and secret
             // set before scanning. Never scan an earlier version then export new bytes.
             captures.evidence = Buffer.concat([captures.evidence, observations, pluginBytes]);
+            scanStage = 'SCAN';
             const frozen = scanFrozenComposition({
               captures,
               secrets: requiredSecrets,
               complete,
               overflow,
             });
+            scanStage = 'WRITE';
             await writeFile(join(evidence, 'composition-observations.json'), observations);
             await writeFile(join(evidence, 'transcript.ansi'), frozen.captures.tui);
             await writeFile(join(evidence, 'plugin-diagnostics.log'), pluginBytes);
             await writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(frozen.scan));
             scanStatus = 'PASS';
-          } catch {
+            scanReason = 'NONE';
+          } catch (error) {
             scanStatus = 'REFUSED';
+            scanReason = compositionScanReason(error, scanStage);
           }
         }
         if (child) for (const s of [child.stdin, child.stdout, child.stderr]) s.destroy();
@@ -669,6 +686,7 @@ await persistCompositionDiagnostic(diagnosticIO, {
   productCleanup,
   hostExit,
   rawScan: scanStatus,
+  scanReason,
   elapsed: Date.now() - started,
 });
 process.exitCode = failure ? 1 : 0;

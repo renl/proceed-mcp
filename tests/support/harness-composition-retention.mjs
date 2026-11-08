@@ -107,24 +107,56 @@ export function assertCompositionExport(scan) {
   assert.equal(own(scan, 'status'), 'PASS', 'composition scan refused');
   assert.deepEqual(own(scan, 'surfaces'), compositionSurfaces, 'composition scan incomplete');
 }
+const scanReasons = Object.freeze([
+  'MISSING',
+  'INCOMPLETE',
+  'OVERFLOW',
+  'SECRET_SET',
+  'SECRET_MATCH',
+  'COLLECTION',
+  'WRITE',
+  'UNKNOWN',
+]);
+// Private object identity, not exception text/code provided by an arbitrary IO
+// dependency. Only locally recognized branches receive a precise classification.
+const scanFailures = new WeakMap();
+const scanRefuse = (reason) => {
+  const error = Error('composition scan refused');
+  scanFailures.set(error, reason);
+  throw error;
+};
+export function compositionScanReason(error, stage) {
+  return (
+    scanFailures.get(error) ??
+    (stage === 'COLLECTION' && own(error, 'code') === 'ENOENT'
+      ? 'MISSING'
+      : ['COLLECTION', 'WRITE', 'MISSING'].includes(stage)
+        ? stage
+        : 'UNKNOWN')
+  );
+}
 export function scanFrozenComposition({ captures, secrets, complete, overflow }) {
-  assert.equal(complete, true, 'capture completeness unproven');
-  assert.equal(overflow, false, 'capture overflow');
+  if (complete !== true) scanRefuse('INCOMPLETE');
+  if (overflow !== false) scanRefuse('OVERFLOW');
   // Four role authorities plus every generated negative-fixture authority.
   // The driver passes the complete pinned transportFixtures set unchanged.
-  assert.ok(
+  if (!(
     Array.isArray(secrets) &&
-      secrets.length >= 4 &&
-      new Set(secrets).size === secrets.length &&
-      secrets.every((s) => typeof s === 'string' && s.length > 0),
-  );
+    secrets.length >= 4 &&
+    new Set(secrets).size === secrets.length &&
+    secrets.every((s) => typeof s === 'string' && s.length > 0)
+  ))
+    scanRefuse('SECRET_SET');
   const requiredSecrets = Object.freeze(secrets.slice());
   const frozen = {};
   for (const surface of compositionSurfaces) {
-    assert.ok(Buffer.isBuffer(captures[surface]), 'missing capture');
-    assert.ok(captures[surface].length <= 8388608, 'capture ceiling');
+    if (!Buffer.isBuffer(captures?.[surface])) scanRefuse('MISSING');
+    if (captures[surface].length > 8388608) scanRefuse('OVERFLOW');
     frozen[surface] = Buffer.from(captures[surface]);
   }
+  for (const bytes of Object.values(frozen))
+    for (const secret of requiredSecrets)
+      if (bytes.includes(Buffer.from(secret))) scanRefuse('SECRET_MATCH');
   const scan = scanRequiredCaptures(frozen, requiredSecrets, compositionSurfaces);
   return { captures: frozen, scan };
 }
@@ -187,6 +219,12 @@ export function safeCompositionDiagnostic(input) {
     productCleanup: choice(get('productCleanup'), ['OBSERVED', 'UNRUN']),
     hostExit: choice(get('hostExit'), ['PASS', 'UNRUN']),
     rawScan: choice(get('rawScan'), ['PASS', 'REFUSED', 'UNRUN']),
+    scanReason:
+      get('rawScan') === 'REFUSED'
+        ? choice(get('scanReason'), scanReasons, 'UNKNOWN')
+        : get('rawScan') === 'PASS'
+          ? 'NONE'
+          : 'UNRUN',
     commandEligibility: choice(get('commandEligibility'), ['FRESH_SAME_GENERATION', 'UNRUN']),
     currentScreen: 'UNPROVEN',
     hostLoadingInventory: 'UNRUN_WITHOUT_SCANNED_OBSERVATIONS',

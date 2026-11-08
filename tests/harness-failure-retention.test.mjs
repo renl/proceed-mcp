@@ -10,6 +10,7 @@ import {
   safeCompositionDiagnostic,
   assertCompositionExport,
   persistCompositionDiagnostic,
+  compositionScanReason,
 } from './support/harness-composition-retention.mjs';
 
 test('picker assertion, typed deadline and unlisted IO remain distinct without exception text', async () => {
@@ -107,6 +108,56 @@ const captures = () =>
     ]),
   );
 const secrets = ['operator-secret', 'transport-secret', 'control-secret', 'owner-secret'];
+test('scan refusal projects only closed causes, never exception content or match values', () => {
+  for (const [change, reason] of [
+    [{ complete: false }, 'INCOMPLETE'],
+    [{ overflow: true }, 'OVERFLOW'],
+    [{ secrets: [] }, 'SECRET_SET'],
+    [{ captures: { ...captures(), api: undefined } }, 'MISSING'],
+    [{ captures: { ...captures(), tui: Buffer.alloc(8388609) } }, 'OVERFLOW'],
+    [{ captures: { ...captures(), telegram: Buffer.from(secrets[0]) } }, 'SECRET_MATCH'],
+  ]) {
+    let caught;
+    try {
+      scanFrozenComposition({
+        captures: captures(),
+        secrets,
+        complete: true,
+        overflow: false,
+        ...change,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    assert.ok(caught);
+    const scanReason = compositionScanReason(caught, 'SCAN');
+    assert.equal(scanReason, reason);
+    const projected = safeCompositionDiagnostic({
+      rawScan: 'REFUSED',
+      scanReason,
+      message: secrets[0],
+      path: secrets[1],
+      headers: secrets[2],
+      id: secrets[3],
+    });
+    assert.equal(projected.scanReason, reason);
+    for (const secret of secrets) assert.equal(JSON.stringify(projected).includes(secret), false);
+    assert.throws(() => assertCompositionExport({ status: 'REFUSED', scanReason }));
+  }
+  for (const [error, stage, reason] of [
+    [Error(secrets[0]), 'COLLECTION', 'COLLECTION'],
+    [{ code: 'ENOENT', path: secrets[0] }, 'COLLECTION', 'MISSING'],
+    [Error(secrets[0]), 'WRITE', 'WRITE'],
+    [{ code: 'SECRET_MATCH' }, 'SCAN', 'UNKNOWN'],
+    [null, 'SECRET', 'UNKNOWN'],
+  ])
+    assert.equal(compositionScanReason(error, stage), reason);
+  assert.equal(safeCompositionDiagnostic({ rawScan: 'REFUSED' }).scanReason, 'UNKNOWN');
+  assert.equal(
+    safeCompositionDiagnostic({ rawScan: 'REFUSED', scanReason: secrets[0] }).scanReason,
+    'UNKNOWN',
+  );
+});
 test('termination does not imply completeness, but complete frozen captures can actually scan', () => {
   const input = captures();
   const result = scanFrozenComposition({

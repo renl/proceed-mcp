@@ -1,6 +1,7 @@
 // TEST ONLY. Public message assertions and fail-closed current-frame observation.
-// Source: pinned 2.2.5 DialogSelectRow new-design active gutter is U+2503.
-// Legacy background-only selection is deliberately not guessed by this text adapter.
+// Pinned 2.2.5 DialogSelectRow normal selection is styled, not a current dot.
+// A source-verified theme profile is mandatory. Synthetic profiles prove only
+// observer logic, never actual host rendering or active theme identity.
 import assert from 'node:assert/strict';
 
 const titleLabel = /^(?:Session )?title:\s*$/i;
@@ -36,15 +37,41 @@ export function assertIdentityMessage(message, session) {
   return lines.length;
 }
 
-export function highlightedOrdinal(frame) {
-  assert.equal(typeof frame, 'string');
-  assert.ok(frame.includes('Select the Proceed session'), 'wrong current picker');
-  assert.equal(frame.includes('Open Proceed question?'), false, 'stale/overlapping dialog');
-  const selected = frame.split('\n').flatMap((line) => {
-    const match = /^\s*\u2503 +(?:[\u25aa\u25cf] +)?(Session \d+)\b/.exec(line);
-    return match ? [match[1]] : [];
-  });
-  assert.equal(selected.length, 1, 'missing/ambiguous live active selection bar');
+export function highlightedOrdinal(frame, profile) {
+  assert.ok(frame && typeof frame.text === 'string' && Array.isArray(frame.styles));
+  assert.ok(profile && profile.renderer === 'normal', 'unknown renderer/theme profile');
+  const valid = (s) =>
+    s &&
+    typeof s.bold === 'boolean' &&
+    ['fg', 'bg'].every(
+      (k) =>
+        typeof s[k] === 'string' &&
+        /^(?:\d{1,3},){2}\d{1,3}$/.test(s[k]) &&
+        s[k].split(',').every((v) => +v <= 255),
+    );
+  assert.ok(valid(profile.selected) && valid(profile.normal));
+  assert.notEqual(profile.selected.bg, profile.normal.bg, 'bold/focus alone is insufficient');
+  const lines = frame.text.split('\n');
+  assert.equal(lines.filter((s) => s.includes('Select the Proceed session')).length, 1);
+  assert.equal(frame.text.includes('Open Proceed question?'), false, 'stale/overlapping dialog');
+  const selected = [];
+  const seen = new Set();
+  for (let row = 0; row < lines.length; row++) {
+    const match = /^\s*(Session \d+)\b/.exec(lines[row]);
+    if (!match) continue; // Search focus/title styling is not a row selection.
+    assert.equal(seen.has(match[1]), false, 'duplicate ordinal');
+    seen.add(match[1]);
+    const start = lines[row].indexOf(match[1]);
+    const cells = frame.styles[row]?.slice(start, start + match[1].length);
+    assert.equal(cells?.length, match[1].length, 'missing styled cells');
+    const matches = (expected) =>
+      cells.every(
+        (s) => s && s.fg === expected.fg && s.bg === expected.bg && s.bold === expected.bold,
+      );
+    if (matches(profile.selected)) selected.push(match[1]);
+    else assert.ok(matches(profile.normal), 'unknown/ambiguous row style');
+  }
+  assert.equal(selected.length, 1, 'missing/ambiguous live normal selection');
   return selected[0];
 }
 
@@ -84,7 +111,16 @@ export async function confirmRenderedNavigation(driver, session) {
   const current = await driver.currentNavigationFrame();
   assert.equal(current.frame, picked.frame, 'selection changed after observation');
   assert.equal(current.token, picked.token, 'stale picker observation');
-  const ordinal = highlightedOrdinal(current.frame);
+  assert.deepEqual(current.geometry, picked.geometry, 'resized picker');
+  assert.deepEqual(current.styledFrame, picked.styledFrame, 'selection style changed');
+  assert.equal(current.styledFrame?.text, current.frame, 'text/style frame mismatch');
+  const { width, height, resizeSequence } = current.geometry ?? {};
+  assert.ok(Number.isInteger(width) && width >= 80 && width <= 300);
+  assert.ok(Number.isInteger(height) && height >= 24 && height <= 100);
+  assert.ok(Number.isSafeInteger(resizeSequence) && resizeSequence >= 0);
+  assert.ok(current.frame.split('\n').length <= height);
+  assert.ok(current.frame.split('\n').every((line) => line.length <= width));
+  const ordinal = highlightedOrdinal(current.styledFrame, driver.selectionProfile);
   driver.stdin.write('\r');
   const expected = { ...session, ordinal };
   const shown = await driver.waitIdentityConfirmation(expected);

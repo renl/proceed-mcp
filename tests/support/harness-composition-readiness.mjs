@@ -2,12 +2,15 @@
 export const productReadyText = 'Proceed harness ready for qualification (owner shared).';
 // Small, fail-closed projection of the pinned host's synchronized cell updates.
 // Only completed frames count. Repainting cells replaces old text, never appends it.
-export function compositionCurrentFrame(ansi) {
+export function compositionCurrentFrame(ansi, { styled = false } = {}) {
   let rows = [],
+    styles = [],
+    style = { fg: null, bg: null, bold: false },
     row = 0,
     col = 0,
     saved = [0, 0],
     frame = '',
+    frameStyles = [],
     syncing = false;
   const tokens =
     ansi.match(
@@ -16,15 +19,22 @@ export function compositionCurrentFrame(ansi) {
   if (tokens.join('') !== ansi) return ''; // Incomplete escape sequence.
   for (const token of tokens) {
     if (token === '\x1b[?2026h') {
+      if (styled && syncing) return '';
       syncing = true;
       continue;
     }
     if (token === '\x1b[?2026l') {
-      if (syncing) frame = rows.map((r) => r.join('')).join('\n');
+      if (syncing) {
+        frame = rows.map((r) => r.join('')).join('\n');
+        frameStyles = styles.map((r) => r.slice());
+      }
       syncing = false;
       continue;
     }
-    if (token.startsWith('\x1b]')) continue;
+    if (token.startsWith('\x1b]')) {
+      if (styled) return ''; // No unverified palette/title/control mutations.
+      continue;
+    }
     // Pinned startup capability queries (DCS termcap and APC graphics). They
     // precede the first screen and do not paint terminal cells.
     if (token.startsWith('\x1bP') || token.startsWith('\x1b_')) {
@@ -37,14 +47,43 @@ export function compositionCurrentFrame(ansi) {
       if (position) {
         row = +(position[1] || 1) - 1;
         col = +(position[2] || 1) - 1;
+        if (styled && (row < 0 || row >= 100 || col < 0 || col >= 300)) return '';
       } else if (token === '\x1b[s') saved = [row, col];
       else if (token === '\x1b[u') [row, col] = saved;
-      else if (/^\x1b\[(?:2|3)J$/.test(token) || token === '\x1b[?1049h') rows = [];
-      else if (token === '\x1b[K' || token === '\x1b[0K') rows[row]?.splice(col);
-      else if (token === '\x1b[2K') rows[row] = [];
-      else if (/^\x1b\[[0-9]* q$/.test(token))
+      else if (/^\x1b\[(?:2|3)J$/.test(token) || token === '\x1b[?1049h') {
+        rows = [];
+        styles = [];
+      } else if (token === '\x1b[K' || token === '\x1b[0K') {
+        rows[row]?.splice(col);
+        styles[row]?.splice(col);
+      } else if (token === '\x1b[2K') {
+        rows[row] = [];
+        styles[row] = [];
+      } else if (/^\x1b\[[0-9;]*m$/.test(token) && styled) {
+        if (token !== '\x1b[m' && token.slice(2, -1).split(';').includes('')) return '';
+        const codes = token
+          .slice(2, -1)
+          .split(';')
+          .map((v) => Number(v || 0));
+        for (let i = 0; i < codes.length; i++) {
+          const code = codes[i];
+          if (code === 0) style = { fg: null, bg: null, bold: false };
+          else if (code === 1 || code === 22) style = { ...style, bold: code === 1 };
+          else if (code === 39 || code === 49)
+            style = { ...style, [code === 39 ? 'fg' : 'bg']: null };
+          else if ((code === 38 || code === 48) && codes[i + 1] === 2) {
+            const rgb = codes.slice(i + 2, i + 5);
+            if (rgb.length !== 3 || rgb.some((v) => !Number.isInteger(v) || v < 0 || v > 255))
+              return '';
+            style = { ...style, [code === 38 ? 'fg' : 'bg']: rgb.join(',') };
+            i += 4;
+          } else return ''; // Unknown attributes/colors cannot imply selection.
+        }
+      } else if (/^\x1b\[[0-9]* q$/.test(token))
         continue; // Cursor style, no cell change.
+      else if (styled && !/^\x1b\[\?25[hl]$/.test(token)) return '';
       else if (!/^\x1b\[(?:[0-9;]*m|[?<>][0-9;]*[hlucq]|[0-9;?]*\$p|[0-9;]*[ntcq])$/.test(token)) {
+        if (styled) return '';
         // Unsupported cursor/erase operations must not preserve a stale success.
         rows = [];
         frame = '';
@@ -55,13 +94,19 @@ export function compositionCurrentFrame(ansi) {
     if (token === '\r') col = 0;
     else if (token === '\n') row++;
     else if (token >= ' ' && row < 100 && col < 300) {
+      // Style observation deliberately supports ASCII cells only, not guessed
+      // Unicode widths/autowrap. The existing text readiness projection is unchanged.
+      if (styled && (token.length !== 1 || token.charCodeAt(0) > 126)) return '';
       if (!syncing) frame = '';
       rows[row] ??= [];
+      styles[row] ??= [];
       while (rows[row].length < col) rows[row].push(' ');
+      styles[row][col] = Object.freeze({ ...style });
       rows[row][col++] = token;
-    }
+    } else if (styled) return '';
   }
-  return syncing ? '' : frame;
+  if (syncing || !frame) return '';
+  return styled ? { text: frame, styles: frameStyles } : frame;
 }
 
 function readyToast(text) {
