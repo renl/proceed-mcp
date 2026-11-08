@@ -1213,6 +1213,93 @@ test('exact query payloads and explicit phase policy refuse opaque substitutions
     assert.equal(compositionSourceFrame(bad + paint).supported, false);
 });
 
+test('exact finite program report preserves source cells, styles, cursor and saved register', () => {
+  // Known application identifier, not an exported capture-derived string fixture.
+  const report = '\x1b]7501;state=idle:app=opencode\x1b\\';
+  const setup = '\x1b[?1049h\x1b[3;4H\x1b[s\x1b[38;5;216m';
+  const paint = '\x1b[H\x1b[u' + begin + 'X' + end;
+  const expected = compositionSourceFrame(setup + paint);
+  assert.equal(expected.supported, true);
+  assert.deepEqual(expected.cursor, { row: 2, col: 4 });
+  assert.deepEqual(compositionSourceFrame(setup + report + paint), expected);
+  // Alternate-screen active, before the first completed frame, outside paint is
+  // deliberately narrower observer policy, not a source-enforced emitter order.
+  for (const [prefix, suffix] of [
+    ['', begin + '\x1b[HX' + end],
+    ['\x1b[?1049h' + begin, '\x1b[HX' + end],
+    [setup + paint, ''],
+    [setup + paint + '\x1b[?1049l', ''],
+  ]) {
+    assert.deepEqual(compositionSourceFrame(prefix + report + suffix), {
+      supported: false,
+      reason: 'UNSAFE_PROGRAM_STATUS_PHASE',
+      byteOffset: Buffer.byteLength(prefix),
+      operation: 7501,
+    });
+  }
+});
+
+test('finite program report refuses other states, fields, order, bounds and encodings', () => {
+  const wrap = (body, terminator = '\x1b\\') => '\x1b]7501;' + body + terminator;
+  const body = 'state=idle:app=opencode';
+  const setup = '\x1b[?1049h';
+  const paint = begin + '\x1b[HX' + end;
+  const variants = [
+    ...['working', 'done', 'blocked', 'error', 'clear', 'unknown', 'IDLE', ''].map((s) =>
+      wrap(`state=${s}:app=opencode`),
+    ),
+    wrap('state=idle'),
+    wrap('app=opencode:state=idle'),
+    wrap(body + ':app=opencode'),
+    wrap(body.replace('opencode', 'opencodX')), // Same byte length is not identity.
+    wrap(body + ':unknown=x'),
+    wrap('state=idle:id=a:app=opencode'), // Source-valid but unadmitted variant.
+    wrap('state=idle:app='),
+    wrap('state=idle:app=' + 'a'.repeat(32)),
+    wrap('state=idle:app=' + 'a'.repeat(33)),
+    wrap('state=idle:app=bad/name'),
+    wrap('state=idle:id=' + 'a'.repeat(129) + ':app=opencode'),
+    wrap('state=idle:id=' + Array(9).fill('a').join('/') + ':app=opencode'),
+    wrap('state=idle:id=a//b:app=opencode'),
+    wrap(body + ':kind=permission'),
+    wrap(body + ':progress=101'),
+    ...['title', 'msg'].flatMap((key) =>
+      [
+        'YQ==',
+        'YR==',
+        'YQ',
+        'YQ===',
+        '***',
+        'wIA=',
+        'wqA=',
+        'AA==',
+        'fw==',
+        'woA=',
+        Buffer.alloc(key === 'title' ? 193 : 2049, 97).toString('base64'),
+      ].map((value) => wrap(body + `:${key}=${value}`)),
+    ),
+    wrap(body + ':msg=' + 'A'.repeat(3221)),
+    wrap(body, '\x07'),
+    wrap(body + '\x00'),
+    wrap(body + '\x7f'),
+    wrap(body + '\u0080'),
+    wrap(body + '\ud800'),
+  ];
+  for (const token of variants) {
+    const result = compositionSourceFrame(setup + token + paint);
+    assert.deepEqual(result, {
+      supported: false,
+      reason: 'UNSUPPORTED_OSC_PAYLOAD',
+      byteOffset: Buffer.byteLength(setup),
+      operation: 7501,
+    });
+  }
+  const exact = wrap(body);
+  for (let n = 1; n < exact.length; n++)
+    assert.equal(compositionSourceFrame(setup + exact.slice(0, n)).supported, false);
+  assert.equal(compositionCurrentFrame(setup + exact + paint, { styled: true }), '');
+});
+
 test('space probes invalidate paint and cursor until a clear or new generation', () => {
   for (const probe of ['\x1b]66;w=1; \x1b\\', '\x1b]66;s=2; \x1b\\']) {
     const paint = begin + '\x1b[1;1HX' + end;

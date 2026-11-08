@@ -93,6 +93,14 @@ export function compositionSourceFrame(ansi) {
     }
     if (token.startsWith('\x1b]')) {
       const op = /^\x1b\](\d+)/.exec(token)?.[1];
+      // session.zig:1163-1176 at the pin above emits non-cell program metadata.
+      // Admit only the complete source-conformant variant verified in the bound
+      // prefix. This is not a general status parser or permissive base64 decoder.
+      if (token === '\x1b]7501;state=idle:app=opencode\x1b\\') {
+        // Placement is narrow observer policy, not global source call ordering.
+        if (!alt || syncing || frames) return bad('UNSAFE_PROGRAM_STATUS_PHASE', 7501);
+        continue;
+      }
       if (/^\x1b\]4;(?:\d{1,3};\?)(?:;\d{1,3};\?)*\x07$/.test(token)) {
         const indices = token
           .slice(4, -1)
