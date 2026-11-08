@@ -61,15 +61,29 @@ export async function rendererDiagnosticSequence(
 
 export function rendererDiagnosticAnalysis(result, scanPassed) {
   if (!scanPassed) return 'UNPROVEN';
+  // Callback contradictions are independent of decoder support.
   try {
-    const before = rendererCells(result.initialRaw);
-    const after = rendererCells(result.movedRaw, before);
     assertRendererCursor({}, result.ALPHA, 'ALPHA');
     assertRendererCursor({}, result.BETA, 'BETA', true);
+  } catch (error) {
+    if (!(error instanceof assert.AssertionError)) throw error;
+    return 'FAIL';
+  }
+  let before, after;
+  try {
+    before = rendererCells(result.initialRaw);
+    after = rendererCells(result.movedRaw, before);
+  } catch (error) {
+    if (!(error instanceof assert.AssertionError)) throw error;
+    // A refused/incomplete cell model establishes no style contradiction.
+    return 'UNPROVEN';
+  }
+  try {
     assertRendererStyles(before.labels, after.labels, {});
     // Diagnostic collection can never qualify or install a selection profile.
     return 'UNPROVEN';
-  } catch {
+  } catch (error) {
+    if (!(error instanceof assert.AssertionError)) throw error;
     return 'FAIL';
   }
 }

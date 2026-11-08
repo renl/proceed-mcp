@@ -36,11 +36,11 @@ const movedCells = begin + paint(3, current, alpha) + paint(4, selected, beta) +
 const marker = '\u25cf';
 
 test('capture-first sequence retains callbacks despite unsupported pre/post movement rendering', async () => {
-  for (const [first, second, values] of [
-    ['\u754c', initialCells + movedCells, ['alpha', 'beta']],
-    [initialCells, '\x1b[31munsupported', ['alpha', 'beta']],
-    ['\u754c', '\u25cf\ufe0f', ['beta', 'alpha']],
-    [initialCells, initialCells + movedCells, ['private', undefined]],
+  for (const [first, second, values, analysis] of [
+    ['\u754c', initialCells + movedCells, ['alpha', 'beta'], 'UNPROVEN'],
+    [initialCells, '\x1b[31munsupported', ['alpha', 'beta'], 'UNPROVEN'],
+    ['\u754c', '\u25cf\ufe0f', ['beta', 'alpha'], 'FAIL'],
+    [initialCells, initialCells + movedCells, ['private', undefined], 'FAIL'],
   ]) {
     const keys = [],
       records = [],
@@ -73,7 +73,7 @@ test('capture-first sequence retains callbacks despite unsupported pre/post move
     assert.equal(result.ALPHA.present, true);
     assert.equal(result.BETA.present, true);
     assert.equal(rendererDiagnosticAnalysis(result, false), 'UNPROVEN');
-    assert.equal(rendererDiagnosticAnalysis(result, true), 'FAIL');
+    assert.equal(rendererDiagnosticAnalysis(result, true), analysis);
     assert.ok(!JSON.stringify([result.ALPHA, result.BETA]).includes('private'));
   }
 });
@@ -137,6 +137,47 @@ test('diagnostic successful synthetic style analysis still cannot qualify a prof
       true,
     ),
     'UNPROVEN',
+  );
+});
+
+test('diagnostic decoder refusals stay unproven while supported style contradictions fail', () => {
+  const sample = {
+    initialRaw: initialCells,
+    movedRaw: initialCells + movedCells,
+    ALPHA: { present: true, value: 'ALPHA' },
+    BETA: { present: true, value: 'BETA' },
+  };
+  for (const patch of [
+    { initialRaw: '\u754c' },
+    { movedRaw: initialCells + begin },
+    { movedRaw: initialCells },
+    { movedRaw: initialCells + begin + paint(4, selected, beta) },
+    { movedRaw: initialCells + begin + '\x1b[999m' + end },
+  ])
+    assert.equal(rendererDiagnosticAnalysis({ ...sample, ...patch }, true), 'UNPROVEN');
+  for (const moved of [
+    begin + paint(3, selected, alpha) + paint(4, ordinary, beta) + end,
+    movedCells.replace('0;1;', '0;'),
+    movedCells.replace('10;10;10', '10;10;11'),
+  ]) {
+    const result = { ...sample, movedRaw: initialCells + moved };
+    assert.equal(rendererDiagnosticAnalysis(result, true), 'FAIL');
+    assert.equal(rendererDiagnosticAnalysis(result, false), 'UNPROVEN');
+  }
+  // Unexpected I/O/programming failures must reach the caller, not become UNPROVEN.
+  const failure = new Error('synthetic IO');
+  assert.throws(
+    () =>
+      rendererDiagnosticAnalysis(
+        {
+          ...sample,
+          get initialRaw() {
+            throw failure;
+          },
+        },
+        true,
+      ),
+    (error) => error === failure,
   );
 });
 
