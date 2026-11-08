@@ -17,6 +17,11 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { hostBudgets } from './harness-host-plan.mjs';
 import {
+  rendererPayload,
+  assertRendererExport,
+  safeRendererDiagnostic,
+} from './harness-renderer-observation.mjs';
+import {
   retainProgress,
   safeCompositionDiagnostic,
   assertCompositionExport,
@@ -45,9 +50,11 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       'helper-contract',
       'parent-process',
       'composition',
+      'renderer',
     ].includes(mode),
   );
   const parent = mode === 'parent-process';
+  const renderer = mode === 'renderer';
   const composition = mode === 'composition';
   const helper = mode === 'helper-contract' || parent;
   if (helper && !parent) {
@@ -62,8 +69,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
   const setupOnly = mode === 'broker-setup';
   const firstOnly = mode === 'transport-first-exchange';
   const transport = mode === 'transport' || firstOnly || composition;
-  const payload =
-    setupOnly || transport || helper
+  const payload = renderer
+    ? rendererPayload
+    : setupOnly || transport || helper
       ? qualificationPayload(
           (
             await execute('git', ['ls-files', '--', 'src', 'bin'], { cwd: root, timeout: 10000 })
@@ -100,7 +108,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
   assert.equal(image.Os, 'linux');
   assert.equal(image.Architecture, 'amd64');
   for (const path of payload) assert.ok((await lstat(join(root, path))).isFile());
-  if (transport || helper) {
+  if (transport || helper || renderer) {
     // Owner README/status overlays are excluded. Every staged input must be clean.
     await execute('git', ['diff', '--quiet', 'HEAD', '--', ...payload], {
       cwd: root,
@@ -167,7 +175,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       await mkdir(dirname(destination), { recursive: true });
       await copyFile(join(root, path), destination);
     }
-    if (setupOnly || transport || helper)
+    if (setupOnly || transport || helper || renderer)
       await writeFile(join(stage, 'input-paths.json'), JSON.stringify(payload));
     const integrity = [];
     for (const path of payload) {
@@ -177,6 +185,32 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       integrity.push({ path, sha256: createHash('sha256').update(staged).digest('hex') });
     }
     await writeFile(join(run, 'input-integrity.json'), JSON.stringify(integrity, null, 2));
+    if (renderer) {
+      const outerInputs = [
+        'tests/run-harness-host.mjs',
+        'tests/support/harness-linux-runner.mjs',
+        'tests/harness-renderer-calibration.test.mjs',
+      ];
+      await execute('git', ['diff', '--quiet', 'HEAD', '--', ...outerInputs], {
+        cwd: root,
+        timeout: 10000,
+      });
+      await writeFile(
+        join(run, 'outer-input-integrity.json'),
+        JSON.stringify(
+          await Promise.all(
+            outerInputs.map(async (path) => ({
+              path,
+              sha256: createHash('sha256')
+                .update(await readFile(join(root, path)))
+                .digest('hex'),
+            })),
+          ),
+          null,
+          2,
+        ),
+      );
+    }
     const candidate = (
       await execute('git', ['rev-parse', 'HEAD'], { cwd: root, timeout: 10000 })
     ).stdout.trim();
@@ -187,7 +221,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           candidate,
           image: linuxImage,
           payload,
-          command: `node tests/run-harness-host.mjs ${composition ? '--composition-run' : parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
+          command: `node tests/run-harness-host.mjs ${renderer ? '--renderer-run' : composition ? '--composition-run' : parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
         },
         null,
         2,
@@ -211,17 +245,19 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       '--signal=KILL',
       '250',
       'node',
-      helper
-        ? parent
-          ? '/payload/tests/support/harness-parent-inner.mjs'
-          : '/payload/tests/support/harness-helper-inner.mjs'
-        : composition
-          ? '/payload/tests/support/harness-composition-inner.mjs'
-          : transport
-            ? '/payload/tests/support/harness-transport-inner.mjs'
-            : setupOnly
-              ? '/payload/tests/support/harness-setup-inner.mjs'
-              : '/payload/tests/support/harness-linux-inner.mjs',
+      renderer
+        ? '/payload/tests/support/harness-renderer-inner.mjs'
+        : helper
+          ? parent
+            ? '/payload/tests/support/harness-parent-inner.mjs'
+            : '/payload/tests/support/harness-helper-inner.mjs'
+          : composition
+            ? '/payload/tests/support/harness-composition-inner.mjs'
+            : transport
+              ? '/payload/tests/support/harness-transport-inner.mjs'
+              : setupOnly
+                ? '/payload/tests/support/harness-setup-inner.mjs'
+                : '/payload/tests/support/harness-linux-inner.mjs',
       ...(firstOnly ? ['--first-exchange-only'] : []),
       ...(helper && !parent ? ['/payload/' + helperEntry] : []),
     ]);
@@ -259,7 +295,40 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
     await progress('evidence', {
       containerExit: /^\d{1,3}$/.test(observedExit) ? observedExit : 'UNLISTED_EXIT',
     });
-    if (composition) {
+    if (renderer) {
+      await command([
+        'cp',
+        `${name}:/run/proceed/evidence/renderer-diagnostic.json`,
+        join(run, 'renderer-diagnostic.private'),
+      ]);
+      try {
+        const diagnostic = safeRendererDiagnostic(
+          JSON.parse(await readFile(join(run, 'renderer-diagnostic.private'), 'utf8')),
+        );
+        await writeFile(join(run, 'renderer-diagnostic.json'), JSON.stringify(diagnostic));
+        // Calibration failure does not bypass or skip full capture scanning.
+        await command([
+          'cp',
+          `${name}:/run/proceed/evidence/scan-pass.json`,
+          join(run, 'scan-pass.json'),
+        ]);
+        assertRendererExport(JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')));
+        for (const file of [
+          'binding.json',
+          'observations.json',
+          'fixture.jsonl',
+          'inventory.json',
+          'transcript.ansi',
+          'diagnostics.log',
+          'progress.jsonl',
+        ])
+          await command(['cp', `${name}:/run/proceed/evidence/${file}`, evidenceDestination(file)]);
+        assert.equal(waited.stdout.trim(), '0', 'RENDERER_CONTROL_FAILURE');
+        assert.equal(diagnostic.status, 'PASS');
+      } finally {
+        await rm(join(run, 'renderer-diagnostic.private'), { force: true });
+      }
+    } else if (composition) {
       // Fixed phase/classification is not raw capture. Detailed assertion export
       // is forbidden until the complete in-container raw scan has passed.
       const diagnostic = await retainDiagnostic();
@@ -350,15 +419,51 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       assert.equal(result.status, 'PASS', result.failure);
     }
   } catch (error) {
-    failure = helper
-      ? 'HELPER_CONTRACT_FAILURE'
-      : composition
-        ? 'COMPOSITION_CONTROL_FAILURE'
-        : transport
-          ? 'W3_EXPORT_OR_CONTROL_FAILURE'
-          : error.message;
+    if (renderer && created) {
+      // Fixed metadata survives a missing scan or aborted outer wait. No raw fallback.
+      let diagnostic = {
+        status: 'FAIL',
+        failure: 'CONTROL_OR_IO',
+        phase: 'UNOBSERVED',
+        scanReason: 'UNRUN',
+        frames: null,
+        bytes: null,
+        counts: { ctrlG: null, arrowDown: null, observe: null, escape: null, enter: null },
+        runtime: { host: 'UNKNOWN', bun: 'UNKNOWN' },
+        cleanup: false,
+        hostExit: false,
+      };
+      try {
+        await command(
+          [
+            'cp',
+            `${name}:/run/proceed/evidence/renderer-diagnostic.json`,
+            join(run, 'renderer-diagnostic.private'),
+          ],
+          3000,
+          true,
+        );
+        diagnostic = safeRendererDiagnostic(
+          JSON.parse(await readFile(join(run, 'renderer-diagnostic.private'), 'utf8')),
+        );
+      } catch {
+        /* fixed unknowns, not fabricated counts */
+      } finally {
+        await rm(join(run, 'renderer-diagnostic.private'), { force: true });
+      }
+      await writeFile(join(run, 'renderer-diagnostic.json'), JSON.stringify(diagnostic));
+    }
+    failure = renderer
+      ? 'RENDERER_CONTROL_OR_EXPORT_FAILURE'
+      : helper
+        ? 'HELPER_CONTRACT_FAILURE'
+        : composition
+          ? 'COMPOSITION_CONTROL_FAILURE'
+          : transport
+            ? 'W3_EXPORT_OR_CONTROL_FAILURE'
+            : error.message;
     // Failure evidence is copied before owned namespace destruction, never raw host logs.
-    if (created && !transport && !helper)
+    if (created && !transport && !helper && !renderer)
       for (const file of [
         'result.json',
         'progress.jsonl',
@@ -443,7 +548,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         cleanup = 'PASS - exact container absent, private PID namespace destroyed';
       } catch (error) {
         cleanup =
-          transport || helper ? 'FAIL - exact owned container cleanup' : `FAIL - ${error.message}`;
+          transport || helper || renderer
+            ? 'FAIL - exact owned container cleanup'
+            : `FAIL - ${error.message}`;
         failure ??= cleanup;
       }
     } else cleanup = 'NOT APPLICABLE - container not created';
