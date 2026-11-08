@@ -8,6 +8,7 @@ export const qualificationSupport = Object.freeze([
   'tests/support/harness-composition-inner.mjs',
   'tests/support/harness-composition-readiness.mjs',
   'tests/support/harness-navigation-observation.mjs',
+  'tests/support/harness-renderer-observation.mjs',
   'tests/support/harness-composition-retention.mjs',
   'tests/fixtures/harness-composition/tui.ts',
   'tests/fixtures/harness-composition/broker-observer.mjs',

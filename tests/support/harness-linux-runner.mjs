@@ -29,6 +29,7 @@ import {
   retainProgress,
   safeCompositionDiagnostic,
   assertCompositionExport,
+  transferProductCapture,
 } from './harness-composition-retention.mjs';
 import {
   assertTransportDiagnostic,
@@ -54,6 +55,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       'helper-contract',
       'parent-process',
       'composition',
+      'product-picker-capture',
       'renderer',
       'renderer-diagnostic',
       'renderer-inventory',
@@ -64,7 +66,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
   const rendererInventory = mode === 'renderer-inventory';
   const renderer = mode === 'renderer' || rendererDiagnostic || rendererInventory;
   if (rendererInventory) assert.equal(preflight, false);
-  const composition = mode === 'composition';
+  const pickerCapture = mode === 'product-picker-capture';
+  if (pickerCapture) assert.equal(preflight, false);
+  const composition = mode === 'composition' || pickerCapture;
   const helper = mode === 'helper-contract' || parent;
   if (helper && !parent) {
     assert.equal(
@@ -102,7 +106,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       timeout,
       maxBuffer,
       windowsHide: true,
-      ...(renderer && args[0] === 'cp' ? { encoding: 'buffer' } : {}),
+      ...((renderer || pickerCapture) && args[0] === 'cp' ? { encoding: 'buffer' } : {}),
     });
   };
   for (const name of ['plugin', 'client']) {
@@ -191,6 +195,23 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
     await writeFile(join(run, 'progress.json'), JSON.stringify(record, null, 2));
   };
   const retainDiagnostic = async (cleanup = false) => {
+    if (pickerCapture) {
+      const archive = await command(
+        ['cp', `${name}:/run/proceed/evidence/composition-diagnostic.json`, '-'],
+        3000,
+        cleanup,
+        8192 + 4096,
+      );
+      const safe = safeCompositionDiagnostic(
+        JSON.parse(
+          parseRendererArchive(archive.stdout, 'composition-diagnostic.json', 8192).toString(
+            'utf8',
+          ),
+        ),
+      );
+      await writeFile(join(run, 'composition-diagnostic.json'), JSON.stringify(safe));
+      return safe;
+    }
     // Quarantine never becomes retained diagnostic evidence without revalidation.
     const privatePath = join(run, 'composition-diagnostic.private');
     try {
@@ -207,6 +228,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
     }
   };
   let created = false;
+  let productDetailsAttempted = false;
   let rendererDiagnosticAttempted = false,
     retainedRendererDiagnostic;
   let failure;
@@ -228,7 +250,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       integrity.push({ path, sha256: createHash('sha256').update(staged).digest('hex') });
     }
     await writeFile(join(run, 'input-integrity.json'), JSON.stringify(integrity, null, 2));
-    if (renderer) {
+    if (pickerCapture)
+      await writeFile(join(stage, 'input-integrity.json'), JSON.stringify(integrity));
+    if (renderer || pickerCapture) {
       const outerInputs = [
         'tests/run-harness-host.mjs',
         'tests/support/harness-linux-runner.mjs',
@@ -263,6 +287,13 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         {
           candidate,
           image: linuxImage,
+          ...(pickerCapture
+            ? {
+                purpose: 'PRODUCT_PICKER_CAPTURE_ONLY',
+                qualification: 'UNQUALIFIED',
+                selectionProfile: null,
+              }
+            : {}),
           ...(rendererInventory
             ? { purpose: 'METADATA_INVENTORY_ONLY', privacy: 'UNPROVEN', profile: 'UNPROVEN' }
             : {}),
@@ -270,7 +301,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
             ? { purpose: 'DIAGNOSTIC_CAPTURE_ONLY', profile: 'UNPROVEN' }
             : {}),
           payload,
-          command: `node tests/run-harness-host.mjs ${rendererInventory ? '--renderer-inventory-run' : rendererDiagnostic ? '--renderer-diagnostic-run' : renderer ? '--renderer-run' : composition ? '--composition-run' : parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
+          command: `node tests/run-harness-host.mjs ${pickerCapture ? '--product-picker-capture-run' : rendererInventory ? '--renderer-inventory-run' : rendererDiagnostic ? '--renderer-diagnostic-run' : renderer ? '--renderer-run' : composition ? '--composition-run' : parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
         },
         null,
         2,
@@ -310,6 +341,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       ...(firstOnly ? ['--first-exchange-only'] : []),
       ...(rendererDiagnostic ? ['--diagnostic-capture'] : []),
       ...(rendererInventory ? ['--metadata-inventory'] : []),
+      ...(pickerCapture ? ['--product-picker-capture'] : []),
       ...(helper && !parent ? ['/payload/' + helperEntry] : []),
     ]);
     created = true;
@@ -410,6 +442,24 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           assert.equal(diagnostic.diagnostic.profile, 'UNPROVEN');
         }
       }
+    } else if (pickerCapture) {
+      const diagnostic = await retainDiagnostic();
+      productDetailsAttempted = true;
+      const details = await transferProductCapture(
+        async (file, maxBuffer) =>
+          (
+            await command(
+              ['cp', `${name}:/run/proceed/evidence/${file}`, '-'],
+              3000,
+              false,
+              maxBuffer,
+            )
+          ).stdout,
+      );
+      for (const [file, bytes] of details) await writeFile(evidenceDestination(file), bytes);
+      assert.equal(waited.stdout.trim(), '0', 'PRODUCT_CAPTURE_FAILURE');
+      assert.equal(diagnostic.status, 'PASS');
+      assert.equal(diagnostic.keys.enter, 0);
     } else if (composition) {
       // Fixed phase/classification is not raw capture. Detailed assertion export
       // is forbidden until the complete in-container raw scan has passed.
@@ -582,23 +632,40 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       }
       try {
         // Also on failure, detailed evidence requires the complete raw scan.
-        await command(
-          ['cp', `${name}:/run/proceed/evidence/scan-pass.json`, join(run, 'scan-pass.json')],
-          3000,
-          true,
-        );
-        assertCompositionExport(JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')));
-        for (const file of [
-          'composition-observations.json',
-          'transcript.ansi',
-          'plugin-diagnostics.log',
-          'progress.jsonl',
-        ])
+        if (pickerCapture) {
+          assert.equal(productDetailsAttempted, false, 'NO_PRODUCT_TRANSFER_RETRY');
+          productDetailsAttempted = true;
+          const details = await transferProductCapture(
+            async (file, maxBuffer) =>
+              (
+                await command(
+                  ['cp', `${name}:/run/proceed/evidence/${file}`, '-'],
+                  3000,
+                  true,
+                  maxBuffer,
+                )
+              ).stdout,
+          );
+          for (const [file, bytes] of details) await writeFile(evidenceDestination(file), bytes);
+        } else {
           await command(
-            ['cp', `${name}:/run/proceed/evidence/${file}`, evidenceDestination(file)],
+            ['cp', `${name}:/run/proceed/evidence/scan-pass.json`, join(run, 'scan-pass.json')],
             3000,
             true,
           );
+          assertCompositionExport(JSON.parse(await readFile(join(run, 'scan-pass.json'), 'utf8')));
+          for (const file of [
+            'composition-observations.json',
+            'transcript.ansi',
+            'plugin-diagnostics.log',
+            'progress.jsonl',
+          ])
+            await command(
+              ['cp', `${name}:/run/proceed/evidence/${file}`, evidenceDestination(file)],
+              3000,
+              true,
+            );
+        }
       } catch {
         /* Missing/failed scan refuses every detailed capture. No raw fallback. */
       }
@@ -653,6 +720,13 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           containerExit: progressState?.containerExit ?? 'UNRUN',
           elapsed: Date.now() - started,
           image: linuxImage,
+          ...(pickerCapture
+            ? {
+                purpose: 'PRODUCT_PICKER_CAPTURE_ONLY',
+                qualification: 'UNQUALIFIED',
+                selectionProfile: null,
+              }
+            : {}),
           ...(rendererInventory
             ? { purpose: 'METADATA_INVENTORY_ONLY', privacy: 'UNPROVEN', profile: 'UNPROVEN' }
             : {}),
@@ -672,6 +746,13 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           failure,
           cleanup,
           evidence: run,
+          ...(pickerCapture
+            ? {
+                purpose: 'PRODUCT_PICKER_CAPTURE_ONLY',
+                qualification: 'UNQUALIFIED',
+                selectionProfile: null,
+              }
+            : {}),
           ...(rendererInventory
             ? { purpose: 'METADATA_INVENTORY_ONLY', privacy: 'UNPROVEN', profile: 'UNPROVEN' }
             : {}),

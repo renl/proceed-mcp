@@ -10,6 +10,8 @@ import {
   access,
   readdir,
   rename,
+  cp,
+  opendir,
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { networkInterfaces } from 'node:os';
@@ -28,12 +30,22 @@ import {
   scanFrozenComposition,
   compositionScanReason,
   persistCompositionDiagnostic,
+  collectProductCapture,
+  productCaptureExport,
 } from './harness-composition-retention.mjs';
+import {
+  digest,
+  rendererReadFile,
+  collectionAdmit,
+  collectionLimits,
+  inventoryLimits,
+} from './harness-renderer-observation.mjs';
 import {
   awaitCompositionKeyAdmission,
   compositionRenderEvidence,
   compositionErrorCode,
   compositionCurrentFrame,
+  compositionSourceFrame,
   compositionActivation,
   compositionSnapshot,
   compositionCanRequestFresh,
@@ -44,6 +56,8 @@ import {
   confirmRenderedNavigation,
   highlightedOrdinal,
   assertCurrentIdentityFrame,
+  captureProductPicker,
+  productPickerObservation,
 } from './harness-navigation-observation.mjs';
 import {
   stageQualification,
@@ -52,6 +66,20 @@ import {
 } from './harness-linux-plan.mjs';
 
 const evidence = '/run/proceed/evidence';
+assert.ok(
+  process.argv.length === 2 ||
+    (process.argv.length === 3 && process.argv[2] === '--product-picker-capture'),
+);
+const pickerCapture = process.argv[2] === '--product-picker-capture';
+let pickerEvidence, executionBinding;
+const terminalResponses = [
+  [/\x1b\[6n/g, '\x1b[1;1R'],
+  [/\x1b\[\?u/g, '\x1b[?0u'],
+  [/\x1b\[c/g, '\x1b[?1;2c'],
+  [/\x1b\[>c/g, '\x1b[>0;0;0c'],
+  [/\x1b\]10;\?(?:\x07|\x1b\\)/g, '\x1b]10;rgb:ffff/ffff/ffff\x1b\\'],
+  [/\x1b\]11;\?(?:\x07|\x1b\\)/g, '\x1b]11;rgb:0000/0000/0000\x1b\\'],
+];
 const started = Date.now(),
   end = started + 210000;
 let phase = 'policy',
@@ -114,7 +142,39 @@ const plain = (b) =>
     .toString()
     .replace(/\x1b\](?:[^\x07\x1b]|\x1b(?!\\))*(?:\x07|\x1b\\)/g, '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-async function logs(root) {
+async function logs(
+  root,
+  accounting = { entries: 0, paths: 0, bytes: 0, deadline: Math.min(end, Date.now() + 5000) },
+  depth = 0,
+) {
+  if (pickerCapture) {
+    assert.ok(depth <= Number(inventoryLimits.depth) && Date.now() < accounting.deadline);
+    const chunks = [];
+    const directory = await opendir(root, { bufferSize: 1 });
+    try {
+      for (;;) {
+        assert.ok(Date.now() < accounting.deadline);
+        const entry = await directory.read();
+        if (!entry) break;
+        const path = join(root, entry.name);
+        accounting.entries++;
+        accounting.paths += Buffer.byteLength(path);
+        assert.ok(accounting.entries <= Number(inventoryLimits.entries));
+        assert.ok(Buffer.byteLength(path) <= Number(inventoryLimits.path));
+        assert.ok(accounting.paths <= Number(inventoryLimits.paths));
+        assert.equal(entry.isSymbolicLink(), false);
+        if (entry.isDirectory()) chunks.push(await logs(path, accounting, depth + 1));
+        else if (/\.log(?:[.-].*)?$/.test(entry.name)) {
+          const bytes = await rendererReadFile({}, path, 'diagnostics', accounting.bytes);
+          accounting.bytes += bytes.length;
+          chunks.push(bytes);
+        }
+      }
+    } finally {
+      await directory.close();
+    }
+    return Buffer.concat(chunks);
+  }
   const chunks = [];
   for (const e of await readdir(root, { withFileTypes: true })) {
     const path = join(root, e.name);
@@ -172,7 +232,11 @@ try {
       // forwards the real Context and only the four production options unchanged.
       const fixture = join(env.OPENCODE_CONFIG_DIR, 'plugins/proceed-composition');
       await mkdir(join(fixture, 'node_modules/@meshimize'), { recursive: true });
-      await symlink(staging.product, join(fixture, 'node_modules/@meshimize/proceed-mcp'));
+      if (pickerCapture)
+        await cp(staging.product, join(fixture, 'node_modules/@meshimize/proceed-mcp'), {
+          recursive: true,
+        });
+      else await symlink(staging.product, join(fixture, 'node_modules/@meshimize/proceed-mcp'));
       await writeFile(
         join(fixture, 'package.json'),
         JSON.stringify({
@@ -189,6 +253,34 @@ try {
         staging.config,
         JSON.stringify({ plugins: [{ package: fixture, options: staging.options }] }),
       );
+      if (pickerCapture) {
+        executionBinding = {
+          scope: 'product-capture',
+          executable: execFileSync('/usr/bin/sha256sum', ['/usr/local/bin/opencode'], {
+            env,
+            timeout: 5000,
+            encoding: 'utf8',
+          }).split(' ')[0],
+          package: digest(await readFile(join(staging.product, 'package.json'))),
+          source: '9bbb8ce18c80f099e0e448775f59d965ead40a21',
+          rendererSource: '738067f47e940dcec3f5aab74868908574335c6c',
+          sourceBinding: 'PINNED_IMAGE_PROVENANCE_NOT_RUNTIME_ACCESSOR',
+          config: digest(await readFile(staging.config)),
+          configBytes: (await readFile(staging.config)).toString('utf8'),
+          environment: env,
+          terminalResponsePolicy: terminalResponses.map(([query, reply]) => ({
+            query: query.source,
+            flags: query.flags,
+            reply,
+          })),
+          wrapper: digest(await readFile(join(fixture, 'tui.ts'))),
+          resolvedTheme: null,
+          designMode: null,
+          effectiveColorDepth: null,
+          payload: JSON.parse(await readFile('/payload/input-paths.json', 'utf8')),
+          inputs: JSON.parse(await readFile('/payload/input-integrity.json', 'utf8')),
+        };
+      }
       const controls = await transportFixtures(h);
       const requiredSecrets = Object.freeze(controls.secrets.slice());
       let controlsClosed = false;
@@ -204,7 +296,10 @@ try {
         );
         await progress('compiled-product-start');
         const run = randomUUID();
-        await writeFile(join(evidence, 'composition-binding.json'), JSON.stringify({ run }));
+        await writeFile(
+          join(evidence, 'composition-binding.json'),
+          JSON.stringify({ run, captureOnly: pickerCapture }),
+        );
         // Establish the empty observer stream before any exchange. Missing later
         // is a capture failure, never an invented zero-response scan input.
         await writeFile('/run/proceed/qualification-private/composition-wire.jsonl', '');
@@ -234,14 +329,7 @@ try {
           capture(bytes);
           const input = pending + bytes.toString();
           let consumed = 0;
-          for (const [pattern, reply] of [
-            [/\x1b\[6n/g, '\x1b[1;1R'],
-            [/\x1b\[\?u/g, '\x1b[?0u'],
-            [/\x1b\[c/g, '\x1b[?1;2c'],
-            [/\x1b\[>c/g, '\x1b[>0;0;0c'],
-            [/\x1b\]10;\?(?:\x07|\x1b\\)/g, '\x1b]10;rgb:ffff/ffff/ffff\x1b\\'],
-            [/\x1b\]11;\?(?:\x07|\x1b\\)/g, '\x1b]11;rgb:0000/0000/0000\x1b\\'],
-          ])
+          for (const [pattern, reply] of terminalResponses)
             for (const match of input.matchAll(pattern)) {
               if (!exited) child.stdin.write(reply);
               consumed = Math.max(consumed, match.index + match[0].length);
@@ -312,7 +400,9 @@ try {
               binding.hostRun = activation.run;
               binding.hostSetup = activation.setup;
             }
-            const frame = compositionCurrentFrame(transcript.toString());
+            const frame = pickerCapture
+              ? (compositionSourceFrame(transcript.toString()).text ?? '')
+              : compositionCurrentFrame(transcript.toString());
             const frameToken = transcript.length;
             const response = readObservation('composition-selector-response.json');
             const responseReadAt = response ? Date.now() : undefined;
@@ -368,95 +458,144 @@ try {
             child.stdin.write('\x07');
           },
         });
-        const navigationEnd = Math.min(end, Date.now() + 15000);
-        const navigationFrame = () => {
-          const live = readObservation('composition-live.json');
-          assert.equal(live?.live, true);
-          assert.equal(live?.generation, binding.generation);
-          assert.ok(!exited && !overflow && Date.now() < navigationEnd);
-          return {
-            frame: compositionCurrentFrame(transcript.toString()),
-            styledFrame: compositionCurrentFrame(transcript.toString(), { styled: true }),
-            token: transcript.length,
-            geometry: live.geometry,
+        if (pickerCapture) {
+          const initialLive = readObservation('composition-live.json');
+          const snapshot = structuredClone(initialLive.snapshot);
+          const captureBinding = {
+            ...executionBinding,
+            runtime: { version: runtime.version, bun: runtime.bun, node: runtime.node },
+            run,
+            setup: binding.generation,
+            geometry: structuredClone(initialLive.geometry),
           };
-        };
-        const waitNavigation = async (label, check) => {
-          let observed;
-          await wait(
-            label,
-            () => {
-              observed = navigationFrame();
-              try {
-                check(observed);
-                return true;
-              } catch {
-                return false;
-              }
-            },
-            Math.max(0, navigationEnd - Date.now()),
-          );
-          return observed;
-        };
-        await confirmRenderedNavigation(
-          {
-            // BLOCKED: exact pinned normal-theme RGB/style evidence is not yet
-            // supplied. Never infer it from the brightest/boldest captured row.
+          pickerEvidence = await captureProductPicker({
             selectionProfile: null,
-            stdin: {
-              write(key) {
-                keys.enter++;
-                child.stdin.write(key);
-              },
+            observe: async (previous) => {
+              let observation;
+              await wait(
+                'rendered-product-session-picker',
+                () => {
+                  const live = readObservation('composition-live.json');
+                  assert.ok(!exited && !overflow && live?.live);
+                  assert.equal(live.generation, binding.generation);
+                  assert.deepEqual(live.geometry, captureBinding.geometry);
+                  assert.deepEqual(live.snapshot, snapshot);
+                  observation = productPickerObservation(
+                    Buffer.from(transcript),
+                    captureBinding,
+                    snapshot,
+                    previous,
+                  );
+                  // Unsupported controls stop interpretation, not safe raw capture.
+                  if (observation.reason === 'UNSUPPORTED_DECODER') return true;
+                  return (
+                    observation.supported && (!previous || observation.frames > previous.frames)
+                  );
+                },
+                5000,
+              );
+              return observation;
             },
-            currentNavigationFrame: navigationFrame,
-            waitHighlightedSession: () =>
-              waitNavigation('rendered-product-session-picker', (s) =>
-                highlightedOrdinal(s.styledFrame, null),
-              ),
-            waitIdentityConfirmation: (session) =>
-              waitNavigation('rendered-product-session-picker', (s) =>
-                assertCurrentIdentityFrame(s.frame, session, s.geometry),
-              ),
-          },
-          { id: runtime.session, title: 'Composition empty exchange' },
-        );
-        await wait('rendered-product-empty-result', () =>
-          compositionCurrentFrame(transcript.toString()).includes(
-            'selected session has no pending question',
-          ),
-        );
-        const wire = JSON.parse(
-          '[' +
-            (await readFile('/run/proceed/qualification-private/composition-wire.jsonl', 'utf8'))
-              .trim()
-              .split('\n')
-              .join(',') +
-            ']',
-        );
-        const admitted = wire.filter((v) => v.status === 200);
-        assert.equal(wire.filter((v) => v.path === '/v1/harness/decisions').length, 0);
-        assert.equal(admitted.length, 1);
-        const actual = admitted[0];
-        assert.equal(actual.method, 'POST');
-        assert.deepEqual(actual.body, { schema_version: 1, presentation: null });
-        assert.equal(actual.cipher.name, 'PSK-AES256-GCM-SHA384');
-        assert.equal(actual.helpers.length, 1);
-        const helper = actual.helpers[0];
-        assert.equal(helper.executable, '/usr/local/bin/node');
-        assert.equal(
-          execFileSync(helper.executable, ['--version'], {
-            env,
-            timeout: 5000,
-            encoding: 'utf8',
-          }).trim(),
-          'v24.22.2',
-        );
-        assert.equal(helper.argv.length, 2);
-        assert.equal(helper.argv[1], join(staging.product, 'src/harness/operator-helper.js'));
-        for (const fd of [helper.fd3, helper.fd4]) assert.match(fd, /^(socket|pipe):\[\d+\]$/);
-        await wait('physical-helper-absence', async () => !(await exists('/proc/' + helper.pid)));
-        await h.noWork();
+            moveDown: async () => child.stdin.write('\x1b[B'),
+            dismiss: async () => child.stdin.write('\x1b'),
+          });
+          assert.equal(keys.enter, 0);
+          assert.equal(
+            await readFile('/run/proceed/qualification-private/composition-wire.jsonl', 'utf8'),
+            '',
+          );
+          await h.noWork();
+        } else {
+          const navigationEnd = Math.min(end, Date.now() + 15000);
+          const navigationFrame = () => {
+            const live = readObservation('composition-live.json');
+            assert.equal(live?.live, true);
+            assert.equal(live?.generation, binding.generation);
+            assert.ok(!exited && !overflow && Date.now() < navigationEnd);
+            return {
+              frame: compositionCurrentFrame(transcript.toString()),
+              styledFrame: compositionCurrentFrame(transcript.toString(), { styled: true }),
+              token: transcript.length,
+              geometry: live.geometry,
+            };
+          };
+          const waitNavigation = async (label, check) => {
+            let observed;
+            await wait(
+              label,
+              () => {
+                observed = navigationFrame();
+                try {
+                  check(observed);
+                  return true;
+                } catch {
+                  return false;
+                }
+              },
+              Math.max(0, navigationEnd - Date.now()),
+            );
+            return observed;
+          };
+          await confirmRenderedNavigation(
+            {
+              // BLOCKED: exact pinned normal-theme RGB/style evidence is not yet
+              // supplied. Never infer it from the brightest/boldest captured row.
+              selectionProfile: null,
+              stdin: {
+                write(key) {
+                  keys.enter++;
+                  child.stdin.write(key);
+                },
+              },
+              currentNavigationFrame: navigationFrame,
+              waitHighlightedSession: () =>
+                waitNavigation('rendered-product-session-picker', (s) =>
+                  highlightedOrdinal(s.styledFrame, null),
+                ),
+              waitIdentityConfirmation: (session) =>
+                waitNavigation('rendered-product-session-picker', (s) =>
+                  assertCurrentIdentityFrame(s.frame, session, s.geometry),
+                ),
+            },
+            { id: runtime.session, title: 'Composition empty exchange' },
+          );
+          await wait('rendered-product-empty-result', () =>
+            compositionCurrentFrame(transcript.toString()).includes(
+              'selected session has no pending question',
+            ),
+          );
+          const wire = JSON.parse(
+            '[' +
+              (await readFile('/run/proceed/qualification-private/composition-wire.jsonl', 'utf8'))
+                .trim()
+                .split('\n')
+                .join(',') +
+              ']',
+          );
+          const admitted = wire.filter((v) => v.status === 200);
+          assert.equal(wire.filter((v) => v.path === '/v1/harness/decisions').length, 0);
+          assert.equal(admitted.length, 1);
+          const actual = admitted[0];
+          assert.equal(actual.method, 'POST');
+          assert.deepEqual(actual.body, { schema_version: 1, presentation: null });
+          assert.equal(actual.cipher.name, 'PSK-AES256-GCM-SHA384');
+          assert.equal(actual.helpers.length, 1);
+          const helper = actual.helpers[0];
+          assert.equal(helper.executable, '/usr/local/bin/node');
+          assert.equal(
+            execFileSync(helper.executable, ['--version'], {
+              env,
+              timeout: 5000,
+              encoding: 'utf8',
+            }).trim(),
+            'v24.22.2',
+          );
+          assert.equal(helper.argv.length, 2);
+          assert.equal(helper.argv[1], join(staging.product, 'src/harness/operator-helper.js'));
+          for (const fd of [helper.fd3, helper.fd4]) assert.match(fd, /^(socket|pipe):\[\d+\]$/);
+          await wait('physical-helper-absence', async () => !(await exists('/proc/' + helper.pid)));
+          await h.noWork();
+        }
         keys.exit++;
         child.stdin.write('\x03');
         await wait('exact-product-PluginCleanup', () =>
@@ -467,22 +606,23 @@ try {
           { productCleanup: 'PASS' },
         );
         await wait('actual-host-exit', () => exited);
-        await writeFile(
-          join(evidence, 'composition-summary.json'),
-          JSON.stringify({
-            status: 'PASS',
-            runtime,
-            helperNode: process.version,
-            response: actual.body,
-            statusCode: actual.status,
-            cipher: actual.cipher.name,
-            privateDescriptors: 'PASS',
-            helperAbsence: 'PASS',
-            productCleanup: 'PASS',
-            zeroWork: 'PASS',
-            scope: 'One compiled-host empty pending exchange only',
-          }),
-        );
+        if (!pickerCapture)
+          await writeFile(
+            join(evidence, 'composition-summary.json'),
+            JSON.stringify({
+              status: 'PASS',
+              runtime,
+              helperNode: process.version,
+              response: actual.body,
+              statusCode: actual.status,
+              cipher: actual.cipher.name,
+              privateDescriptors: 'PASS',
+              helperAbsence: 'PASS',
+              productCleanup: 'PASS',
+              zeroWork: 'PASS',
+              scope: 'One compiled-host empty pending exchange only',
+            }),
+          );
       } catch (error) {
         errorCode = compositionErrorCode(error);
         // Freeze failure-time operands before Ctrl+C, cleanup files or phase changes.
@@ -573,78 +713,174 @@ try {
               (p) => /^\d+$/.test(p) && !priorPids.has(p),
             );
             const complete = closed && remainingPids.length === 0;
-            const diagnosticBytes = await logs('/run/proceed/host-state');
-            const wirePath = '/run/proceed/qualification-private/composition-wire.jsonl';
-            const captures = {
-              tui: Buffer.concat([transcript, await readFile('/run/proceed/host-state/pty.raw')]),
-              telegram: Buffer.from(JSON.stringify(h.fixture.calls)),
-              journal: await readFile(join(h.state, 'journal.log')),
-              diagnostics: diagnosticBytes,
-              evidence: Buffer.concat([
-                Buffer.from(JSON.stringify(guardJournal.value())),
-                ...(await Promise.all(
-                  (await readdir(evidence))
-                    .filter((f) => f !== 'scan-pass.json')
-                    .map((f) => readFile(join(evidence, f))),
-                )),
-              ]),
-              // Explicitly created before launch. Absence refuses the full scan.
-              api: await readFile(wirePath),
-            };
-            if (!captures.diagnostics.length) {
-              scanStage = 'MISSING';
-              throw Error('missing diagnostics');
-            }
-            const lines = diagnosticBytes
-              .toString()
-              .split('\n')
-              .filter(
-                (line) => /component=plugin(?: |$)/.test(line) && /role=cli(?: |$)/.test(line),
+            if (pickerCapture) {
+              assert.ok(complete && productCleanup === 'OBSERVED');
+              assert.equal(keys.enter, 0);
+              const observations = Buffer.from(
+                JSON.stringify({
+                  pickerEvidence,
+                  executionBinding,
+                  keys,
+                  lifecycle,
+                  productCleanup,
+                  hostExit,
+                }),
               );
-            let inventory;
-            try {
-              inventory = assertPluginInventory(lines, {
-                plugin: fixture,
-                entry: join(fixture, 'tui.ts'),
-                complete: lines.length <= 4096,
+              await writeFile(join(evidence, 'composition-observations.json'), observations);
+              const journal = await rendererReadFile(
+                {},
+                join(h.state, 'journal.log'),
+                'journal',
+                0,
+              );
+              const api = await rendererReadFile(
+                {},
+                '/run/proceed/qualification-private/composition-wire.jsonl',
+                'api',
+                journal.length,
+              );
+              assert.equal(api.length, 0);
+              const telegram = Buffer.from(JSON.stringify(h.fixture.calls));
+              const extras = [journal, api, telegram, transcript].map((bytes) => ({ bytes }));
+              const entries = await collectProductCapture(
+                { state: '/run/proceed/host-state', evidence },
+                extras,
+                requiredSecrets,
+                Math.min(end, Date.now() + 30000),
+              );
+              const logEntries = entries.filter((e) => /\.log(?:$|[.-])/.test(e.path));
+              assert.ok(logEntries.length > 0);
+              const diagnostics = Buffer.concat(logEntries.map((e) => e.bytes));
+              const pluginLines = diagnostics
+                .toString('utf8')
+                .split('\n')
+                .filter(
+                  (line) => /component=plugin(?: |$)/.test(line) && /role=cli(?: |$)/.test(line),
+                );
+              assert.ok(pluginLines.length <= 4096);
+              collectionAdmit(
+                pluginLines.reduce((n, line) => n + Buffer.byteLength(line) + 1, 0),
+                collectionLimits.detail,
+              );
+              const pluginBytes = Buffer.from(pluginLines.join('\n'));
+              const pty = entries.find((e) => e.path === '/run/proceed/host-state/pty.raw');
+              assert.ok(pty);
+              const S =
+                transcript.length +
+                pty.bytes.length +
+                telegram.length +
+                journal.length +
+                diagnostics.length +
+                pluginBytes.length +
+                api.length +
+                entries.reduce((n, e) => n + Buffer.byteLength(e.path) + e.bytes.length, 0);
+              collectionAdmit(S, collectionLimits.surfaces);
+              const captures = {
+                tui: Buffer.concat([transcript, pty.bytes]),
+                telegram,
+                journal,
+                diagnostics,
+                evidence: Buffer.concat([
+                  ...entries.flatMap((e) => [Buffer.from(e.path), e.bytes]),
+                  pluginBytes,
+                ]),
+                api,
+              };
+              const details = {
+                'composition-observations.json': observations,
+                'transcript.ansi': Buffer.from(transcript),
+                'plugin-diagnostics.log': pluginBytes,
+                'progress.jsonl': entries.find((e) => e.path === join(evidence, 'progress.jsonl'))
+                  .bytes,
+              };
+              scanStage = 'SCAN';
+              const frozen = productCaptureExport(
+                captures,
+                requiredSecrets,
+                complete,
+                overflow,
+                details,
+              );
+              scanStage = 'WRITE';
+              for (const [file, bytes] of Object.entries(frozen.details))
+                await writeFile(join(evidence, file), bytes);
+              await writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(frozen.scan));
+              scanStatus = 'PASS';
+              scanReason = 'NONE';
+            } else {
+              const diagnosticBytes = await logs('/run/proceed/host-state');
+              const wirePath = '/run/proceed/qualification-private/composition-wire.jsonl';
+              const captures = {
+                tui: Buffer.concat([transcript, await readFile('/run/proceed/host-state/pty.raw')]),
+                telegram: Buffer.from(JSON.stringify(h.fixture.calls)),
+                journal: await readFile(join(h.state, 'journal.log')),
+                diagnostics: diagnosticBytes,
+                evidence: Buffer.concat([
+                  Buffer.from(JSON.stringify(guardJournal.value())),
+                  ...(await Promise.all(
+                    (await readdir(evidence))
+                      .filter((f) => f !== 'scan-pass.json')
+                      .map((f) => readFile(join(evidence, f))),
+                  )),
+                ]),
+                // Explicitly created before launch. Absence refuses the full scan.
+                api: await readFile(wirePath),
+              };
+              if (!captures.diagnostics.length) {
+                scanStage = 'MISSING';
+                throw Error('missing diagnostics');
+              }
+              const lines = diagnosticBytes
+                .toString()
+                .split('\n')
+                .filter(
+                  (line) => /component=plugin(?: |$)/.test(line) && /role=cli(?: |$)/.test(line),
+                );
+              let inventory;
+              try {
+                inventory = assertPluginInventory(lines, {
+                  plugin: fixture,
+                  entry: join(fixture, 'tui.ts'),
+                  complete: lines.length <= 4096,
+                });
+              } catch {
+                inventory = { status: 'UNPROVEN' };
+              }
+              const observations = Buffer.from(
+                JSON.stringify({
+                  renderedEvidenceSeen: renderEvidence,
+                  currentScreen: 'UNPROVEN',
+                  commandEligibility,
+                  keys,
+                  readinessFrame,
+                  readinessObservation,
+                  productCleanup,
+                  hostExit,
+                  inventory,
+                  guardJournal: guardJournal.value(),
+                  failureAt,
+                  lifecycle,
+                }),
+              );
+              const pluginBytes = Buffer.from(lines.slice(0, 4096).join('\n'));
+              // Freeze the exact detailed exports, complete capture set and secret
+              // set before scanning. Never scan an earlier version then export new bytes.
+              captures.evidence = Buffer.concat([captures.evidence, observations, pluginBytes]);
+              scanStage = 'SCAN';
+              const frozen = scanFrozenComposition({
+                captures,
+                secrets: requiredSecrets,
+                complete,
+                overflow,
               });
-            } catch {
-              inventory = { status: 'UNPROVEN' };
+              scanStage = 'WRITE';
+              await writeFile(join(evidence, 'composition-observations.json'), observations);
+              await writeFile(join(evidence, 'transcript.ansi'), frozen.captures.tui);
+              await writeFile(join(evidence, 'plugin-diagnostics.log'), pluginBytes);
+              await writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(frozen.scan));
+              scanStatus = 'PASS';
+              scanReason = 'NONE';
             }
-            const observations = Buffer.from(
-              JSON.stringify({
-                renderedEvidenceSeen: renderEvidence,
-                currentScreen: 'UNPROVEN',
-                commandEligibility,
-                keys,
-                readinessFrame,
-                readinessObservation,
-                productCleanup,
-                hostExit,
-                inventory,
-                guardJournal: guardJournal.value(),
-                failureAt,
-                lifecycle,
-              }),
-            );
-            const pluginBytes = Buffer.from(lines.slice(0, 4096).join('\n'));
-            // Freeze the exact detailed exports, complete capture set and secret
-            // set before scanning. Never scan an earlier version then export new bytes.
-            captures.evidence = Buffer.concat([captures.evidence, observations, pluginBytes]);
-            scanStage = 'SCAN';
-            const frozen = scanFrozenComposition({
-              captures,
-              secrets: requiredSecrets,
-              complete,
-              overflow,
-            });
-            scanStage = 'WRITE';
-            await writeFile(join(evidence, 'composition-observations.json'), observations);
-            await writeFile(join(evidence, 'transcript.ansi'), frozen.captures.tui);
-            await writeFile(join(evidence, 'plugin-diagnostics.log'), pluginBytes);
-            await writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(frozen.scan));
-            scanStatus = 'PASS';
-            scanReason = 'NONE';
           } catch (error) {
             scanStatus = 'REFUSED';
             scanReason = compositionScanReason(error, scanStage);
@@ -656,7 +892,7 @@ try {
           throw Object.assign(Error('scan refused'), { code: 'CAPTURE_SCAN_REFUSED' });
       }
     },
-    { brokerObserver: true },
+    { brokerObserver: true, captureOnly: pickerCapture },
   );
 } catch (error) {
   errorCode ??= compositionErrorCode(error);

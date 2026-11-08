@@ -5,6 +5,143 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { compositionSourceFrame } from './harness-composition-readiness.mjs';
+import { identityPreview } from '../../src/harness/session-identity.js';
+
+// Private capture evidence only. No result from this route authorizes an Enter.
+export function productPickerObservation(raw, binding, snapshot, previous) {
+  assert.ok(Buffer.isBuffer(raw) && raw.length <= 1048576);
+  const frozen = structuredClone({ binding, snapshot });
+  const base = {
+    ...frozen,
+    bytes: raw.length,
+    sha256: createHash('sha256').update(raw).digest('hex'),
+    previousSha256: previous?.sha256 ?? null,
+    qualification: 'UNQUALIFIED',
+    selectionProfile: null,
+  };
+  const refuse = (reason) => ({ ...base, supported: false, reason });
+  try {
+    if (previous) {
+      assert.ok(raw.length > previous.bytes);
+      assert.equal(
+        createHash('sha256').update(raw.subarray(0, previous.bytes)).digest('hex'),
+        previous.sha256,
+      );
+    }
+    assert.equal(binding.scope, 'product-capture');
+    assert.ok(binding.run && binding.setup && binding.executable && binding.config);
+    assert.equal(binding.geometry?.width, 120);
+    assert.equal(binding.geometry?.height, 40);
+    assert.ok(
+      Number.isSafeInteger(binding.geometry.resizeSequence) && binding.geometry.resizeSequence >= 0,
+    );
+    assert.ok(Array.isArray(snapshot) && snapshot.length >= 2 && snapshot.length <= 8);
+    assert.equal(new Set(snapshot.map((s) => s.id)).size, snapshot.length);
+    snapshot.forEach((s, n) => {
+      assert.ok(typeof s.id === 'string' && s.id.length > 0);
+      assert.equal(s.ordinal, `Session ${n + 1}`);
+    });
+    const frame = compositionSourceFrame(new TextDecoder('utf-8', { fatal: true }).decode(raw));
+    if (!frame.supported) return refuse('UNSUPPORTED_DECODER');
+    assert.ok(frame.frames > 0 && frame.generation > 0 && Array.isArray(frame.styles));
+    assert.equal(frame.text.includes('Open Proceed question?'), false);
+    assert.equal(frame.text.includes('\u25cf'), false, 'product has no current marker');
+    const lines = frame.text.split('\n');
+    assert.equal(lines.filter((s) => s.includes('Select the Proceed session')).length, 1);
+    const rows = snapshot.map((s) => {
+      const label = `${s.ordinal} - ${identityPreview(s.title)}`;
+      const matches = lines.flatMap((line, row) => {
+        const col = line.indexOf(label);
+        return col < 0 ? [] : [{ row, col, line }];
+      });
+      assert.equal(matches.length, 1);
+      const { row, col, line } = matches[0];
+      assert.match(line.slice(0, col), /^ *$/);
+      assert.match(line.slice(col + label.length), /^ *$/);
+      const cells = frame.styles[row]?.slice(col, col + label.length);
+      assert.equal(cells?.length, label.length);
+      assert.ok(cells.every((c) => validStyle(c, (v) => v === null || rgb(v) || indexed(v))));
+      assert.ok(cells.every((c) => JSON.stringify(c) === JSON.stringify(cells[0])));
+      return { ordinal: s.ordinal, id: s.id, label, row, col, style: cells[0] };
+    });
+    assert.equal(lines.filter((s) => /Session \d+ - /.test(s)).length, rows.length);
+    assert.ok(rows.every((r, n) => !n || r.row > rows[n - 1].row));
+    return {
+      ...base,
+      supported: true,
+      reason: 'NONE',
+      rows,
+      frames: frame.frames,
+      screen: frame.generation,
+    };
+  } catch {
+    return refuse('UNBOUND_OR_INCOMPLETE_CELLS');
+  }
+}
+
+export function productPickerInterval(before, after) {
+  // Interval facts are not reusable profiles. Unknown semantic bindings refuse
+  // qualification even when emitted identities visibly transfer between rows.
+  try {
+    assert.ok(before.supported && after.supported);
+    assert.deepEqual(before.binding, after.binding);
+    assert.deepEqual(before.snapshot, after.snapshot);
+    assert.equal(before.screen, after.screen);
+    assert.ok(after.frames > before.frames && after.bytes > before.bytes);
+    assert.equal(after.previousSha256, before.sha256);
+    assert.deepEqual(
+      before.rows.map(({ style, ...r }) => r),
+      after.rows.map(({ style, ...r }) => r),
+    );
+    assert.ok(before.rows[0].style.bold && after.rows[1].style.bold);
+    assert.ok(before.rows.slice(1).every((r) => !r.style.bold));
+    assert.ok(after.rows.filter((_, n) => n !== 1).every((r) => !r.style.bold));
+    assert.deepEqual(before.rows[0].style, after.rows[1].style);
+    assert.deepEqual(before.rows[1].style, after.rows[0].style);
+    for (let n = 2; n < before.rows.length; n++) {
+      assert.deepEqual(before.rows[n].style, before.rows[1].style);
+      assert.deepEqual(after.rows[n].style, before.rows[1].style);
+    }
+    assert.notEqual(before.rows[0].style.bg, before.rows[1].style.bg);
+    return {
+      qualification: 'UNQUALIFIED',
+      reason: 'MISSING_SEMANTIC_BINDING',
+      emittedTransfer: true,
+      selectionProfile: null,
+    };
+  } catch {
+    return {
+      qualification: 'UNQUALIFIED',
+      reason: 'INVALID_INTERVAL',
+      emittedTransfer: false,
+      selectionProfile: null,
+    };
+  }
+}
+
+// A closed input alphabet: never hand a generic stdin to this mode.
+export async function captureProductPicker(driver) {
+  assert.equal(driver.selectionProfile, null);
+  let initial, moved;
+  try {
+    initial = await driver.observe();
+    if (initial.supported) {
+      await driver.moveDown(); // Exactly one diagnostic physical movement.
+      moved = await driver.observe(initial);
+    }
+    return {
+      mode: 'PRODUCT_PICKER_CAPTURE_ONLY',
+      selectionProfile: null,
+      qualification: 'UNQUALIFIED',
+      initial,
+      moved: moved ?? null,
+      interval: moved ? productPickerInterval(initial, moved) : null,
+      enter: 0,
+    };
+  } finally {
+    await driver.dismiss();
+  }
+}
 
 const rgb = (v) =>
   typeof v === 'string' &&

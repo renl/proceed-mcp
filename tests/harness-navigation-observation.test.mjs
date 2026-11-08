@@ -7,6 +7,9 @@ import {
   highlightedOrdinal,
   assertCurrentIdentityFrame,
   confirmRenderedNavigation,
+  productPickerObservation,
+  productPickerInterval,
+  captureProductPicker,
 } from './support/harness-navigation-observation.mjs';
 import {
   compositionCurrentFrame,
@@ -113,6 +116,157 @@ const fixtureSelection = (c) =>
   highlightedOrdinal(c.raw, c.profile, {
     offlineFixture: { labels: c.labels, binding: c.binding },
   });
+
+const productBinding = {
+  scope: 'product-capture',
+  run: 'synthetic-run',
+  setup: 'synthetic-setup',
+  executable: 'synthetic-binary-hash',
+  config: 'synthetic-config-hash',
+  geometry: { width: 120, height: 40, resizeSequence: 0 },
+  designMode: null,
+  resolvedTheme: null,
+  effectiveColorDepth: null,
+};
+const productSnapshot = [1, 2].map((n) => ({
+  id: `synthetic-id-${n}`,
+  ordinal: `Session ${n}`,
+  title: 'duplicate preview',
+}));
+const productUpdate = (selected, reset = false) =>
+  '\x1b[?2026h' +
+  (reset ? '\x1b[2J' : '') +
+  '\x1b[HSelect the Proceed session' +
+  [1, 2]
+    .map(
+      (n) =>
+        `\x1b[${n + 2};3H` +
+        indexSgr(n === selected ? fixtureStyles.selected : fixtureStyles.inactive.ordinary) +
+        `Session ${n} - duplicate preview`,
+    )
+    .join('') +
+  '\x1b[?2026l';
+const productRaw = () => Buffer.from('\x1b[?1049h' + productUpdate(1));
+function productPair() {
+  const raw = productRaw();
+  const initial = productPickerObservation(raw, productBinding, productSnapshot);
+  const moved = productPickerObservation(
+    Buffer.concat([raw, Buffer.from(productUpdate(2))]),
+    productBinding,
+    productSnapshot,
+    initial,
+  );
+  return { initial, moved };
+}
+
+test('actual product capture adapter maps zero-marker duplicate previews by immutable ordinal, never qualifies unknown semantics', () => {
+  const { initial, moved } = productPair();
+  assert.equal(initial.supported, true);
+  assert.equal(moved.supported, true);
+  assert.deepEqual(
+    initial.rows.map((r) => r.id),
+    productSnapshot.map((s) => s.id),
+  );
+  assert.equal(initial.rows[0].style.bold, true); // Source initial index zero.
+  assert.deepEqual(productPickerInterval(initial, moved), {
+    qualification: 'UNQUALIFIED',
+    reason: 'MISSING_SEMANTIC_BINDING',
+    emittedTransfer: true,
+    selectionProfile: null,
+  });
+  for (const mutate of [
+    (s) => (s.binding.executable = 'wrong-host'),
+    (s) => (s.binding.config = 'changed-config'),
+    (s) => (s.binding.setup = 'replaced-setup'),
+    (s) => s.binding.geometry.resizeSequence++,
+    (s) => (s.binding.designMode = 'changed'),
+    (s) => (s.binding.resolvedTheme = 'changed'),
+    (s) => (s.binding.effectiveColorDepth = 24),
+    (s) => s.snapshot.reverse(),
+    (s) => (s.rows[1].id = 'changed-identity'),
+    (s) => (s.rows[1].style = s.rows[0].style),
+    (s) => s.screen++,
+    (s) => (s.frames = initial.frames),
+    (s) => (s.previousSha256 = 'historical'),
+  ]) {
+    const candidate = structuredClone(moved);
+    mutate(candidate);
+    assert.equal(productPickerInterval(initial, candidate).emittedTransfer, false);
+    assert.equal(productPickerInterval(initial, candidate).qualification, 'UNQUALIFIED');
+  }
+});
+
+test('product adapter refuses fixture/historical binding, replaced prefix, incomplete cells and unsupported controls without fallback', () => {
+  const raw = productRaw(),
+    { initial } = productPair();
+  for (const altered of [
+    Buffer.from(raw.toString().replace('Session 2 -', 'Session 1 -')),
+    Buffer.from(raw.toString().replace('duplicate preview', 'changed preview')),
+    Buffer.from(raw.toString().replace('Session 1', '\u25cf Session 1')),
+    Buffer.concat([raw, Buffer.from('\x1b[?2026h')]),
+    Buffer.concat([raw, Buffer.from('\x1b[3m')]),
+    Buffer.from(raw.toString().replace('Select the Proceed session', 'Open Proceed question?')),
+  ])
+    assert.equal(
+      productPickerObservation(altered, productBinding, productSnapshot).supported,
+      false,
+    );
+  for (const binding of [
+    { ...productBinding, scope: 'fixture-only' },
+    { ...productBinding, geometry: { width: 80, height: 24, resizeSequence: 1 } },
+  ])
+    assert.equal(productPickerObservation(raw, binding, productSnapshot).supported, false);
+  assert.equal(
+    productPickerObservation(
+      Buffer.concat([Buffer.from('replaced'), raw]),
+      productBinding,
+      productSnapshot,
+      initial,
+    ).supported,
+    false,
+  );
+});
+
+test('capture-only actual dispatch has no Enter, identity or decision capability, no profile requirement and always dismisses', async () => {
+  for (const fail of ['none', 'observe', 'move', 'moved', 'unsupported']) {
+    const events = [],
+      pair = productPair();
+    let observations = 0;
+    const run = captureProductPicker({
+      selectionProfile: null,
+      observe: async () => {
+        events.push('observe');
+        if (fail === 'observe' || (fail === 'moved' && observations))
+          throw Error('synthetic failure');
+        return fail === 'unsupported'
+          ? { supported: false, qualification: 'UNQUALIFIED' }
+          : observations++
+            ? pair.moved
+            : pair.initial;
+      },
+      moveDown: async () => {
+        events.push('down');
+        if (fail === 'move') throw Error('synthetic failure');
+      },
+      dismiss: async () => events.push('escape'),
+      // Poison unused operations: the route must never call any of these.
+      stdin: { write: () => assert.fail('generic key forbidden') },
+      acceptIdentity: () => assert.fail('identity forbidden'),
+      exchange: () => assert.fail('pending/decision forbidden'),
+      qualify: () => assert.fail('automatic qualification forbidden'),
+    });
+    if (['observe', 'move', 'moved'].includes(fail)) await assert.rejects(run);
+    else {
+      const result = await run;
+      assert.equal(result.enter, 0);
+      assert.equal(result.selectionProfile, null);
+      assert.equal(result.qualification, 'UNQUALIFIED');
+    }
+    assert.equal(events.at(-1), 'escape');
+    assert.ok(events.filter((s) => s === 'down').length <= 1);
+    if (fail === 'unsupported') assert.deepEqual(events, ['observe', 'escape']);
+  }
+});
 
 test('indexed fixture selection follows style, not marker or label, with asymmetric inactive roles', () => {
   for (const labels of [

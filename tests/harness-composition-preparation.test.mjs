@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { qualificationPayload } from './support/harness-linux-plan.mjs';
 import {
   awaitCompositionRender,
@@ -65,8 +66,11 @@ test('composition stages its maintained runner and uses the actual public produc
   assert.match(fixture, /observeCompositionSelectors\(context, session.id\)/);
   assert.match(fixture, /live = false;[\s\S]*publish\(\);[\s\S]*await cleanup\(\)/);
   assert.doesNotMatch(fixture, /keymap\.dispatch|command\.run/);
-  const failureCapture = inner.slice(inner.indexOf('// Failure captures'));
-  const catchBlock = inner.slice(inner.indexOf('} catch (error) {'), inner.indexOf('} finally {'));
+  const failureCapture = inner.slice(
+    inner.indexOf("const diagnosticBytes = await logs('/run/proceed/host-state')"),
+  );
+  const catchStart = inner.indexOf('} catch (error) {');
+  const catchBlock = inner.slice(catchStart, inner.indexOf('} finally {', catchStart));
   assert.ok(
     catchBlock.indexOf('failureSnapshot({') < catchBlock.indexOf('persistCompositionDiagnostic('),
   );
@@ -76,7 +80,7 @@ test('composition stages its maintained runner and uses the actual public produc
   assert.ok(
     failureCapture.indexOf('scanFrozenComposition({') < failureCapture.indexOf("'transcript.ansi'"),
   );
-  assert.match(failureCapture, /complete = closed && remainingPids.length === 0/);
+  assert.match(inner, /complete = closed && remainingPids.length === 0/);
   assert.ok(
     failureCapture.indexOf('JSON.stringify(guardJournal.value())') <
       failureCapture.indexOf('scanFrozenComposition({'),
@@ -641,7 +645,10 @@ test('actual wrapper fences selector observations at Cleanup entry before awaiti
     finish,
     cleared = false;
   const files = new Map([
-    ['/run/proceed/evidence/composition-binding.json', JSON.stringify({ run: binding.run })],
+    [
+      '/run/proceed/evidence/composition-binding.json',
+      JSON.stringify({ run: binding.run, captureOnly: true }),
+    ],
   ]);
   const write = (path, bytes) => files.set(path, bytes);
   const source = (
@@ -691,13 +698,29 @@ test('actual wrapper fences selector observations at Cleanup entry before awaiti
     const context = {
       app: { version: '2.2.5' },
       client: { session: { create: async () => ({ data: { id: binding.session } }) } },
-      data: { session: { sync: async () => {}, get: () => ({ id: binding.session }) } },
+      data: {
+        session: {
+          sync: async () => {},
+          get: () => ({ id: binding.session }),
+          list: () => [
+            { id: binding.session, title: 'same' },
+            { id: 'second', title: 'same' },
+          ],
+        },
+      },
       keymap: {
         commands: () => [{ id: 'proceed.harness.open', title: openTitle }],
         active: () => [{ key: 'ctrl+g', title: openTitle }],
       },
     };
     const cleanup = await wrapper.setup(context);
+    assert.deepEqual(
+      JSON.parse(files.get('/run/proceed/evidence/composition-live.json')).snapshot,
+      [
+        { id: binding.session, title: 'same', ordinal: 'Session 1' },
+        { id: 'second', title: 'same', ordinal: 'Session 2' },
+      ],
+    );
     const requestPath = '/run/proceed/evidence/composition-selector-request.json';
     const responsePath = '/run/proceed/evidence/composition-selector-response.json';
     write(requestPath, JSON.stringify({ ...binding, request: 1 }));
@@ -713,5 +736,120 @@ test('actual wrapper fences selector observations at Cleanup entry before awaiti
     await pending;
   } finally {
     delete globalThis.__compositionFixtureTEST;
+  }
+});
+
+test('capture host entry dispatch is separate, skips setup pending probe, freezes provenance and uses bounded product-only export', async () => {
+  const source = async (name) => readFile(new URL(name, import.meta.url), 'utf8');
+  const entry = await source('run-harness-host.mjs');
+  assert.match(
+    entry,
+    /--product-picker-capture-run[\s\S]*runLinuxHost\(false, 'product-picker-capture'\)/,
+  );
+  const runner = await source('support/harness-linux-runner.mjs');
+  assert.match(runner, /if \(pickerCapture\) assert.equal\(preflight, false\)/);
+  assert.match(runner, /pickerCapture \? \['--product-picker-capture'\]/);
+  assert.match(runner, /transferProductCapture\(/);
+  assert.match(
+    runner,
+    /assert.equal\(productDetailsAttempted, false, 'NO_PRODUCT_TRANSFER_RETRY'\)/,
+  );
+  const setup = await source('support/harness-qualification-setup.mjs');
+  assert.match(setup, /if \(!captureOnly\)\s*assert.equal\([\s\S]*await pending\(\)/);
+  assert.match(setup, /pending: captureOnly \? undefined : pending/);
+  const inner = await source('support/harness-composition-inner.mjs');
+  const branch = inner.slice(
+    inner.indexOf('pickerEvidence = await captureProductPicker('),
+    inner.indexOf('const navigationEnd'),
+  );
+  assert.match(branch, /selectionProfile: null/);
+  assert.match(branch, /moveDown:[\s\S]*\\x1b\[B/);
+  assert.match(branch, /dismiss:[\s\S]*\\x1b/);
+  assert.doesNotMatch(branch, /confirmRenderedNavigation|waitIdentity|stdin.write\('\\r'\)/);
+  assert.match(inner, /brokerObserver: true, captureOnly: pickerCapture/);
+  assert.match(inner, /configBytes:[\s\S]*environment: env/);
+  assert.match(inner, /resolvedTheme: null,\s*designMode: null,\s*effectiveColorDepth: null/);
+  assert.match(inner, /assert.equal\(api.length, 0\)/);
+  assert.match(inner, /collectProductCapture\(/);
+});
+
+test('actual broker setup capture branch cannot send a pending probe or expose its callable, including failures', async () => {
+  const credential = 'hop_' + 'a'.repeat(64); // Synthetic memory-only operand.
+  const keyId = createHash('sha256').update(credential).digest('hex');
+  let source = await readFile(
+    new URL('support/harness-qualification-setup.mjs', import.meta.url),
+    'utf8',
+  );
+  source = source
+    .replace(
+      /import \{ readFile, lstat, mkdir, mkdtemp, rm, access \}[^;]+;/,
+      'const { readFile, lstat, mkdir, mkdtemp, rm, access } = globalThis.__captureSetupTEST;',
+    )
+    .replace(
+      /import \{ portable, until \}[^;]+;/,
+      'const { portable, until } = globalThis.__captureSetupTEST;',
+    )
+    .replaceAll('process.platform', "'linux'")
+    .replaceAll('process.env.PROCEED_TEST_ISOLATED_PID_NAMESPACE', "'1'")
+    .replaceAll('process.geteuid()', '1000');
+  for (const failWork of [false, true]) {
+    const requests = [];
+    let removed = false,
+      entered = false;
+    globalThis.__captureSetupTEST = {
+      mkdir: async () => {},
+      mkdtemp: async (p) => p + 'memory',
+      rm: async () => {
+        removed = true;
+      },
+      access: async () => {
+        throw Object.assign(Error('absent'), { code: 'ENOENT' });
+      },
+      readFile: async (p) =>
+        p.endsWith('operator.token')
+          ? credential + '\n'
+          : p.endsWith('journal.log')
+            ? 'safe journal'
+            : 'synthetic-owner',
+      lstat: async () => ({ mode: 0o600, uid: 1000, nlink: 1 }),
+      portable: async (work) =>
+        work({
+          shared: null,
+          state: '/synthetic-memory-state',
+          control: 'synthetic-control',
+          signal: null,
+          fixture: { calls: [] },
+          cli: async () => keyId,
+          http: async (path, key) => {
+            requests.push(path);
+            assert.notEqual(path, '/v1/harness/pending');
+            assert.notEqual(path, '/v1/harness/decisions');
+            if (path === '/v1/status') return { status: 200, json: async () => ({ requests: [] }) };
+            return key === credential
+              ? { status: 202, json: async () => ({ state: 'pending', key_id: keyId }) }
+              : { status: 403, json: async () => ({ error: { code: 'FORBIDDEN' } }) };
+          },
+        }),
+    };
+    try {
+      const { withQualificationBroker } = await import(
+        'data:text/javascript;base64,' +
+          Buffer.from(source + `\n// case ${failWork}`).toString('base64')
+      );
+      const run = withQualificationBroker(
+        async (h) => {
+          entered = true;
+          assert.equal(h.pending, undefined);
+          if (failWork) throw Error('injected capture failure');
+        },
+        { brokerObserver: true, captureOnly: true },
+      );
+      if (failWork) await assert.rejects(run);
+      else await run;
+      assert.ok(entered && removed);
+      assert.ok(requests.every((p) => ['/v1/status', '/v1/harness/enrollments'].includes(p)));
+    } finally {
+      delete globalThis.__captureSetupTEST;
+    }
   }
 });

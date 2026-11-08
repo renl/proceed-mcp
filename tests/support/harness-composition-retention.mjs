@@ -6,6 +6,139 @@ import {
   compositionGuardJournal,
 } from './harness-composition-readiness.mjs';
 import { scanRequiredCaptures } from './harness-transport-fixtures.mjs';
+import { lstat, open, opendir } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import {
+  rendererMetadataInventory,
+  rendererReadFile,
+  rendererWork,
+  collectionAdmit,
+  collectionLimits,
+  inventoryLimits,
+  digest,
+  parseRendererArchive,
+} from './harness-renderer-observation.mjs';
+
+export const productCaptureFiles = Object.freeze([
+  'composition-observations.json',
+  'transcript.ansi',
+  'plugin-diagnostics.log',
+  'progress.jsonl',
+]);
+
+// Reuse traversal/read admission, NOT the renderer surface set or scan marker.
+export async function collectProductCapture(
+  roots,
+  extras,
+  secrets,
+  endpoint,
+  io = { lstat, open, opendir, flags: constants, allocate: Buffer.alloc },
+) {
+  const state = {},
+    entries = [];
+  let F = extras.reduce((n, e) => n + e.bytes.length, 0);
+  const result = await rendererMetadataInventory(
+    roots,
+    endpoint,
+    io,
+    inventoryLimits,
+    Date.now,
+    async (membership) => {
+      let planned = F,
+        paths = 0,
+        N = extras.length,
+        S = F;
+      for (const [path, e] of membership) {
+        if (e.metadata[0] !== 'file') continue;
+        const size = Number(e.metadata[3]);
+        collectionAdmit(size, collectionLimits.file);
+        planned += size;
+        S += size;
+        if (/\.log(?:$|[.-])/.test(path) || path === roots.state + '/pty.raw') S += size;
+        paths += Buffer.byteLength(path);
+        N++;
+      }
+      collectionAdmit(planned, collectionLimits.contents);
+      // Exact projection: complete path/content inventory plus duplicated logs,
+      // raw PTY and all explicit product surfaces. No renderer fixture substitution.
+      S += paths + collectionLimits.detail; // Reserve bounded derived export bytes.
+      collectionAdmit(S, collectionLimits.surfaces);
+      rendererWork(planned, N, secrets.length, S);
+      for (const [path, e] of membership) {
+        if (e.metadata[0] !== 'file') continue;
+        const bytes = await rendererReadFile(state, path, e.surface, F, io, e.metadata);
+        F += bytes.length;
+        entries.push({ path, bytes });
+      }
+    },
+  );
+  assert.equal(result.complete, true);
+  collectionAdmit(F, collectionLimits.contents);
+  return entries;
+}
+
+export function productCaptureExport(captures, secrets, complete, overflow, details) {
+  const { scan, captures: frozenCaptures } = scanFrozenComposition({
+    captures,
+    secrets,
+    complete,
+    overflow,
+    measured: true,
+  });
+  assert.deepEqual(Object.keys(details), productCaptureFiles);
+  // Every exact export byte must already be in its product scan surface.
+  for (const [name, bytes] of Object.entries(details)) {
+    assert.ok(Buffer.isBuffer(bytes));
+    const surface =
+      name === 'transcript.ansi'
+        ? 'tui'
+        : name === 'plugin-diagnostics.log'
+          ? 'diagnostics'
+          : 'evidence';
+    assert.ok(
+      frozenCaptures[surface].includes(bytes) ||
+        (name === 'plugin-diagnostics.log' && frozenCaptures.evidence.includes(bytes)),
+    );
+  }
+  scan.files = Object.fromEntries(
+    Object.entries(details).map(([name, bytes]) => [
+      name,
+      { bytes: bytes.length, sha256: digest(bytes) },
+    ]),
+  );
+  collectionAdmit(
+    Buffer.byteLength(JSON.stringify(scan)) +
+      Object.values(details).reduce((n, b) => n + b.length, 0),
+    collectionLimits.detail,
+  );
+  return {
+    scan,
+    details: Object.fromEntries(
+      Object.entries(details).map(([name, bytes]) => [name, Buffer.from(bytes)]),
+    ),
+  };
+}
+
+export async function transferProductCapture(transfer) {
+  let remaining = collectionLimits.detail;
+  const bytes = parseRendererArchive(
+    await transfer('scan-pass.json', remaining + 4096),
+    'scan-pass.json',
+    remaining,
+  );
+  remaining -= bytes.length;
+  const scan = JSON.parse(bytes.toString('utf8'));
+  assertCompositionExport(scan);
+  assert.deepEqual(Object.keys(scan.files), productCaptureFiles);
+  const admitted = new Map([['scan-pass.json', bytes]]);
+  for (const name of productCaptureFiles) {
+    const b = parseRendererArchive(await transfer(name, remaining + 4096), name, remaining);
+    remaining -= b.length;
+    assert.deepEqual(scan.files[name], { bytes: b.length, sha256: digest(b) });
+    admitted.set(name, b);
+  }
+  return admitted;
+}
 
 const phases = new Set([
   'policy',
@@ -135,7 +268,7 @@ export function compositionScanReason(error, stage) {
         : 'UNKNOWN')
   );
 }
-export function scanFrozenComposition({ captures, secrets, complete, overflow }) {
+export function scanFrozenComposition({ captures, secrets, complete, overflow, measured = false }) {
   if (complete !== true) scanRefuse('INCOMPLETE');
   if (overflow !== false) scanRefuse('OVERFLOW');
   // Four role authorities plus every generated negative-fixture authority.
@@ -148,16 +281,35 @@ export function scanFrozenComposition({ captures, secrets, complete, overflow })
   ))
     scanRefuse('SECRET_SET');
   const requiredSecrets = Object.freeze(secrets.slice());
+  if (measured) {
+    const S = compositionSurfaces.reduce((n, s) => n + (captures?.[s]?.length ?? 0), 0);
+    collectionAdmit(S, collectionLimits.surfaces);
+    rendererWork(0, 0, secrets.length, S);
+  }
   const frozen = {};
   for (const surface of compositionSurfaces) {
     if (!Buffer.isBuffer(captures?.[surface])) scanRefuse('MISSING');
-    if (captures[surface].length > 8388608) scanRefuse('OVERFLOW');
+    if (captures[surface].length > (measured ? collectionLimits.surfaces : 8388608))
+      scanRefuse('OVERFLOW');
     frozen[surface] = Buffer.from(captures[surface]);
   }
   for (const bytes of Object.values(frozen))
     for (const secret of requiredSecrets)
       if (bytes.includes(Buffer.from(secret))) scanRefuse('SECRET_MATCH');
-  const scan = scanRequiredCaptures(frozen, requiredSecrets, compositionSurfaces);
+  for (const bytes of Object.values(frozen))
+    if (
+      /cap_[a-f0-9]{64}|(?:sk-|ghp_)[A-Za-z0-9_-]{20,}|Bearer [A-Za-z0-9_.-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(
+        bytes.toString('utf8'),
+      )
+    )
+      scanRefuse('SECRET_MATCH');
+  const scan = measured
+    ? {
+        status: 'PASS',
+        surfaces: compositionSurfaces,
+        hashes: Object.fromEntries(compositionSurfaces.map((s) => [s, digest(frozen[s])])),
+      }
+    : scanRequiredCaptures(frozen, requiredSecrets, compositionSurfaces);
   return { captures: frozen, scan };
 }
 

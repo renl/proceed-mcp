@@ -4,7 +4,11 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { pins, hostBudgets, launchBlockers } from './support/harness-host-plan.mjs';
 
-if (process.argv[2] === '--renderer-inventory-run') {
+if (process.argv[2] === '--product-picker-capture-run') {
+  assert.equal(process.argv.length, 3);
+  const { runLinuxHost } = await import('./support/harness-linux-runner.mjs');
+  await runLinuxHost(false, 'product-picker-capture');
+} else if (process.argv[2] === '--renderer-inventory-run') {
   assert.equal(process.argv.length, 3);
   const { runLinuxHost } = await import('./support/harness-linux-runner.mjs');
   await runLinuxHost(false, 'renderer-inventory');

@@ -12,7 +12,15 @@ export default Plugin.define({
   async setup(context) {
     let phase = 'product-setup';
     const root = '/run/proceed/evidence/';
-    const { run } = JSON.parse(readFileSync(root + 'composition-binding.json', 'utf8'));
+    const { run, captureOnly } = JSON.parse(
+      readFileSync(root + 'composition-binding.json', 'utf8'),
+    );
+    const snapshot = () =>
+      context.data.session.list().map((s, n) => ({
+        id: s.id,
+        title: typeof s.title === 'string' ? s.title : null,
+        ordinal: `Session ${n + 1}`,
+      }));
     const generation = randomUUID();
     let resizeSequence = 0;
     let live = true,
@@ -24,6 +32,7 @@ export default Plugin.define({
           run,
           generation,
           live,
+          snapshot: captureOnly ? snapshot() : undefined,
           geometry: {
             width: context.renderer?.width,
             height: context.renderer?.height,
@@ -49,6 +58,11 @@ export default Plugin.define({
       phase = 'host-session-sync';
       await context.data.session.sync(session.id);
       if (!context.data.session.get(session.id)) throw new Error('Host session unresolved');
+      if (captureOnly) {
+        const second = await context.client.session.create({ title: 'Composition empty exchange' });
+        await context.data.session.sync((second.data ?? second).id);
+      }
+      publish();
       // Fixed-purpose evidence observation only. No command dispatch, callback,
       // decision, or product hook. Requests are written after a completed frame.
       phase = 'public-command-eligibility';
@@ -60,6 +74,7 @@ export default Plugin.define({
           return;
         }
         try {
+          if (captureOnly) publish();
           const request = JSON.parse(
             readFileSync(root + 'composition-selector-request.json', 'utf8'),
           );

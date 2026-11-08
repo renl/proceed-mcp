@@ -1,5 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  collectProductCapture,
+  productCaptureExport,
+  transferProductCapture,
+  productCaptureFiles,
+  compositionSurfaces,
+} from './support/harness-composition-retention.mjs';
 import { readFile } from 'node:fs/promises';
 import {
   compositionCurrentFrame,
@@ -459,6 +466,10 @@ function metadataFixture(hook = () => {}, content = false) {
   return {
     nodes,
     io,
+    descriptorBalance: () => {
+      assert.equal(active, 0);
+      assert.equal(opened, closed);
+    },
     async collect(
       canaries = ['a'.repeat(64), 'b'.repeat(64)],
       rawBytes = 0,
@@ -535,6 +546,101 @@ test('metadata inventory has two complete stable passes, no content reads and fa
   assert.equal(result.projections.detailedExport, 21 + 7 + Buffer.byteLength(JSON.stringify(scan)));
   assert.equal(JSON.stringify(result).includes('/run/'), false);
   assert.equal(JSON.stringify(result).includes('PASS'), false);
+});
+
+test('product collector reuses bounded complete traversal, refuses metadata races/oversize/deadline and closes resources', async () => {
+  for (const fault of ['none', 'oversize', 'race', 'deadline']) {
+    const f = metadataFixture((op, path, nodes, pass) => {
+      if (fault === 'oversize') nodes.get(metadataRoots.evidence + '/host.log').size = 16777217n;
+      if (fault === 'race' && op === 'contentread') nodes.get(path).metadata = { mtimeNs: 999n };
+    }, true);
+    // Real product captures have their own names, never the renderer fixture's
+    // binding/fixture/inventory/transcript preconditions.
+    for (const path of [...f.nodes.keys()])
+      if (
+        path.startsWith(metadataRoots.evidence + '/') &&
+        !path.endsWith('/host.log') &&
+        !path.endsWith('/progress.jsonl')
+      )
+        f.nodes.delete(path);
+    f.nodes.set(metadataRoots.evidence + '/composition-observations.json', { size: 5n });
+    const run = collectProductCapture(
+      metadataRoots,
+      [{ bytes: Buffer.from('raw') }],
+      ['a'.repeat(64), 'b'.repeat(64)],
+      fault === 'deadline' ? 0 : Date.now() + 5000,
+      f.io,
+    );
+    if (fault === 'none') {
+      const entries = await run;
+      assert.equal(entries.length, f.nodes.size - 2);
+      assert.ok(entries.some((e) => e.path.endsWith('/host.log')));
+    } else await assert.rejects(run);
+    f.descriptorBalance();
+    if (fault === 'oversize' || fault === 'deadline') assert.equal(f.reads, 0);
+  }
+});
+
+test('product exports require all six product meanings, every secret, exact frozen bytes and aggregate admission before retention', async () => {
+  const secrets = ['a', 'b', 'c', 'd'].map((s) => s.repeat(64));
+  const details = Object.fromEntries(productCaptureFiles.map((n) => [n, Buffer.from(n)]));
+  const captures = Object.fromEntries(compositionSurfaces.map((s) => [s, Buffer.from('safe')]));
+  captures.tui = details['transcript.ansi'];
+  captures.diagnostics = details['plugin-diagnostics.log'];
+  captures.evidence = Buffer.concat([
+    details['composition-observations.json'],
+    details['progress.jsonl'],
+  ]);
+  const frozen = productCaptureExport(captures, secrets, true, false, details);
+  for (const file of productCaptureFiles) {
+    assert.notEqual(frozen.details[file], details[file]);
+    assert.deepEqual(frozen.details[file], details[file]);
+  }
+  assert.deepEqual(frozen.scan.surfaces, compositionSurfaces);
+  const transfer = async (name, cap) => {
+    const b = name === 'scan-pass.json' ? Buffer.from(JSON.stringify(frozen.scan)) : details[name];
+    const archive = inventoryArchive(b, b.length, name);
+    assert.ok(archive.length <= cap);
+    return archive;
+  };
+  assert.equal((await transferProductCapture(transfer)).size, 5);
+  await assert.rejects(
+    transferProductCapture(async (name, cap) =>
+      name === 'transcript.ansi'
+        ? inventoryArchive(Buffer.from('replaced'), 8, name)
+        : transfer(name, cap),
+    ),
+  );
+  for (const surface of compositionSurfaces) {
+    for (const secret of [...secrets, 'cap_' + 'f'.repeat(64), '-----BEGIN PRIVATE KEY-----']) {
+      const changed = {
+        ...captures,
+        [surface]: Buffer.concat([captures[surface], Buffer.from(secret)]),
+      };
+      assert.throws(() => productCaptureExport(changed, secrets, true, false, details));
+    }
+    const missing = { ...captures };
+    delete missing[surface];
+    assert.throws(() => productCaptureExport(missing, secrets, true, false, details));
+  }
+  assert.throws(() => productCaptureExport(captures, secrets, false, false, details));
+  assert.throws(() => productCaptureExport(captures, secrets, true, true, details));
+  assert.throws(() =>
+    productCaptureExport(captures, secrets, true, false, {
+      ...details,
+      'transcript.ansi': Buffer.from('not scanned'),
+    }),
+  );
+  const large = { ...details, 'transcript.ansi': Buffer.alloc(262144) };
+  assert.throws(() =>
+    productCaptureExport(
+      { ...captures, tui: large['transcript.ansi'] },
+      secrets,
+      true,
+      false,
+      large,
+    ),
+  );
 });
 
 test('inventory admits exact epoch-ns and large identities without exporting internal metadata', async () => {

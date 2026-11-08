@@ -494,6 +494,9 @@ export async function rendererMetadataInventory(
         check();
       }
     }
+    // Private content consumers already enforce their own required surfaces and
+    // files. Do not impose renderer inventory names on a product collector.
+    if (consume) return { complete: true, reason: 'NONE' };
     const result = {
       complete: true,
       reason: 'NONE',

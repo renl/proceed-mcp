@@ -56,7 +56,10 @@ export async function confirmQualificationEnrollment(h, operator, proposal, disp
   return { callbackFingerprint: fingerprint(callback.callback_data), keyId: operator.keyId };
 }
 
-export async function withQualificationBroker(work, { brokerObserver = false } = {}) {
+export async function withQualificationBroker(
+  work,
+  { brokerObserver = false, captureOnly = false } = {},
+) {
   assert.equal(process.platform, 'linux', 'contained Linux setup required');
   assert.equal(process.env.PROCEED_TEST_ISOLATED_PID_NAMESPACE, '1');
   const root = '/run/proceed/qualification-private';
@@ -99,18 +102,26 @@ export async function withQualificationBroker(work, { brokerObserver = false } =
             ...qualificationScope,
             session_id: 'setup-session',
           });
-        assert.equal(
-          (await pending()).status,
-          401,
-          'unconfirmed proposal has no operator authority',
-        );
+        if (!captureOnly)
+          assert.equal(
+            (await pending()).status,
+            401,
+            'unconfirmed proposal has no operator authority',
+          );
         const noWork = async () => {
           const status = await h.http('/v1/status', h.control);
           assert.equal(status.status, 200);
           assert.deepEqual((await status.json()).requests, [], 'setup must create no work');
         };
         await noWork();
-        await work({ ...h, operator, proposal, owner, pending, noWork });
+        await work({
+          ...h,
+          operator,
+          proposal,
+          owner,
+          pending: captureOnly ? undefined : pending,
+          noWork,
+        });
         await noWork();
         for (const text of [
           JSON.stringify(h.fixture.calls),
