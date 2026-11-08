@@ -164,6 +164,25 @@ async function control(mutate = () => {}) {
   return { writes, error };
 }
 
+test('screen reset invalidates completed picker until a supported fresh frame, with zero Enter', async () => {
+  for (const reset of ['\x1b[?1049h', '\x1b[2J', '\x1b[3J']) {
+    for (const styled of [false, true])
+      assert.equal(compositionCurrentFrame(ansiPicker() + reset, { styled }), '');
+    const result = await control((s, stage) => {
+      if (stage !== 'picker') return;
+      const ansi = ansiPicker() + reset;
+      s.frame = compositionCurrentFrame(ansi);
+      s.styledFrame = compositionCurrentFrame(ansi, { styled: true });
+    });
+    assert.ok(result.error, 'reset must refuse stale picker');
+    assert.deepEqual(result.writes, []);
+    const fresh = compositionCurrentFrame(ansiPicker() + reset + ansiPicker(1), {
+      styled: true,
+    });
+    assert.equal(highlightedOrdinal(fresh, profile), 'Session 1');
+  }
+});
+
 test('current interaction positive requires two separate navigation Enters', async () => {
   const result = await control();
   assert.equal(result.error, undefined);

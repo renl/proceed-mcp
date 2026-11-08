@@ -53,6 +53,8 @@ export function compositionCurrentFrame(ansi, { styled = false } = {}) {
       else if (/^\x1b\[(?:2|3)J$/.test(token) || token === '\x1b[?1049h') {
         rows = [];
         styles = [];
+        frame = '';
+        frameStyles = [];
       } else if (token === '\x1b[K' || token === '\x1b[0K') {
         rows[row]?.splice(col);
         styles[row]?.splice(col);

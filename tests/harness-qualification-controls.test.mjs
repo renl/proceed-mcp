@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { ordinaryApiAttacks } from './support/harness-host-api-attacks.mjs';
+import { compositionCurrentFrame } from './support/harness-composition-readiness.mjs';
 import {
   exerciseRenderedProduct,
   ordinaryAttackCases,
@@ -149,7 +150,24 @@ const winner = {
 
 // Scripted frames exercise orchestration only. Never an actual-host operand.
 function syntheticNavigation(writes, session) {
-  const picker = { frame: 'Select the Proceed session\n\u2503    Session 1 preview', token: 1 };
+  // SYNTHETIC normal RGB/bold profile. Not pinned-host theme or render proof.
+  const selectionProfile = {
+    renderer: 'normal',
+    selected: { fg: '10,20,30', bg: '40,50,60', bold: true },
+    normal: { fg: '70,80,90', bg: '1,2,3', bold: false },
+  };
+  const sgr = (s) =>
+    `\x1b[0;38;2;${s.fg.replaceAll(',', ';')};48;2;${s.bg.replaceAll(',', ';')}${s.bold ? ';1' : ''}m`;
+  const styledFrame = compositionCurrentFrame(
+    '\x1b[?2026h\x1b[2J\x1b[HSelect the Proceed session\r\n' +
+      sgr(selectionProfile.selected) +
+      '    Session 1 equal preview\r\n' +
+      sgr(selectionProfile.normal) +
+      '    Session 2 equal preview\x1b[0m\x1b[?2026l',
+    { styled: true },
+  );
+  const geometry = { width: 100, height: 50, resizeSequence: 0 };
+  const picker = { frame: styledFrame.text, styledFrame, token: 1, geometry };
   const confirmation = {
     frame: [
       'Open Proceed question?',
@@ -157,16 +175,17 @@ function syntheticNavigation(writes, session) {
       'Navigation only - no decision',
       'Title:',
       session.title,
-      'Session ID:',
+      'Exact session ID:',
       session.id,
       '',
       'Open question   Cancel',
     ].join('\n'),
     token: 2,
-    geometry: { width: 100, height: 50, resizeSequence: 0 },
+    geometry,
   };
   let current;
   return {
+    selectionProfile,
     waitHighlightedSession: async () => {
       assert.deepEqual(writes, ['\x07']);
       return (current = picker);
@@ -226,6 +245,7 @@ test('QUAL-RENDERED driver control cannot substitute missing attacks, callback r
     ),
     /missing real ordinary-API attack/,
   );
+  assert.deepEqual(writes, ['\x07', '\r', '\r']);
   writes.length = 0;
   await assert.rejects(
     exerciseRenderedProduct(
@@ -235,6 +255,7 @@ test('QUAL-RENDERED driver control cannot substitute missing attacks, callback r
       session,
     ),
   );
+  assert.deepEqual(writes, ['\x07', '\r', '\r', 'Respond\r', 'approved\r']);
 });
 
 test('QUAL-PICKER: missing/currently lost UI stops keys before a choice, never reopens it', async () => {
