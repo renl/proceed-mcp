@@ -82,13 +82,140 @@ npx --yes --package @meshimize/proceed-mcp@0.1.0-preview.1 -- proceed-mcp mcp --
 Keep both broker and adapter on preview.1 for this legacy HTTP mode. The new provisioning,
 `--secure-local` and `stop` commands below are not available in preview.1.
 
+## Recommended durable installation location (Windows)
+
+The commands above cover a one-off run and a global install of the published preview. For a durable
+operator installation on Windows, keep each release in its own versioned prefix under
+`%LOCALAPPDATA%\proceed-mcp\releases\`, and point both the MCP adapter and the TUI plugin at the
+package that npm places inside that prefix. One shared package root keeps the adapter and the plugin
+on the same version.
+
+This layout is a recommendation for operator storage. It does not change application defaults, the
+state selection order, or the protection requirements in this guide. A package kept on disk is not a
+system service, a login-startup item, or a reboot-surviving installation, and it does not start the
+broker by itself.
+
+### Paths for the 0.1.0-preview.2 release
+
+Use `$env:LOCALAPPDATA` in PowerShell to build the prefix and package root rather than a hard-coded
+profile path.
+
+```powershell
+$prefix = "$env:LOCALAPPDATA\proceed-mcp\releases\0.1.0-preview.2"
+$packageRoot = "$prefix\node_modules\@meshimize\proceed-mcp"
+```
+
+| Purpose                         | Path                                                  |
+| ------------------------------- | ----------------------------------------------------- |
+| Install prefix (container)      | `%LOCALAPPDATA%\proceed-mcp\releases\0.1.0-preview.2` |
+| Package root                    | `<prefix>\node_modules\@meshimize\proceed-mcp`        |
+| CLI entry                       | `<package root>\bin\proceed-mcp.js`                   |
+| TUI plugin `package` value      | `<package root>`                                      |
+| Optional new-installation state | `%LOCALAPPDATA%\proceed-mcp\state`                    |
+| Optional operator key file      | `%LOCALAPPDATA%\proceed-mcp\operator\operator.key`    |
+| Optional backup location        | `%LOCALAPPDATA%\proceed-mcp\backups`                  |
+
+The prefix is the install container, not the package root. npm places the scoped package under
+`node_modules` inside that prefix, so the CLI entry and the TUI `package` value both come from the
+package root.
+
+### Install into the prefix
+
+Install a vetted local tarball for the exact version:
+
+```powershell
+npm install --prefix $prefix --ignore-scripts --no-save C:\path\to\meshimize-proceed-mcp-0.1.0-preview.2.tgz
+```
+
+Alternatively, install the exact public package spec only when that version is actually available on
+npm:
+
+```powershell
+npm install --prefix $prefix --ignore-scripts --no-save @meshimize/proceed-mcp@0.1.0-preview.2
+```
+
+Check the [npm package page](https://www.npmjs.com/package/@meshimize/proceed-mcp) before relying on
+the public spec, as described under [Distribution](#distribution). `--ignore-scripts` is safe here
+because the preview requires no build or postinstall step. `--no-save` leaves saved dependency
+metadata unchanged. Do not point a durable MCP command or TUI plugin at a transient
+`npx` cache path. `npx` suits the one-off published preview command above, not a stable package
+reference.
+
+### Reference one package root from both configurations
+
+OpenCode does not expand shell variables inside `opencode.jsonc` or `cli.json`. Write fully expanded
+absolute paths in both files, with escaped backslashes or forward slashes. `<account>` below stands
+for your Windows profile directory name, where `%LOCALAPPDATA%` normally expands to
+`C:\Users\<account>\AppData\Local`. Read the exact value from `$env:LOCALAPPDATA`.
+
+MCP command array:
+
+```jsonc
+"command": [
+  "node",
+  "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\releases\\0.1.0-preview.2\\node_modules\\@meshimize\\proceed-mcp\\bin\\proceed-mcp.js",
+  "mcp",
+  "--owner",
+  "<owner-id>",
+  "--state-dir",
+  "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\state",
+  "--harness-id",
+  "local-opencode"
+],
+```
+
+TUI plugin entry in `cli.json`:
+
+```json
+{
+  "package": "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\releases\\0.1.0-preview.2\\node_modules\\@meshimize\\proceed-mcp",
+  "options": {
+    "state_dir": "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\state",
+    "harness_id": "local-opencode",
+    "owner_id": "<owner-id>",
+    "operator_key_file": "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\operator\\operator.key"
+  }
+}
+```
+
+Both values come from the same package root in the path table, so the adapter and the TUI plugin run
+the same installed release. Keep the other required options and the matching harness ID, owner and
+state from [Connect an MCP client](#6-connect-an-mcp-client).
+
+### Keep state, the operator key and backups separate
+
+The state, operator key and backup paths in the table are optional examples for a new installation.
+They do not replace the documented default. If you omit `--state-dir`, state selection still ends at
+`<home>/.proceed-mcp` as described under [Preview.2 commands](#preview2-commands). An existing
+installation should keep its current state directory and operator key file when upgrading, and this
+layout implies no migration.
+
+Keep the operator key file in a dedicated protected directory outside repositories, product state
+and MCP configuration, as described under
+[Trust and protected operator key](#trust-and-protected-operator-key). The same protected-file and
+owner-only requirements apply to these paths.
+
+Back up only while the broker is cleanly stopped. Run
+`proceed-mcp stop --state-dir <absolute-state-dir>`, wait for the confirmed stop, then copy the
+entire state directory into the backup location. An unconfirmed stop or a timeout is not a safe
+backup point.
+
+### Upgrade by adding a release prefix
+
+Install the next version into its own versioned prefix, then change the CLI entry path and the TUI
+`package` value together to the new package root. Keep the existing state directory and operator key
+file. Remove an old release directory only after both integrations reference the new one and you no
+longer need it.
+
 ## One-time setup for preview.2
 
 This setup enables automatic broker startup, and the
 [harness channel](#harness-channel-preview2) builds on it. Use the preview.2 CLI for every step, not
 the preview.1 command. From the source checkout, replace `proceed-mcp` in the commands below with
 `node bin/proceed-mcp.js`. A package installed from a local build can use its own `proceed-mcp`
-command. The package, lockfile and Registry metadata identify this version as `0.1.0-preview.2`.
+command. For a durable Windows layout shared by the MCP adapter and the TUI plugin, see
+[Recommended durable installation location](#recommended-durable-installation-location-windows).
+The package, lockfile and Registry metadata identify this version as `0.1.0-preview.2`.
 Check the npm package page for availability; npm publication and MCP Registry listing are separate
 operations.
 
@@ -328,7 +455,9 @@ and [CLI settings reference](https://opencode.ai/v2/docs/cli/config).
 Replace every path and the owner ID. The package directory's `package.json` exports `./tui` as
 `src/harness/tui-entry.js`. OpenCode discovers and loads that packaged entry, not a copied source
 file or a server plugin. Load the package path you actually installed; this setup uses the checkout
-path. The plugin accepts exactly the four options shown. Both IDs must match `[a-z0-9_-]{1,64}`.
+path. A durable Windows installation uses the package root from
+[Recommended durable installation location](#recommended-durable-installation-location-windows).
+The plugin accepts exactly the four options shown. Both IDs must match `[a-z0-9_-]{1,64}`.
 Choose one harness ID for this local OpenCode service installation, not a shared ID across services.
 
 In the [MCP command array](#opencode-v2), keep the absolute development CLI path, owner and state
