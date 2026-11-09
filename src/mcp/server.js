@@ -92,7 +92,7 @@ const TOOLS = [
   {
     name: 'request_approval',
     description:
-      'Create or reuse the request of an authorized prepared handle exactly once and keep this call waiting for its resolution, expiry or cancellation; this call returns the recorded terminal representation as its own result, and after an error-free write of that result it reports that single successful write to the delivery ledger without waiting for the report reply. This build displays that request as an approval question in the paired private chat, validates the returned message before mapping it, and correlates the paired human Approve, Reject or Respond to that one request.',
+      'Create or reuse the request of an authorized prepared handle exactly once and keep this call waiting for its resolution, expiry or cancellation; this call returns the recorded terminal representation as its own result, and after an error-free write of that result it reports that single successful write to the delivery ledger without waiting for the report reply. This build displays that request as an approval question in the paired private chat, validates the returned message before mapping it, and correlates the paired human Approve, Reject or Respond, or the equivalent choice from a local operator enrolled under that same paired authorization through a trusted request-bound interaction, to that one request, and the first valid choice accepted while the request is pending stays the single durable winner.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
