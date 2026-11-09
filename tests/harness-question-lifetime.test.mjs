@@ -204,20 +204,28 @@ test('immutable request expiry aborts a still-owned decision exchange without wa
   );
 });
 
-test('question: resize invalidates complete-question admission and cannot submit a late choice', async (t) => {
-  const f = await fixture(t);
-  const current = await f.question();
-  f.renderer.width = 20;
-  f.renderer.height = 6;
-  f.renderer.emit('resize');
-  current.resolve('approve');
-  await flush();
-  assert.equal(
-    f.calls.filter((c) => c.operation === 'decisions').length,
-    0,
-    'a no-longer-admitted complete question grants no decision',
-  );
-});
+for (const stage of ['question', 'respond']) {
+  test(`${stage}: resize invalidates the interaction and cannot submit a late choice`, async (t) => {
+    const f = await fixture(t);
+    let current = await f.question();
+    if (stage === 'respond') {
+      current.resolve('respond');
+      await flush();
+      current = f.dialogs.at(-1);
+      assert.equal(current.kind, 'prompt');
+    }
+    f.renderer.width = 20;
+    f.renderer.height = 6;
+    f.renderer.emit('resize');
+    current.resolve(stage === 'respond' ? 'approved' : 'approve');
+    await flush();
+    assert.equal(
+      f.calls.filter((c) => c.operation === 'decisions').length,
+      0,
+      'a resized interaction grants no decision, including its Respond successor',
+    );
+  });
+}
 
 test('Respond approved is instructions on the exact captured request, never approval', async (t) => {
   const f = await fixture(t);
