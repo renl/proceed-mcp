@@ -8,8 +8,11 @@
 // private pipes, which carries the unchanged protected TLS-PSK admission, the
 // remaining 10000 ms budget and the 64 KiB response ceiling. A command can open
 // the local interaction, but only the operator's completed dialog choice can
-// submit a decision; command arguments and RPC inputs are ignored. Dismissal,
-// replacement, an expired deadline, disposal and Cleanup send nothing.
+// submit a decision; command arguments and RPC inputs are ignored. The complete
+// question is displayed in full beside its three choices or not opened at all.
+// Dismissal, replacement, a resize, an expired deadline, disposal and Cleanup
+// send nothing, and the immutable deadline also aborts an exchange already in
+// flight.
 import { runHelperExchange, HelperChannelError } from './node-helper.js';
 import { resolveStateDir, statePaths } from '../state/paths.js';
 import { loadPortableConfiguration } from '../state/store.js';
@@ -28,6 +31,7 @@ import {
   displayGeometry,
   geometryAdmits,
   identityDisplayProblem,
+  identityLines,
   identityPreview,
 } from './session-identity.js';
 
@@ -151,9 +155,52 @@ function disposeInteraction(generation, interaction) {
 }
 
 // A continuation may act only while its own interaction and the setup
-// generation that owns it are both still active.
+// generation that owns it are both still active. An invalidated interaction is
+// fenced too: a resize, an expiry or a lost display admission ends its stage and
+// every successor stage, so a late dialog completion cannot open a prompt or
+// submit a choice.
 function interactionActive(generation, interaction) {
-  return generation.active && interaction.active;
+  return generation.active && interaction.active && !interaction.invalidated;
+}
+
+// A resize invalidates the affected stage and its successors even when the new
+// geometry would still fit: the admission was observed for one dialog instance
+// only, so a fresh open is required. The listener belongs to the interaction, so
+// replacement, disposal and Cleanup remove it while a dialog is still open.
+function watchDisplayResize(context, interaction) {
+  const renderer = context.renderer;
+  if (typeof renderer?.on !== 'function' || typeof renderer?.removeListener !== 'function') {
+    return null;
+  }
+  const onResize = () => {
+    interaction.invalidated = true;
+  };
+  renderer.on('resize', onResize);
+  const detach = () => {
+    renderer.removeListener('resize', onResize);
+  };
+  interaction.teardowns.add(detach);
+  return detach;
+}
+
+// The immutable request deadline is a hard fence (design section 2): at that
+// instant the interaction is invalidated and its owned exchange aborted, so a
+// late question or Respond completion can neither open a prompt nor submit. The
+// timer is owned by the interaction and released on replacement, disposal or
+// Cleanup. No deadline is renewed, no pending slot is substituted, nothing is
+// retried and the durable request is not cancelled.
+function armImmutableExpiry(interaction, presentation) {
+  const expiresAt = Date.parse(presentation.expires_at);
+  if (!Number.isFinite(expiresAt)) return false;
+  const remaining = expiresAt - Date.now();
+  if (!(remaining > 0)) return false;
+  const timer = setTimeout(() => {
+    interaction.invalidated = true;
+    interaction.controller.abort();
+  }, remaining);
+  const clear = () => clearTimeout(timer);
+  interaction.teardowns.add(clear);
+  return true;
 }
 
 // One operator-route exchange through the private helper. A non-2xx reply is the
@@ -315,17 +362,80 @@ function presentationFrom(body, { harnessId, ownerId, sessionId }) {
   return { ok: true, presentation: value };
 }
 
-function questionTitle(presentation) {
-  return [
-    'Proceed approval request',
-    `Request: ${inert(presentation.request_id)}`,
-    `Session: ${inert(presentation.session_label)}`,
-    `Action: ${inert(presentation.action)}`,
-    `Context: ${inert(presentation.context)}`,
-    `Expires: ${inert(presentation.expires_at)}`,
-    '',
-    'Choose Reject, Respond or Approve. Dismissing this dialog sends no decision.',
-  ].join('\n');
+// The complete immutable question, taken only from the captured presentation
+// (design sections 1 and 2). Every value is placed in full: a value longer than
+// the established lossless cell width becomes continuation lines that
+// concatenate back to the exact captured string, so an admitted question is
+// never a shortened, guessed-wrap or normalized variant. Text whose terminal
+// cell width is not established is refused rather than displayed as a different
+// value. The cell width is the established display unit, not a question-size
+// contract: whether this question is admitted is decided by the public geometry
+// of this terminal, not by a fixed length limit.
+function questionValueLines(value) {
+  const rendered = inert(value);
+  if (rendered === '') return null;
+  const lines = [];
+  for (const source of rendered.split('\n')) {
+    if (source === '') {
+      lines.push('');
+      continue;
+    }
+    // Each established-width slice is checked on its own, so this tests only
+    // that the terminal cell width is known and the slice is not empty. The
+    // identity value cap does not become a maximum question size.
+    for (const line of identityLines(source)) {
+      if (identityDisplayProblem(line) !== null) return null;
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
+// One admitted complete question, or null when a captured value has no
+// established lossless display. Approval is never the initial choice.
+function questionDisplay(presentation) {
+  const blocks = [
+    ['Request ID', presentation.request_id],
+    ['Session label', presentation.session_label],
+    ['Action', presentation.action],
+    ['Context', presentation.context],
+    ['Expires', presentation.expires_at],
+  ];
+  const lines = ['Proceed approval request', ''];
+  for (const [label, value] of blocks) {
+    const valueLines = questionValueLines(value);
+    if (valueLines === null) return null;
+    lines.push(`${label}:`, ...valueLines);
+  }
+  lines.push('', 'Choose Reject, Respond or Approve.', 'Dismissing this dialog sends no decision.');
+  return { message: lines.join('\n'), lineCount: lines.length };
+}
+
+// A question that cannot be shown completely beside Reject/Respond/Approve
+// opens no actionable dialog. The complete request text is never truncated or
+// edited, and nothing is resolved, cancelled or retried: the operator is told to
+// enlarge the terminal and reopen, or to use Telegram.
+function refuseQuestion(context) {
+  context.ui.toast.show({
+    message:
+      'Proceed: the complete question cannot be displayed here. ' +
+      'Enlarge the terminal and reopen, or use Telegram. No question was opened.',
+    variant: 'warning',
+    duration: 30000,
+  });
+}
+
+// Admission uses the public renderer dimensions and the conservative dialog
+// budget already established for the identity confirmation. Unknown geometry or
+// insufficient space refuses before an actionable dialog exists.
+function admitQuestion(context, presentation) {
+  const display = questionDisplay(presentation);
+  const admitted = displayGeometry(context.renderer);
+  if (display === null || admitted === null || !geometryAdmits(admitted, display.lineCount)) {
+    refuseQuestion(context);
+    return null;
+  }
+  return display;
 }
 
 // The candidate list is captured once per interaction. Only the opaque ID is an
@@ -418,25 +528,15 @@ async function confirmSelection(generation, interaction, context, candidate) {
     refuseDisplay(context);
     return false;
   }
-  const renderer = context.renderer;
-  if (
-    typeof context.ui.dialog.confirm !== 'function' ||
-    typeof renderer?.on !== 'function' ||
-    typeof renderer?.removeListener !== 'function'
-  ) {
+  if (typeof context.ui.dialog.confirm !== 'function') {
     refuseDisplay(context);
     return false;
   }
-  // Even a same-size resize invalidates this stage: the approved geometry was
-  // observed for this dialog instance only, and reopening is required.
-  const onResize = () => {
-    interaction.invalidated = true;
-  };
-  renderer.on('resize', onResize);
-  const detach = () => {
-    renderer.removeListener('resize', onResize);
-  };
-  interaction.teardowns.add(detach);
+  const detach = watchDisplayResize(context, interaction);
+  if (detach === null) {
+    refuseDisplay(context);
+    return false;
+  }
   let answer;
   try {
     answer = await context.ui.dialog.confirm({
@@ -448,10 +548,10 @@ async function confirmSelection(generation, interaction, context, candidate) {
     interaction.teardowns.delete(detach);
     detach();
   }
-  // `false`, `undefined`, dismissal, a replaced/disposed interaction and a lost
-  // display admission all do nothing.
+  // `false`, `undefined`, dismissal, a replaced/disposed interaction, an
+  // invalidated stage and a lost display admission all do nothing.
   if (answer !== true) return false;
-  if (!interactionActive(generation, interaction) || interaction.invalidated) return false;
+  if (!interactionActive(generation, interaction)) return false;
   const current = displayGeometry(context.renderer);
   if (
     current === null ||
@@ -684,15 +784,42 @@ async function openQuestion(generation, context) {
       });
       return;
     }
-    const choice = await context.ui.dialog.select({
-      title: questionTitle(presentation),
-      current: 'reject',
-      options: [
-        { title: 'Reject', value: 'reject' },
-        { title: 'Respond', value: 'respond' },
-        { title: 'Approve', value: 'approve' },
-      ],
-    });
+    // The complete immutable question must be currently displayable beside its
+    // three choices. A question this terminal cannot show in full opens no
+    // actionable dialog, and the immutable deadline is armed before that dialog
+    // exists so its expiry fences the question and any Respond successor.
+    const display = admitQuestion(context, presentation);
+    if (display === null) return;
+    if (!armImmutableExpiry(interaction, presentation)) {
+      context.ui.toast.show({
+        message: 'Proceed: this question reached its deadline and cannot be answered.',
+        variant: 'warning',
+        duration: 20000,
+      });
+      return;
+    }
+    const detach = watchDisplayResize(context, interaction);
+    if (detach === null) {
+      refuseQuestion(context);
+      return;
+    }
+    let choice;
+    try {
+      choice = await context.ui.dialog.select({
+        title: display.message,
+        current: 'reject',
+        options: [
+          { title: 'Reject', value: 'reject' },
+          { title: 'Respond', value: 'respond' },
+          { title: 'Approve', value: 'approve' },
+        ],
+      });
+    } finally {
+      interaction.teardowns.delete(detach);
+      detach();
+    }
+    // A dismissed, resized, expired, replaced or disposed question grants
+    // nothing, and an expired one cannot open its Respond successor.
     if (choice === undefined || !interactionActive(generation, interaction)) return;
     if (choice !== 'approve' && choice !== 'reject' && choice !== 'respond') return;
     let text = null;
