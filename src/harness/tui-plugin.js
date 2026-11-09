@@ -803,23 +803,22 @@ async function openQuestion(generation, context) {
       refuseQuestion(context);
       return;
     }
-    let choice;
-    try {
-      choice = await context.ui.dialog.select({
-        title: display.message,
-        current: 'reject',
-        options: [
-          { title: 'Reject', value: 'reject' },
-          { title: 'Respond', value: 'respond' },
-          { title: 'Approve', value: 'approve' },
-        ],
-      });
-    } finally {
-      interaction.teardowns.delete(detach);
-      detach();
-    }
+    // The resize fence stays attached to this interaction for the whole
+    // question stage and its Respond successor: the admission was observed for
+    // one dialog instance, so a resize during either outstanding dialog ends the
+    // stage and every successor. Disposal, replacement and Cleanup release the
+    // listener through the interaction that owns it.
+    const choice = await context.ui.dialog.select({
+      title: display.message,
+      current: 'reject',
+      options: [
+        { title: 'Reject', value: 'reject' },
+        { title: 'Respond', value: 'respond' },
+        { title: 'Approve', value: 'approve' },
+      ],
+    });
     // A dismissed, resized, expired, replaced or disposed question grants
-    // nothing, and an expired one cannot open its Respond successor.
+    // nothing, and an expired or resized one cannot open its Respond successor.
     if (choice === undefined || !interactionActive(generation, interaction)) return;
     if (choice !== 'approve' && choice !== 'reject' && choice !== 'respond') return;
     let text = null;
