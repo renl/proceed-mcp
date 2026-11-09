@@ -64,6 +64,54 @@ import {
   linuxScriptArguments,
 } from './harness-linux-plan.mjs';
 
+// STATIC ONLY. Public readers and stage-specific recorder inputs are injected.
+// This function is deliberately not installed in the real runtime branch.
+export function compositionNavigationSelection({
+  intendedSession,
+  readSession,
+  pickerEnter,
+  openQuestion,
+  ...io
+}) {
+  let observer;
+  try {
+    const intended = Object.freeze(structuredClone(intendedSession));
+    let inputs = 0;
+    observer = compositionNavigationObserver({
+      ...io,
+      readLive: () => {
+        const live = io.readLive();
+        assert.deepEqual(live.snapshot[1], intended);
+        // Independent public data.session.get(id) projection. Never a preview
+        // lookup or a session inferred from the rendered picker cells.
+        const current = readSession(intended.id);
+        assert.equal(current.id, intended.id);
+        assert.equal(current.title, intended.title);
+        return live;
+      },
+      enter: () => {
+        // Stage-specific callbacks cannot supply identity or admission. No
+        // reader or renewed deadline sits after the observer's final fence.
+        const input = inputs++ === 0 ? pickerEnter : openQuestion;
+        assert.equal(typeof input, 'function');
+        input();
+      },
+    });
+    return Object.freeze({
+      initial: () => observer.initial(),
+      moveDown: () => observer.moveDown(),
+      moved: () => observer.moved(),
+      pickerEnter: () => observer.pickerEnter(intended),
+      identity: () => observer.identity(),
+      openQuestion: () => observer.openQuestion(),
+      invalidate: () => observer.invalidate(),
+    });
+  } catch {
+    observer?.invalidate();
+    assert.fail('navigation admission refused');
+  }
+}
+
 // Pure private wiring seam. No file, process or input is acquired here. The
 // runtime caller must supply freshly admitted fixed inputs and independent live
 // observations. This does not enable the closed real navigation branch below.

@@ -606,6 +606,195 @@ async function compositionObserverAdapter() {
   );
 }
 
+async function compositionSelectionAdapter() {
+  const source = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('export function compositionNavigationSelection(');
+  const finish = source.indexOf('// Pure private wiring seam.', start);
+  return runInNewContext(
+    '(' + source.slice(start + 'export '.length, finish).trim() + ')',
+    {
+      assert,
+      structuredClone,
+      compositionNavigationObserver: await compositionObserverAdapter(),
+    },
+    { timeout: 100 },
+  );
+}
+
+test('actual selection wiring separates provisional picker and exact identity inputs with fresh public reads', async () => {
+  const select = await compositionSelectionAdapter();
+  let reads = 0;
+  const intended = structuredClone(productSnapshot[1]);
+  const c = navigationCase({
+    factory: (io) =>
+      select({
+        ...io,
+        intendedSession: intended,
+        executionBinding: io.binding,
+        runtime: io.binding.runtime,
+        run: io.binding.run,
+        setup: io.binding.setup,
+        readExecutionBinding: () => io.sample().binding,
+        readLive: () => io.sample().live,
+        readRaw: () => io.sample().raw,
+        readSession: (id) => {
+          reads++;
+          assert.equal(id, productSnapshot[1].id);
+          return structuredClone(productSnapshot[1]);
+        },
+        pickerEnter: () => c.writes.push('pickerEnter'),
+        openQuestion: () => c.writes.push('openQuestion'),
+      }),
+  });
+  const observer = c.ready();
+  intended.id = 'caller mutation cannot retarget';
+  let before = reads;
+  observer.pickerEnter();
+  assert.equal(reads, before + 1);
+  assert.deepEqual(c.writes, ['Down', 'pickerEnter']);
+  assert.throws(() => observer.openQuestion(), /navigation admission refused/);
+  assert.deepEqual(c.writes, ['Down', 'pickerEnter']);
+
+  // A new independent interaction is required after any out-of-order refusal.
+  const d = navigationCase({
+    factory: (io) =>
+      select({
+        ...io,
+        intendedSession: productSnapshot[1],
+        executionBinding: io.binding,
+        runtime: io.binding.runtime,
+        run: io.binding.run,
+        setup: io.binding.setup,
+        readExecutionBinding: () => io.sample().binding,
+        readLive: () => io.sample().live,
+        readRaw: () => io.sample().raw,
+        readSession: () => {
+          reads++;
+          return structuredClone(productSnapshot[1]);
+        },
+        pickerEnter: () => d.writes.push('pickerEnter'),
+        openQuestion: () => d.writes.push('openQuestion'),
+      }),
+  });
+  const complete = d.ready();
+  complete.pickerEnter();
+  d.identity();
+  complete.identity();
+  before = reads;
+  complete.openQuestion();
+  assert.equal(reads, before + 1);
+  assert.deepEqual(d.writes, ['Down', 'pickerEnter', 'openQuestion']);
+  assert.throws(() => complete.openQuestion());
+  assert.equal(d.writes.length, 3);
+});
+
+test('actual selection public-reader and lifetime failures permanently refuse at both inputs', async () => {
+  const select = await compositionSelectionAdapter();
+  for (const second of [false, true]) {
+    for (const failure of [
+      'missing',
+      'id',
+      'title',
+      'throws',
+      'cancel',
+      'dispose',
+      'replacement',
+      'gap',
+      'capability',
+      'snapshot',
+      'resize',
+      'generation',
+      'style',
+      'prefix',
+      'deadline',
+      'unsafe-clock',
+      'final-clock-invalidation',
+      'unavailable-input',
+      'fixed',
+      'live-throws',
+      'raw-throws',
+    ]) {
+      let armed = false,
+        observer,
+        reads = 0,
+        clocks = 0;
+      const c = navigationCase({
+        factory: (io) =>
+          select({
+            ...io,
+            intendedSession: productSnapshot[1],
+            executionBinding: io.binding,
+            runtime: io.binding.runtime,
+            run: io.binding.run,
+            setup: io.binding.setup,
+            now: () => {
+              if (armed && ++clocks === 2 && failure === 'final-clock-invalidation')
+                observer.invalidate();
+              return io.now();
+            },
+            readExecutionBinding: () => {
+              if (armed && failure === 'fixed') throw Error('private');
+              return io.sample().binding;
+            },
+            readLive: () => {
+              if (armed && failure === 'live-throws') throw Error('private');
+              return io.sample().live;
+            },
+            readRaw: () => {
+              if (armed && failure === 'raw-throws') throw Error('private');
+              return io.sample().raw;
+            },
+            readSession: () => {
+              reads++;
+              if (armed) {
+                if (failure === 'missing') return undefined;
+                if (failure === 'throws') throw Error('private');
+                if (failure === 'id') return productSnapshot[0]; // equal title, different exact ID
+                if (failure === 'title') return { ...productSnapshot[1], title: 'changed' };
+                if (['cancel', 'dispose', 'replacement', 'gap', 'capability'].includes(failure))
+                  observer.invalidate();
+              }
+              return structuredClone(productSnapshot[1]);
+            },
+            pickerEnter:
+              failure === 'unavailable-input' && !second
+                ? undefined
+                : () => c.writes.push('pickerEnter'),
+            openQuestion:
+              failure === 'unavailable-input' && second
+                ? undefined
+                : () => c.writes.push('openQuestion'),
+          }),
+      });
+      observer = c.ready();
+      if (second) {
+        observer.pickerEnter();
+        c.identity();
+        observer.identity();
+      }
+      armed = true;
+      if (failure === 'snapshot') c.state.live.snapshot.reverse();
+      if (failure === 'resize') c.state.live.geometry.resizeSequence++;
+      if (failure === 'generation') c.state.live.generation = 'replacement';
+      if (failure === 'style') c.state.raw = Buffer.concat([c.state.raw, Buffer.from(c.paint(1))]);
+      if (failure === 'prefix') c.state.raw = c.state.raw.subarray(1);
+      if (failure === 'deadline') c.setTick(10);
+      if (failure === 'unsafe-clock') c.setTick(NaN);
+      const input = () => (second ? observer.openQuestion() : observer.pickerEnter());
+      assert.throws(input, /navigation admission refused/, `${second}/${failure}`);
+      const sampled = reads;
+      armed = false;
+      c.setTick(1);
+      assert.throws(input, /navigation admission refused/);
+      assert.equal(reads, sampled);
+      assert.deepEqual(c.writes, second ? ['Down', 'pickerEnter'] : ['Down']);
+    }
+  }
+});
+
 test('actual composition adapter drives current-cell observer with fresh independent bindings and snapshot', async () => {
   const adapter = await compositionObserverAdapter();
   const factory = (io) =>
