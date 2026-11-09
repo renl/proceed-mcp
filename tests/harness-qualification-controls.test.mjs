@@ -210,6 +210,7 @@ test('QUAL-RENDERED driver control cannot substitute missing attacks, callback r
   const writes = [];
   const session = { id: question.session_id, title: 'equal host titles' };
   let terminal = false;
+  let replacement = false;
   const driver = {
     stdin: { write: (bytes) => writes.push(bytes) },
     ...syntheticNavigation(writes, session),
@@ -224,7 +225,12 @@ test('QUAL-RENDERED driver control cannot substitute missing attacks, callback r
     ordinaryAttacks: async (_presentation, afterEach) => {
       for (const id of ordinaryAttackCases) await afterEach(id);
     },
-    waitCurrentProductDialog: async () => {},
+    waitCurrentProductDialog: async () => assert.equal(replacement, false),
+    programmaticCommandAttack: async () => {
+      replacement = true;
+    },
+    waitReplacementNavigation: async () => assert.equal(replacement, true),
+    waitDismissed: async () => assert.equal(writes.at(-1), '\x1b'),
     waitResponsePrompt: async () => {},
     waitRetainedOutcome: async () => {
       terminal = true;
@@ -236,6 +242,22 @@ test('QUAL-RENDERED driver control cannot substitute missing attacks, callback r
   assert.deepEqual(writes, ['\x07', '\r', '\r', 'Respond\r', 'approved\r']);
   writes.length = 0;
   terminal = false;
+  await exerciseRenderedProduct(driver, question, 'dismiss', session);
+  assert.equal(replacement, true);
+  assert.deepEqual(writes, ['\x07', '\r', '\r', '\x1b']);
+  writes.length = 0;
+  replacement = false;
+  await assert.rejects(
+    exerciseRenderedProduct(
+      { ...driver, waitReplacementNavigation: undefined },
+      question,
+      'dismiss',
+      session,
+    ),
+  );
+  assert.equal(replacement, false, 'missing successor proof must stop before dispatch');
+  assert.deepEqual(writes, ['\x07', '\r', '\r']);
+  writes.length = 0;
   await assert.rejects(
     exerciseRenderedProduct(
       { ...driver, ordinaryAttacks: async () => [] },

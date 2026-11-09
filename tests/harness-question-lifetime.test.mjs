@@ -142,6 +142,15 @@ async function fixture(t) {
     assert.equal(calls.at(-1).operation, 'pending');
     assert.equal(calls.at(-1).body.session_id, 'session-two');
     assert.equal(dialogs.at(-1).options.current, 'reject');
+    for (const key of ['request_id', 'session_label', 'action', 'context', 'expires_at'])
+      assert.ok(dialogs.at(-1).options.title.includes(presentation[key]));
+    assert.deepEqual(
+      dialogs
+        .at(-1)
+        .options.options.map((option) => option.value)
+        .sort(),
+      ['approve', 'reject', 'respond'],
+    );
     return dialogs.at(-1);
   };
   t.after(async () => {
@@ -174,11 +183,9 @@ async function fixture(t) {
   };
 }
 
-test('W4 disputed criterion: forged programmatic open preserves the same complete question', async (t) => {
-  // tasks.md W4/I4 and exerciseRenderedProduct require the current question after
-  // EVERY attack, without reopening. Design section 2 simultaneously permits
-  // another open command to replace/fence it. Keep the discrepancy executable
-  // pending contract-owner clarification. RED here is NOT a production verdict.
+test('W4 command replacement is navigation only and old answers cannot affect another request', async (t) => {
+  // Design 1/2 permits replacement. It does not permit command arguments or a
+  // fenced old question to supply an answer, even after a new request appears.
   const f = await fixture(t);
   const current = await f.question();
   const before = f.calls.length;
@@ -193,21 +200,28 @@ test('W4 disputed criterion: forged programmatic open preserves the same complet
   );
   await flush();
   const afterAttack = f.dialogs.at(-1);
-  const sameQuestion = afterAttack === current;
-  // Consolidate safety observations before the disputed assertion. Explicitly
-  // dismiss the successor and complete the OLD question late. Neither may decide.
-  if (!sameQuestion) {
-    afterAttack.resolve(undefined);
-    current.resolve('approve');
-  }
+  assert.notEqual(afterAttack, current);
+  assert.equal(afterAttack.kind, 'select', 'replacement must start fresh navigation');
+  assert.ok(afterAttack.options.options.some((o) => o.value === 'session-one'));
+  assert.ok(afterAttack.options.options.some((o) => o.value === 'session-two'));
+  assert.equal(f.calls.length, before, 'no pending lookup without genuine identity confirmation');
+  // Never send a decision key to the replacement picker. Dismiss navigation and
+  // establish a different request through the complete fresh navigation path.
+  afterAttack.resolve(undefined);
   await flush();
-  assert.equal(f.calls.length, before, 'forged command must not query or decide a new binding');
-  assert.equal(f.calls.filter((c) => c.operation === 'decisions').length, 0);
+  f.presentation.request_id = `req_${'e'.repeat(32)}`;
+  f.presentation.presentation_id = `hpr_${'f'.repeat(32)}`;
+  const next = await f.question();
+  const callsBeforeLate = f.calls.length;
+  current.resolve('approve');
+  await flush();
+  assert.equal(f.dialogs.at(-1), next, 'late old answer cannot replace the current question');
   assert.equal(
-    sameQuestion,
-    true,
-    'W4/I4 requires the same complete question after programmatic-command, but the registered open callback replaced it with a session picker',
+    f.calls.length,
+    callsBeforeLate,
+    'late old answer cannot query or decide either binding',
   );
+  assert.equal(f.calls.filter((c) => c.operation === 'decisions').length, 0);
 });
 
 for (const stage of ['question', 'respond']) {

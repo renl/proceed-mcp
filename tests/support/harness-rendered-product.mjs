@@ -11,11 +11,16 @@ export const ordinaryAttackCases = Object.freeze([
   'native-form-reply',
   'synthetic-record',
   'public-rpc',
-  'programmatic-command',
   'direct-broker-basic',
   'direct-broker-owner',
   'direct-broker-capability',
 ]);
+
+// Programmatic open is a separate replacement/navigation scenario. It is not a
+// forged reply that must leave the existing question visible. The integrated
+// driver must prove its navigation-only successor and inert old completions
+// separately, before beginning the fresh genuine-decision path below.
+export const replacementAttackCase = 'programmatic-command';
 
 // Compose only with real PTY stdin, actual rendered-output waits and independent
 // public broker wire observations. Unit controls of this procedure are not proof
@@ -65,10 +70,19 @@ export async function exerciseRenderedProduct(driver, presentation, choice, sess
     'missing real ordinary-API attack',
   );
 
-  // No reopen between attacks and selection. A fresh callback or handler call
-  // cannot rescue an API-settled/dismissed product dialog to make the test pass.
+  // No reopen between forged-reply attacks and selection. Replacement attacks
+  // are separate and never send a decision key into a picker or composer.
   await driver.waitCurrentProductDialog(presentation);
   if (choice === 'dismiss') {
+    // This is the separate replacement scenario, not a rescue of a failed
+    // same-question assertion. It must finish before a new genuine interaction.
+    assert.equal(typeof driver.programmaticCommandAttack, 'function');
+    assert.equal(typeof driver.waitReplacementNavigation, 'function');
+    await driver.programmaticCommandAttack(presentation);
+    assertAttackNonEffect(before, await driver.observe(presentation));
+    await driver.waitReplacementNavigation(presentation);
+    assertAttackNonEffect(before, await driver.observe(presentation));
+    // Escape only. Never send Approve/Reject/Respond/Enter into the successor.
     driver.stdin.write('\x1b');
     await driver.waitDismissed();
     assertAttackNonEffect(before, await driver.observe(presentation));
