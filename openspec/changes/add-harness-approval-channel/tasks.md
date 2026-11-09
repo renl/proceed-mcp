@@ -18,6 +18,20 @@ Checks: pre-merge native successor regression RED, implementation owns correctio
 
 Lifecycle: path `.worktree/add-harness-approval-channel`, branch/change `add-harness-approval-channel`, owner test engineering, retained/cleanup pending verified landing. Last landed useful outcome remains skill/startup on main. Next merge remains this single change. Nearest blocker now includes the reproducible Respond resize lifetime failure and the still-incomplete maintained integrated driver. Cleanup evidence unchanged.
 
+### Frozen blocked checkpoint
+
+Executable/regression brief commit `b76d37286ffaecac051b61ba3765b79fccf4cd1a`, parent production `580531d6738196e868815c65177ed66111d7d345`. Its only changed paths are this tasks file and `tests/harness-question-lifetime.test.mjs`. Final evidence is tasks-only. The regression file SHA-256 is `21f4d5dd0735b5a471eb6d77ca589d2bfbff3a955dc81cd1ac4afcb23696cc33`. Explicit scoped repository Prettier write/check, syntax and selected whitespace PASS. Strict OpenSpec CLI validation is UNRUN in this recovery task. It is structural, not a replacement for the RED regression or incomplete driver.
+
+Current production corrections change the historical product/payload hashes, so the actual current sets were recomputed from repository bytes without runtime/preflight. Manifest identity is SHA-256 of UTF-8 `JSON.stringify` over ordered `{path,sha256}` records. Payload membership is the pure committed `qualificationPayload(git ls-files -- src bin)`. Product order is `git ls-files -- package.json src bin`. Outer order is `tests/run-harness-host.mjs`, `tests/support/harness-linux-runner.mjs`, `tests/harness-renderer-calibration.test.mjs`. Counts below are computed, not assumed. The changed native regression is outside those runtime membership sets and is pinned separately above.
+
+| Set     | Members | SHA-256                                                            |
+| ------- | ------: | ------------------------------------------------------------------ |
+| Payload |      99 | `e7d15b906bf03d9b9a956c03e45bf796caee0c49cf70e90106294a81d8b1f70c` |
+| Outer   |       3 | `8fd76f36a7d9d0094697b9796138a149317094f1030bc3ce73e4931fde9465d3` |
+| Product |      59 | `7a98f5161c38a807fdd3c4314e5ed0706e181e9fc1e991e4ebccd3a8cb104a99` |
+
+These identify a blocked static checkpoint, not a complete integrated candidate. No runtime command is authorized or proposed as runnable. After a production correction, the affected next native command is `node --test tests/harness-current-interaction.test.mjs tests/harness-question-lifetime.test.mjs tests/harness-request-result.test.mjs` with a 30000 ms bound, after scoped format/syntax/whitespace. Integrated driver completion, fresh manifests and the one consolidated review must precede any separately authorized integrated run. No new human gate is imposed here. After the executable commit, the full changed/untracked inspection showed only untouched README/status overlays and an empty index. No executable input changed during final tasks-only evidence.
+
 ## Current delivery action - integrated request to originating result
 
 This section supersedes historical next-action instructions below, not their evidence. Entry candidate `9218b907e149ec3a5fda4f6b545e0f012fc9a801`, navigation executable `c44dd8002075e76014209ef5dfd51e702295846a`. Entry index empty, only README/status overlays dirty. Preserve those overlays untouched and unselected. Delivery remains one OpenSpec change/branch/PR. No new worktree, change or runtime authority.
