@@ -2,7 +2,20 @@
 
 ## Integrated continuation - wired review candidate
 
-Frozen executable candidate `c76b5ea8d0f10ee9c7ea9840d89e28968c474276` contains exactly the 12 owned executable/test paths below and this tasks file. Final scoped Prettier check, selected whitespace and telemetry-disabled `openspec validate add-harness-approval-channel --strict` PASS, exit 0 within 30000 ms. This evidence finalization changes tasks only. Executable, production, dependency, configuration and baseline inputs remain unchanged after the final native checks. No runtime admission follows.
+Static correction 1 supersedes rejected executable `c76b5ea8d0f10ee9c7ea9840d89e28968c474276` and tasks freeze `50bc28a25aed9330eb9f299540952d9cf14bdbfc`. Entry HEAD matched that freeze, index empty, with only README/status overlays dirty. Both overlays remain untouched and unselected. Only `tests/support/harness-request-result.mjs`, `tests/support/harness-linux-runner.mjs`, `tests/harness-request-result.test.mjs` and this tasks file change. The 12-path integrated input set below remains the complete executable review scope. No runtime admission follows.
+
+### Correction 1 - two producer/consumer review gaps
+
+| Gap | Correction and executable evidence | Next owner / trigger |
+| --- | --- | --- |
+| `INTEGRATED-QUESTION-CONTINUATION-ADMISSION` | The wrapper produces 63-character `Distinct synthetic request <UUID>` context. Production renders separately labelled blocks with exact 40-cell continuations. `observeCurrentQuestion` now checks those complete blocks in current cells, in order, with unique labels, fixed column, current geometry, footer and all three choices. It compares exact value slices without collapsing whitespace or substring acceptance. Ambiguous edge-space operands refuse as in existing identity admission. The compound actual entry/registered-invocation/driver test now takes action/context from actual request arguments and paints production-shaped multiline blocks. Missing/clipped/reordered/changed lines, repeated labels, duplicate blocks and unsplit context refuse. Every field/control removal and current-lifetime refusal remains tested. | Test engineering correction complete for focused independent recheck via coordination. Q1 actual rendered proof remains UNRUN until separately authorized execution. |
+| `INTEGRATED-OUTER-ACTION-LEDGER` | Actual maintained driver writes fourteen Enters: ten navigation, three choices and one Respond submission. The compound test measures fourteen plus five Ctrl+G, nine Down, three Up and two scenario Escapes. Outer enrollment adds Ctrl+E and the third Escape, and cleanup owns Ctrl+C. `assertProductCaptureOutcome` is called at the actual outer PRODUCT post-export site and checks composition 14, capture 0, navigation 1 without changing other key limits or inner assertions. Native tests execute that actual branch with memory transfer/export IO, checking matching/under/over/wrong-mode ledgers, failed diagnostic/exit and admission refusal. Transfer refusal reaches neither detail export nor verdict. Counts grant no input authority. | Test engineering correction complete for focused independent recheck via coordination. Actual integrated outer outcome remains UNRUN until separately authorized execution. |
+
+No production layout, contract, replacement disposition, resource budget, expiry or security change. Full privacy scan and all five transfers still precede detailed retention and post-export verdict. The test double for transfer admission is native control flow proof only, not a real scan or export. Focused review paths are the three changed executable paths and this section plus the updated freeze. Reuse unchanged accepted bridge, contracts, private/public scan policy, source grounding and cleanup/resource checks. Do not reopen resolved command-replacement disposition or add a framework/stage. Review the two corrections together, then route any real run separately. No human, feature, release or landing authority follows.
+
+Final affected command `node --test tests/harness-request-result.test.mjs` PASS, exit 0, 11 tests, zero failures/skips/cancellations, 8840.4667 ms, within a 30000 ms Windows PowerShell bound. Scoped repository Prettier write/check, three `node --check` commands and selected `git diff --check` PASS before that run. The first intermediate run passed 10/10, 8815.3369 ms, before adding actual outer-branch controls and complete scenario key accounting. No failed executable check occurred in this correction. No preflight, indirect preflight selection, resource-owning suite or runtime was invoked. Pure manifest calculation reads repository inputs only.
+
+Post-test scoped Prettier check, selected whitespace and `OPENSPEC_TELEMETRY=0 openspec validate add-harness-approval-channel --strict` PASS, exit 0 within 30000 ms. No executable input changed after the final native run. Structural validation is not behavioral proof. Static correction package is ready for focused independent recheck, not yet accepted. Worktree remains retained, cleanup pending verified landing. Next merge remains the harness change to main, blocked on applicable integrated proof and final acceptance. No cleanup performed.
 
 **Static W1-W5/I1-I5 wiring is implemented for one consolidated review. Actual qualification remains UNRUN.** This supersedes the earlier unwired-driver next action and obsolete input freezes below. It is the same unfinished delivery task, not a new calibration/checkpoint mode. Entry `059490d8f2ec9471f3dff78e451d80f3edb2942f` includes criterion correction `ed16cbbe1b1c6b2ab158587d124803105ba09616`. Production stays read-only at `5c101bc2d68fdd3f61cd6863fbfa92e2a02f947a`. The entry own-path diff/index inspection was empty. README/status overlays remain untouched and unselected.
 
@@ -25,7 +38,7 @@ Source grounding remains the accepted OpenCode `9bbb8ce18c80f099e0e448775f59d965
 
 ### Native evidence and failure history
 
-Final Windows native sequence, one 30000 ms bounded shell command after scoped Prettier and syntax checks:
+Previous candidate Windows native sequence, one 30000 ms bounded shell command after scoped Prettier and syntax checks. Correction 1 above supersedes request-result evidence. The unchanged navigation and qualification controls below are reused by their unchanged paths and assertion scope, not rerun:
 
 | Exact command                                                                                                                                                                                                                           | Result and assertion scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -43,24 +56,24 @@ SHA-256 is over UTF-8 `JSON.stringify` of ordered `{path,sha256}` records, calcu
 
 | Set                       | Members | SHA-256                                                            |
 | ------------------------- | ------: | ------------------------------------------------------------------ |
-| Payload                   |      99 | `6bdaac01f89c8068946b3774ab814a3c49313ef360ff331a38a8bbf0e377d49c` |
-| Outer                     |       3 | `49e57cf3283e75ef33a813e6e6e643a7b847f6dcb97ae57280a9f7e3b198c153` |
+| Payload                   |      99 | `f75e41b604f6f89454a86c7d25bc6d93a8365d9160593231bcf9cf6365832f22` |
+| Outer                     |       3 | `23675d2deeef95ee5734ede30de3375a1f72aa5ff82f789bbb14f1704e12ea69` |
 | Product                   |      59 | `044d948090a5d391b93d7bfe13e30374f8738e78da39385d1eb44edce85ccb81` |
-| Owned executable controls |      12 | `7af10561389dd1f9fb448afda7b7ab139ff7d473725b03ae0eb6da710186de30` |
+| Owned executable controls |      12 | `e68f82560b481494c21bbbe0bdb8a135891bdd3d16bf7aa3a5e06d91e2f09570` |
 
 | Owned path                                         | SHA-256                                                            |
 | -------------------------------------------------- | ------------------------------------------------------------------ |
 | `tests/fixtures/harness-composition/tui.ts`        | `9ef4a2bfba9e7cd31cdf517e3d2d2f1bb3b9fd20318f5fc3eab3ef17ad68bf1e` |
 | `tests/harness-navigation-observation.test.mjs`    | `82098978b406119d97bfa7d401fbc09fd5440fd77383ebf69f75e9a0d4113793` |
 | `tests/harness-qualification-controls.test.mjs`    | `f4bfcc589be84a8bcec397570c3f0f23f1028352e891c2d63300dc371dc7e6fe` |
-| `tests/harness-request-result.test.mjs`            | `37224a73613afb99d3fc42f155ee807797aef54fa9b445ebc6abf472f25faede` |
+| `tests/harness-request-result.test.mjs`            | `0c4899bea0f2437be82ecb76eb31fe2bb46126efe600704dabaf39677e4e01a8` |
 | `tests/support/harness-composition-inner.mjs`      | `542d3f1d4d13c085d5b0290796791c89f6d454b2c6c01b7353ad509f98186cc4` |
 | `tests/support/harness-composition-retention.mjs`  | `d4258407c4d498f9383e4f098b49678780f924276aea2a60afe8105378d3c353` |
 | `tests/support/harness-linux-plan.mjs`             | `aab1b3e0ca68a53a31650960a4c4c6f4564108fc077327ec36ffc875ee3708b1` |
-| `tests/support/harness-linux-runner.mjs`           | `15e85938ee9d6cefae1c4ebf9320badf48e9dcadb5393060b0ac4d72415f8bf0` |
+| `tests/support/harness-linux-runner.mjs`           | `1497da4141dff79bba3f0dbc2047d0b61ed778c277e437e0c911619c1e27f994` |
 | `tests/support/harness-navigation-observation.mjs` | `ff83c8d6082216e7f7a31c8256b21502015b180e21644bcd2275c92a5f41fd18` |
 | `tests/support/harness-rendered-product.mjs`       | `a2b52e9db742dde11cf55f5dbf03a9d2cefeac8d7ad91ec73c4605dba4a8af93` |
-| `tests/support/harness-request-result.mjs`         | `b6ccf25a5e169187e7c61a49caa10baac459fc73219fc8387253287d60f0eff6` |
+| `tests/support/harness-request-result.mjs`         | `1d35db212eaf039dbda1a77633ad00227c97c70a3f833f9210515399ed94a4e4` |
 | `tests/support/harness-wrapper-invocation.mjs`     | `c27a2c5a5b255a31946e0d726985d9ab0399cfc4719d951e07fa6591f43fe7f9` |
 
 ### One future integrated run, not authority to execute

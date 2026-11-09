@@ -45,6 +45,16 @@ import {
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
+// Post-export verdict only. Counts do not authorize any keyboard input or
+// replace inner current-cell/scenario assertions or five-transfer admission.
+export function assertProductCaptureOutcome(mode, exit, diagnostic) {
+  const enters = { 'product-picker-capture': 0, 'product-navigation': 1, composition: 14 };
+  assert.ok(Object.hasOwn(enters, mode), 'unsupported product mode');
+  assert.equal(exit.trim(), '0', 'PRODUCT_CAPTURE_FAILURE');
+  assert.equal(diagnostic.status, 'PASS');
+  assert.equal(diagnostic.keys.enter, enters[mode], 'wrong product action ledger');
+}
+
 export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
   assert.ok(
     [
@@ -466,9 +476,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           ).stdout,
       );
       for (const [file, bytes] of details) await writeFile(evidenceDestination(file), bytes);
-      assert.equal(waited.stdout.trim(), '0', 'PRODUCT_CAPTURE_FAILURE');
-      assert.equal(diagnostic.status, 'PASS');
-      assert.equal(diagnostic.keys.enter, navigationOnly ? 1 : 0);
+      assertProductCaptureOutcome(mode, waited.stdout, diagnostic);
     } else if (composition) {
       // Fixed phase/classification is not raw capture. Detailed assertion export
       // is forbidden until the complete in-container raw scan has passed.

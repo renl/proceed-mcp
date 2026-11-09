@@ -17,6 +17,8 @@ import { runInNewContext } from 'node:vm';
 import { createProductNavigationObserver } from './support/harness-navigation-observation.mjs';
 import { compositionSourceFrame } from './support/harness-composition-readiness.mjs';
 import { integratedCompositionConfiguration } from './support/harness-linux-plan.mjs';
+import { assertProductCaptureOutcome } from './support/harness-linux-runner.mjs';
+import { identityLines } from '../src/harness/session-identity.js';
 import {
   scanFrozenComposition,
   compositionScanReason,
@@ -29,7 +31,7 @@ const presentation = {
   session_id: 'exact-session',
   session_label: 'Equal qualification label',
   action: 'Qualification action',
-  context: 'Current distinguishing context',
+  context: 'Distinct synthetic request 12345678-1234-1234-1234-123456789abc',
   expires_at: '2030-01-01T00:00:00.000Z',
 };
 const binding = {
@@ -48,17 +50,83 @@ const paint = (lines) =>
   Buffer.from(
     '\x1b[?2026h\x1b[2J' + lines.map((s, n) => `\x1b[${n + 1};1H${s}`).join('') + '\x1b[?2026l',
   );
-const lines = [
-  'Proceed approval request',
-  presentation.request_id,
-  presentation.session_label,
-  presentation.action,
-  presentation.context,
-  presentation.expires_at,
-  'Reject',
-  'Respond',
-  'Approve',
+const questionLines = (p) => [
+  'Proceed approval request', '',
+  ...[['Request ID', p.request_id], ['Session label', p.session_label], ['Action', p.action],
+    ['Context', p.context], ['Expires', p.expires_at]].flatMap(([label, value]) =>
+      [label + ':', ...value.split('\n').flatMap(identityLines)]),
+  '', 'Choose Reject, Respond or Approve.', 'Dismissing this dialog sends no decision.',
+  'Reject', 'Respond', 'Approve',
 ];
+const lines = questionLines(presentation);
+
+test('outer maintained post-export verdict requires the exact mode-specific Enter ledger', () => {
+  for (const [mode, count] of [['composition', 14], ['product-picker-capture', 0], ['product-navigation', 1]]) {
+    const diagnostic = { status: 'PASS', keys: { ctrlG: mode === 'composition' ? 5 : 1, enter: count, exit: 1 } };
+    assertProductCaptureOutcome(mode, '0\n', diagnostic);
+    for (const enter of new Set([count - 1, count + 1, 0, 1, 14].filter((n) => n !== count)))
+      assert.throws(() => assertProductCaptureOutcome(mode, '0', { ...diagnostic, keys: { ...diagnostic.keys, enter } }));
+    assert.throws(() => assertProductCaptureOutcome(mode, '1', diagnostic));
+    assert.throws(() => assertProductCaptureOutcome(mode, '0', { ...diagnostic, status: 'FAIL' }));
+  }
+  assert.throws(() => assertProductCaptureOutcome('platform', '0', {status: 'PASS', keys: {enter: 14}}));
+});
+
+test('actual outer PRODUCT branch admits all transfers before export and mode verdict', async () => {
+  const source = await readFile(new URL('support/harness-linux-runner.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf('} else if (productMode) {') + '} else if (productMode) {'.length;
+  const end = source.indexOf('} else if (composition) {', start);
+  assert.ok(start > 30 && end > start);
+  for (const [mode, enter, status, exit, refused] of [
+    ['composition', 14, 'PASS', '0', false],
+    ['composition', 13, 'PASS', '0', false],
+    ['composition', 15, 'PASS', '0', false],
+    ['product-picker-capture', 0, 'PASS', '0', false],
+    ['product-picker-capture', 14, 'PASS', '0', false],
+    ['product-navigation', 1, 'PASS', '0', false],
+    ['product-navigation', 14, 'PASS', '0', false],
+    ['composition', 14, 'FAIL', '0', false],
+    ['composition', 14, 'PASS', '1', false],
+    ['composition', 14, 'PASS', '0', true],
+  ]) {
+    const calls = [];
+    const branch = runInNewContext('(async () => {' + source.slice(start, end) + '})', {
+      mode, waited: { stdout: exit }, productDetailsAttempted: false,
+      retainDiagnostic: async () => ({status, keys: {enter}}),
+      transferProductCapture: async () => {
+        calls.push('five-transfer-admission');
+        if (refused) throw Error('refused synthetic admission');
+        return new Map([['synthetic-scan-pass', Buffer.from('synthetic')]]);
+      },
+      evidenceDestination: (file) => file,
+      writeFile: async () => calls.push('export'),
+      assertProductCaptureOutcome: (...args) => { calls.push('verdict'); return assertProductCaptureOutcome(...args); },
+    }, {timeout: 100});
+    const passes = status === 'PASS' && exit === '0' && !refused &&
+      enter === ({composition: 14, 'product-picker-capture': 0, 'product-navigation': 1})[mode];
+    if (passes) await branch();
+    else await assert.rejects(branch());
+    assert.deepEqual(calls, refused ? ['five-transfer-admission'] : ['five-transfer-admission', 'export', 'verdict']);
+  }
+});
+
+test('labelled current question reconstructs UUID continuation exactly and refuses ambiguous or clipped blocks', () => {
+  assert.equal(presentation.context.length, 63);
+  const context = lines.indexOf('Context:') + 1;
+  const variants = [
+    lines.filter((_, i) => i !== context + 1),
+    lines.map((s, i) => i === context ? s.slice(0, -1) : s),
+    lines.map((s, i) => i === context ? lines[context + 1] : i === context + 1 ? lines[context] : s),
+    lines.map((s, i) => i === context + 1 ? 'X' + s.slice(1) : s),
+    [...lines.slice(0, context), 'Context:', ...lines.slice(context)],
+    [...lines, ...lines],
+    lines.map((s, i) => i === context ? presentation.context : i === context + 1 ? '' : s),
+  ];
+  for (const values of variants)
+    assert.throws(() => observeCurrentQuestion({ raw: paint(values), live, binding, presentation }));
+  const padded = lines.map((s) => '    ' + s + '  ');
+  observeCurrentQuestion({ raw: paint(padded), live, binding, presentation });
+});
 
 test('integrated config connects the sole transparent owner entry and registered server wrapper without a permission override', () => {
   const staging = {
@@ -493,20 +561,8 @@ test('integrated maintained entry executes registered calls, both navigation fen
     screen = 'question';
     selected = 0;
     activePresentation = requests.get(chosenSession).presentation;
-    paint(
-      [
-        'Proceed approval request',
-        activePresentation.request_id,
-        activePresentation.session_label,
-        activePresentation.action,
-        activePresentation.context,
-        activePresentation.expires_at,
-        'Reject',
-        'Respond',
-        'Approve',
-      ],
-      6,
-    );
+    const body = questionLines(activePresentation);
+    paint(body, body.indexOf('Reject'));
   };
   const emit = (direction, message) =>
     events.push({
@@ -548,20 +604,8 @@ test('integrated maintained entry executes registered calls, both navigation fen
         );
       else {
         assert.equal(screen, 'question');
-        paint(
-          [
-            'Proceed approval request',
-            activePresentation.request_id,
-            activePresentation.session_label,
-            activePresentation.action,
-            activePresentation.context,
-            activePresentation.expires_at,
-            'Reject',
-            'Respond',
-            'Approve',
-          ],
-          selected + 6,
-        );
+        const body = questionLines(activePresentation);
+        paint(body, selected + body.indexOf('Reject'));
       }
       return;
     }
@@ -637,8 +681,8 @@ test('integrated maintained entry executes registered calls, both navigation fen
                 presentation_id: `hpr_${String(n).repeat(32)}`,
                 session_id: invocation.sessionID,
                 session_label: 'Equal qualification label',
-                action: 'Qualification action',
-                context: 'Distinct request ' + n,
+                action: input.action,
+                context: input.context,
                 expires_at: '2030-01-01T00:00:00.000Z',
               };
               delete presentation.request_handle;
@@ -819,6 +863,15 @@ test('integrated maintained entry executes registered calls, both navigation fen
   assert.equal(result.request_ids.length, 3);
   assert.deepEqual(completion, [sessions[1].id, sessions[0].id, sessions[0].id]);
   assert.ok(writes.includes('approved\r'));
+  const enters = writes.filter((s) => s === '\r' || s === 'approved\r').length;
+  assert.equal(enters, 14, 'actual maintained scenario ledger');
+  assert.deepEqual(
+    Object.fromEntries([['ctrlG', '\x07'], ['down', '\x1b[B'], ['up', '\x1b[A'], ['escape', '\x1b']]
+      .map(([name, bytes]) => [name, writes.filter((s) => s === bytes).length])),
+    { ctrlG: 5, down: 9, up: 3, escape: 2 },
+    'scenario keys exclude outer enrollment Escape/Ctrl+E and owned exit',
+  );
+  assertProductCaptureOutcome('composition', '0', { status: 'PASS', keys: { enter: enters } });
   assert.equal([...actions.values()].filter((a) => a.kind === 'invoke').length, 3);
   assert.equal([...actions.values()].filter((a) => a.kind === 'switch-foreground').length, 3);
   assert.equal([...actions.values()].filter((a) => a.kind === 'programmatic-command').length, 1);

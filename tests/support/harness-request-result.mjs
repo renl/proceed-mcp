@@ -255,7 +255,8 @@ export function requestResultWireAdapter(
 
 // Bound current cells only. No cumulative ANSI-stripped substring search, expected
 // screen injection, profile import or private host dialog getter. Unsupported
-// layouts fail closed. This intentionally does not guess wrapping/scrolling.
+// layouts fail closed. Only the established lossless 40-cell continuation
+// policy is accepted. No guessed wrapping/scrolling or text normalization.
 export function observeCurrentQuestion({ raw, live, binding, presentation, previous }) {
   assert.ok(Buffer.isBuffer(raw) && raw.length > 0 && raw.length <= 1048576);
   assert.equal(live.live, true);
@@ -275,13 +276,43 @@ export function observeCurrentQuestion({ raw, live, binding, presentation, previ
     assert.equal(frame.generation, previous.screen);
     assert.ok(frame.frames >= previous.frames);
   }
-  for (const field of ['request_id', 'session_label', 'action', 'context', 'expires_at']) {
+  const rows = frame.text.split('\n');
+  const labels = ['Request ID:', 'Session label:', 'Action:', 'Context:', 'Expires:'];
+  const title = 'Proceed approval request';
+  assert.equal(rows.filter((r) => r.trim() === title).length, 1, 'ambiguous question');
+  const start = rows.findIndex((r) => r.trim() === title);
+  const left = rows[start].indexOf(title);
+  let row = start + 2;
+  const exact = (value) => {
+    assert.ok(row < binding.geometry.height, 'question outside current geometry');
+    assert.equal(rows[row]?.slice(0, left).trim(), '', 'foreign question column');
+    assert.equal(rows[row]?.slice(left, left + value.length), value, 'changed current cells');
+    assert.equal(rows[row]?.slice(left + value.length).trim(), '', 'ambiguous current cells');
+    row++;
+  };
+  assert.equal(rows[start + 1]?.trim(), '', 'missing question separator');
+  for (const [index, field] of ['request_id', 'session_label', 'action', 'context', 'expires_at'].entries()) {
     assert.equal(typeof presentation[field], 'string');
-    assert.ok(frame.text.includes(presentation[field]), `incomplete current ${field}`);
+    assert.equal(rows.filter((r) => r.trim() === labels[index]).length, 1, 'repeated/missing label');
+    exact(labels[index]);
+    for (const source of presentation[field].split('\n')) {
+      assert.match(source, /^[\x20-\x7e]+$/, 'unsupported question value');
+      for (let i = 0; i < source.length; i += 40) {
+        const line = source.slice(i, i + 40);
+        // As with identity admission, edge spaces cannot be distinguished from
+        // terminal padding. Refuse rather than normalize an ambiguous operand.
+        assert.equal(line.trim(), line, 'ambiguous question padding');
+        exact(line);
+      }
+    }
   }
+  exact('');
+  exact('Choose Reject, Respond or Approve.');
+  exact('Dismissing this dialog sends no decision.');
   for (const control of ['Reject', 'Respond', 'Approve'])
-    assert.ok(
-      frame.text.split('\n').some((s) => s.trim() === control),
+    assert.equal(
+      rows.filter((s, n) => n >= row && n < binding.geometry.height && s.trim() === control).length,
+      1,
       `missing ${control} control`,
     );
   assert.equal(frame.text.includes('Open Proceed question?'), false);
