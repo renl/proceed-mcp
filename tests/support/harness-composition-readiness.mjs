@@ -5,11 +5,15 @@ export const productReadyText = 'Proceed harness ready for qualification (owner 
 // and terminal.zig queryTerminalSend. Phase restrictions here are decoder policy,
 // not a claim about cross-function emitter ordering. No opaque string is ignored.
 export function compositionSourceFrame(ansi) {
+  let frames = 0,
+    generation = 0;
   const refuse = (reason, byteOffset = 0, operation = null) => ({
     supported: false,
     reason,
     byteOffset,
     operation,
+    frames,
+    generation,
   });
   if (typeof ansi !== 'string' || new TextEncoder().encode(ansi).length > 1048576)
     return refuse('CAPTURE_LIMIT');
@@ -42,8 +46,6 @@ export function compositionSourceFrame(ansi) {
     saved,
     style = { fg: null, bg: null, bold: false },
     syncing = false,
-    frames = 0,
-    generation = 0,
     discardedFrameGeneration = null,
     alt = false,
     tainted = false,
@@ -584,6 +586,7 @@ export function compositionSnapshot(input) {
   const age = (value) => (integer(now) && integer(value) && value <= now ? now - value : null);
   return {
     admitted: Object.values(checks).every((value) => value === true),
+    decoder: compositionDecoderDiagnostic(get('decoder')),
     provenance: compositionGuardProvenance({
       ...compositionGuardProvenance(get('provenance')),
       requestSequence: own(request, 'request'),
@@ -606,7 +609,62 @@ export function compositionAdmission(input) {
 // One actual-mode route for loop and final render diagnostics. Never fall back
 // to the unstyled observer when source decoding refuses a cumulative prefix.
 export function compositionReadinessFrame(ansi, pickerCapture) {
-  return pickerCapture ? (compositionSourceFrame(ansi).text ?? '') : compositionCurrentFrame(ansi);
+  return compositionReadinessObservation(ansi, pickerCapture).frame;
+}
+
+export function compositionReadinessObservation(ansi, sourceLayout) {
+  const decoder = sourceLayout ? compositionSourceFrame(ansi) : null;
+  return { decoder, frame: sourceLayout ? (decoder.text ?? '') : compositionCurrentFrame(ansi) };
+}
+
+// Fixed metadata only, never a terminal token, decoded text or arbitrary OSC ID.
+export function compositionDecoderDiagnostic(input) {
+  const bounded = (name, max) => {
+    const n = own(input, name);
+    return Number.isSafeInteger(n) && n >= 0 && n <= max ? n : null;
+  };
+  const reasons = [
+    'CAPTURE_LIMIT',
+    'INCOMPLETE_ESCAPE',
+    'NESTED_UPDATE',
+    'UNMATCHED_UPDATE',
+    'UNRESYNCHRONIZED_PAINT',
+    'UNSAFE_QUERY_PHASE',
+    'UNSAFE_PROBE_PHASE',
+    'UNSAFE_CURSOR_RESET_PHASE',
+    'UNSAFE_PROGRAM_STATUS_PHASE',
+    'UNSAFE_PALETTE_QUERY',
+    'UNSUPPORTED_OSC_PAYLOAD',
+    'UNSUPPORTED_STRING_PAYLOAD',
+    'UNSAFE_GENERATION',
+    'UNMATCHED_RESTORE',
+    'GEOMETRY',
+    'UNSAFE_INPUT_PHASE',
+    'UNSAFE_UNICODE_PHASE',
+    'UNSUPPORTED_SGR',
+    'UNSUPPORTED_CONTROL',
+    'UNSUPPORTED_GLYPH',
+    'UNKNOWN_PAINT_POSITION',
+    'UNSYNCHRONIZED_PAINT',
+    'INCOMPLETE_UPDATE',
+    'NO_CURRENT_FRAME',
+  ];
+  const supported = own(input, 'supported') === true;
+  const operation = own(input, 'operation');
+  return {
+    supported,
+    reason: supported
+      ? 'NONE'
+      : reasons.includes(own(input, 'reason'))
+        ? own(input, 'reason')
+        : 'UNKNOWN',
+    operation: [0, 4, 10, 11, 12, 22, 66, 99, 112, 1337, 7501].includes(operation)
+      ? operation
+      : null,
+    byteOffset: bounded('byteOffset', 1048576),
+    frames: bounded('frames', 1048576),
+    generation: bounded('generation', 1048576),
+  };
 }
 
 // Closed diagnostics only. No raw identity, frame, path, log or error text.
@@ -678,6 +736,7 @@ export function compositionGuardJournal() {
       }
       const safe = {
         admitted: Object.values(checks).every((v) => v),
+        decoder: compositionDecoderDiagnostic(own(snapshot, 'decoder')),
         checks,
         failed: Object.keys(checks).filter((name) => !checks[name]),
         provenance: compositionGuardProvenance(own(snapshot, 'provenance')),

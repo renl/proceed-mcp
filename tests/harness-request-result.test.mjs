@@ -10,6 +10,8 @@ import {
 import {
   invokeRegisteredProceed,
   compositionHostAction,
+  captureProducerLifetime,
+  wrapperCommand,
 } from './support/harness-wrapper-invocation.mjs';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -23,6 +25,8 @@ import {
   scanFrozenComposition,
   compositionScanReason,
   scanIntegratedPrivateCaptures,
+  admitIntegratedPrivateInventory,
+  safeCompositionDiagnostic,
 } from './support/harness-composition-retention.mjs';
 import {
   privateCaptureWriter,
@@ -100,6 +104,360 @@ const questionLines = (p) => [
   'Approve',
 ];
 const lines = questionLines(presentation);
+
+test('actual registered wrapper cancels settled work and refuses uncooperative work before any complete seal', async () => {
+  const source = await readFile(
+    new URL('./fixtures/harness-wrapper/server.mjs', import.meta.url),
+    'utf8',
+  );
+  for (const cooperative of [true, false]) {
+    let command,
+      release,
+      entered,
+      aborted = false,
+      writes = 0,
+      seals = 0;
+    const started = new Promise((resolve) => {
+      entered = resolve;
+    });
+    const fixture = runInNewContext(
+      source.replace(/^import[\s\S]*?from '[^']+';\s*/gm, '').replace('export default ', ''),
+      {
+        Plugin: { define: (v) => v },
+        Buffer,
+        AbortController,
+        captureProducerLifetime: () => captureProducerLifetime(Date.now() + 100),
+        privateCaptureWriter,
+        invokeRegisteredProceed,
+        wrapperCommand,
+        open: async () => ({
+          writeFile: async () => {
+            writes++;
+          },
+          close: async () => {},
+        }),
+        writeFile: async () => {
+          seals++;
+        },
+      },
+    );
+    const cleanup = await fixture.setup({
+      app: { version: '2.2.5' },
+      command: {
+        transform: async (edit) => {
+          edit({
+            add: (v) => {
+              command = v;
+            },
+          });
+          return { dispose: async () => {} };
+        },
+      },
+      session: { get: async ({ sessionID }) => ({ id: sessionID, agent: 'selected' }) },
+      agent: { get: async () => ({ data: { id: 'selected' } }) },
+      tool: {
+        list: async () =>
+          ['prepare_approval', 'request_approval'].map((name) => ({
+            name,
+            options: { namespace: 'proceed' },
+            execute: async (_, { signal }) =>
+              new Promise((resolve, reject) => {
+                release = resolve;
+                signal.addEventListener(
+                  'abort',
+                  () => {
+                    aborted = true;
+                    if (cooperative) reject(Error('cancelled'));
+                  },
+                  { once: true },
+                );
+                entered();
+              }),
+          })),
+      },
+    });
+    const pending = command.execute({ sessionID: 'memory-session', prompt: { text: '' } });
+    const outcome = pending.catch(() => {});
+    await started;
+    const began = Date.now();
+    if (cooperative) await cleanup();
+    else await assert.rejects(cleanup(), { code: 'PRODUCER_UNSETTLED' });
+    assert.ok(Date.now() - began < 500, 'original budget, not an unbounded drain');
+    assert.equal(aborted, true);
+    assert.equal(seals, cooperative ? 1 : 0);
+    const before = writes;
+    release({ output: { request_id: 'late' } });
+    await outcome;
+    assert.equal(writes, before, 'late executor cannot resume capture or request another tool');
+    assert.equal(seals, cooperative ? 1 : 0);
+  }
+  const writer = privateCaptureWriter();
+  writer.seal();
+  assert.throws(() => writer.written(Buffer.from('late')));
+  assert.throws(() => writer.seal());
+});
+
+test('actual registered wrapper refuses an unsettled private write without closing or sealing over it', async () => {
+  const source = await readFile(
+    new URL('./fixtures/harness-wrapper/server.mjs', import.meta.url),
+    'utf8',
+  );
+  let command,
+    release,
+    entered,
+    calls = 0,
+    closes = 0,
+    seals = 0;
+  const started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const fixture = runInNewContext(
+    source.replace(/^import[\s\S]*?from '[^']+';\s*/gm, '').replace('export default ', ''),
+    {
+      Plugin: { define: (v) => v },
+      Buffer,
+      AbortController,
+      captureProducerLifetime: () => captureProducerLifetime(Date.now() + 100),
+      privateCaptureWriter,
+      invokeRegisteredProceed,
+      wrapperCommand,
+      open: async () => ({
+        writeFile: async () => {
+          entered();
+          await new Promise((resolve) => {
+            release = resolve;
+          });
+        },
+        close: async () => {
+          closes++;
+        },
+      }),
+      writeFile: async () => {
+        seals++;
+      },
+    },
+  );
+  const cleanup = await fixture.setup({
+    app: { version: '2.2.5' },
+    command: {
+      transform: async (edit) => {
+        edit({
+          add: (v) => {
+            command = v;
+          },
+        });
+        return { dispose: async () => {} };
+      },
+    },
+    session: { get: async ({ sessionID }) => ({ id: sessionID, agent: 'selected' }) },
+    agent: { get: async () => ({ data: { id: 'selected' } }) },
+    tool: {
+      list: async () =>
+        ['prepare_approval', 'request_approval'].map((name) => ({
+          name,
+          options: { namespace: 'proceed' },
+          execute: async () => {
+            calls++;
+          },
+        })),
+    },
+  });
+  const pending = command.execute({ sessionID: 'memory', prompt: { text: '' } }).catch(() => {});
+  await started;
+  await assert.rejects(cleanup(), { code: 'PRODUCER_UNSETTLED' });
+  assert.equal(closes, 0);
+  assert.equal(seals, 0);
+  release();
+  await pending;
+  assert.equal(calls, 0, 'late private-write completion cannot resume a tool call');
+  assert.equal(seals, 0);
+});
+
+test('actual composition polling and cleanup own cancellation and refuse late API callbacks without sealing', async () => {
+  const source = await readFile(
+    new URL('./fixtures/harness-composition/tui.ts', import.meta.url),
+    'utf8',
+  );
+  for (const cooperative of [true, false]) {
+    const files = new Map();
+    const root = '/run/proceed/qualification-private/';
+    let tick,
+      release,
+      entered,
+      aborted = false,
+      clock = 0;
+    const started = new Promise((r) => {
+      entered = r;
+    });
+    const put = (path, bytes) => files.set(path, String(bytes));
+    const fixture = runInNewContext(
+      source.replace(/^import[\s\S]*?from '[^']+';\s*/gm, '').replace('export default ', ''),
+      {
+        Plugin: { define: (v) => v },
+        product: { id: 'memory', setup: async () => async () => {} },
+        Buffer,
+        AbortController,
+        AbortSignal,
+        performance,
+        process: { versions: { node: 'memory', bun: 'memory' } },
+        Date: { now: () => clock },
+        randomUUID: () => 'memory-generation',
+        captureProducerLifetime: () => captureProducerLifetime(Date.now() + 100),
+        compositionHostAction,
+        privateCaptureWriter,
+        collectionAdmit: () => {},
+        collectionLimits: { file: 16 * 1048576 },
+        createCompositionSessionReader: () => () => {},
+        observeCompositionSelectors: () => ({}),
+        readFileSync: (path) => {
+          if (path.endsWith('composition-binding.json'))
+            return JSON.stringify({ run: 'memory-run', integratedScenario: true });
+          if (!files.has(path)) throw Error('missing');
+          return files.get(path);
+        },
+        writeFileSync: put,
+        writeFile: async (...args) => put(...args),
+        appendFileSync: (path, bytes) => put(path, (files.get(path) ?? '') + bytes),
+        setInterval: (f) => {
+          tick = f;
+          return 1;
+        },
+        clearInterval: () => {},
+      },
+    );
+    const cleanup = await fixture.setup({
+      renderer: { on() {}, off() {}, width: 120, height: 40 },
+      app: { version: '2.2.5' },
+      data: { session: { list: () => [], sync: async () => {}, get: () => ({ id: 'session' }) } },
+      client: {
+        session: {
+          create: async () => ({ id: 'session' }),
+          command: async (_, { signal }) =>
+            new Promise((resolve, reject) => {
+              release = resolve;
+              signal.addEventListener(
+                'abort',
+                () => {
+                  aborted = true;
+                  if (cooperative) reject(Error('cancelled'));
+                },
+                { once: true },
+              );
+              entered();
+            }),
+        },
+      },
+    });
+    put(
+      root + 'composition-action-1.json',
+      JSON.stringify({
+        kind: 'invoke',
+        run: 'memory-run',
+        generation: 'memory-generation',
+        request: 1,
+        sessionID: 'session',
+      }),
+    );
+    tick();
+    await started;
+    clock = 150000;
+    tick();
+    assert.equal(aborted, true, 'polling deadline aborts outstanding action controllers');
+    if (cooperative) await cleanup();
+    else await assert.rejects(cleanup(), { code: 'PRODUCER_UNSETTLED' });
+    assert.equal(aborted, true);
+    assert.equal(files.has(root + 'composition-api-seal.json'), cooperative);
+    const before = JSON.stringify([...files]);
+    release({ data: 'late' });
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    assert.equal(JSON.stringify([...files]), before, 'no resumed callback or post-seal write');
+  }
+});
+
+test('actual private inventory retains first fixed receipt/action/inventory refusal without trusting errors', () => {
+  const empty = Buffer.alloc(0);
+  const base = () => ({
+    captures: new Map([
+      ['mcp.jsonl', empty],
+      ['wrapper.jsonl', empty],
+      ['composition-public-api.jsonl', empty],
+      ['composition-action-1.json', Buffer.from('{}')],
+      ['composition-action-result-1.json', Buffer.from('{}')],
+    ]),
+    seals: {
+      mcp: receipt(empty),
+      callbacks: receipt(empty),
+      api: { api: receipt(empty), actionSequence: 1, serviceInventoryWritten: false },
+    },
+  });
+  for (const [change, expected] of [
+    [(v) => v.captures.delete('mcp.jsonl'), 'SEAL_RECEIPT'],
+    [
+      (v) => {
+        v.seals.callbacks.bytes++;
+      },
+      'SEAL_RECEIPT',
+    ],
+    [(v) => v.captures.delete('composition-action-1.json'), 'PROCESSED_ACTION'],
+    [(v) => v.captures.delete('composition-action-result-1.json'), 'PROCESSED_ACTION'],
+    [
+      (v) => {
+        v.seals.api.serviceInventoryWritten = true;
+      },
+      'FILE_INVENTORY',
+    ],
+  ]) {
+    const input = base();
+    change(input);
+    let stage;
+    assert.throws(() =>
+      admitIntegratedPrivateInventory(input.captures, input.seals, (next) => {
+        stage = next;
+      }),
+    );
+    assert.equal(stage, expected);
+    assert.equal(compositionScanReason(Error('raw operand'), stage), expected);
+  }
+  const valid = base();
+  assert.ok(admitIntegratedPrivateInventory(valid.captures, valid.seals));
+  for (const stage of [
+    'PRODUCER_CLOSE',
+    'LISTENER_CLOSE',
+    'HOST_STREAMS',
+    'PROCESS_ABSENCE',
+    'PRIVATE_FILE',
+    'SEAL_RECEIPT',
+    'PROCESSED_ACTION',
+    'CORRELATION',
+    'SECRET_CLASSIFICATION',
+    'FILE_INVENTORY',
+    'FILE_BOUNDS',
+    'ACCOUNTING',
+    'SCAN',
+    'EXPORT',
+  ]) {
+    const error = Object.assign(Error('credential must not escape'), { code: 'ENOENT' });
+    const reason = compositionScanReason(error, stage);
+    assert.equal(reason, stage);
+    assert.equal(
+      safeCompositionDiagnostic({ rawScan: 'REFUSED', scanReason: reason }).scanReason,
+      stage,
+    );
+  }
+  assert.equal(
+    safeCompositionDiagnostic({ rawScan: 'REFUSED', scanReason: 'private operand' }).scanReason,
+    'UNKNOWN',
+  );
+  let invoked = false;
+  const unsafe = Object.defineProperty({}, 'scanReason', {
+    get() {
+      invoked = true;
+      throw Error('secret');
+    },
+  });
+  assert.equal(safeCompositionDiagnostic(unsafe).scanReason, 'UNRUN');
+  assert.equal(invoked, false);
+});
 
 test('outer maintained post-export verdict requires the exact mode-specific Enter ledger', () => {
   for (const [mode, count] of [
@@ -562,11 +920,22 @@ test('integrated private capture scans decoded original fields before summary an
           callbacks: Buffer.concat([input.callbacks, Buffer.from(extra + '\n')]),
         });
       } else candidate = { ...input, other: [Buffer.from(extra)] };
+      let refusalStage;
       assert.throws(
-        () => scanIntegratedPrivateCaptures(candidate, secrets),
+        () =>
+          scanIntegratedPrivateCaptures(
+            {
+              ...candidate,
+              stage: (next) => {
+                refusalStage = next;
+              },
+            },
+            secrets,
+          ),
         expected,
         `${surface}: ${label}`,
       );
+      assert.equal(refusalStage, 'SECRET_CLASSIFICATION');
     }
   }
   for (const key of ['ordinary', 'cap_hint', `cap_${'A'.repeat(64)}`, 'request_capability']) {
@@ -593,17 +962,40 @@ test('integrated private capture scans decoded original fields before summary an
     { ...input, mcp: Buffer.alloc(0) },
     { ...input, receipts: { ...input.receipts, mcp: { ...input.receipts.mcp, complete: false } } },
     { ...input, secretLedger: { ...secretLedger, secrets: secretLedger.secrets.slice(1) } },
-  ])
-    assert.throws(() => scanIntegratedPrivateCaptures(bad, secrets));
+  ]) {
+    let stage;
+    assert.throws(() =>
+      scanIntegratedPrivateCaptures(
+        {
+          ...bad,
+          stage: (next) => {
+            stage = next;
+          },
+        },
+        secrets,
+      ),
+    );
+    assert.equal(
+      stage,
+      bad.secretLedger !== input.secretLedger ? 'SECRET_CLASSIFICATION' : 'SEAL_RECEIPT',
+    );
+  }
   assert.throws(() => scanIntegratedPrivateCaptures(input, secrets.slice(1)));
   const wrongSession = structuredClone(records);
   wrongSession.find((r) => r.phase === 'prepare-returned').sessionID = 'unrelated';
+  let firstStage;
   assert.throws(() =>
     scanIntegratedPrivateCaptures(
-      privateInput({ ...input, callbacks: encode(wrongSession) }),
+      {
+        ...privateInput({ ...input, callbacks: encode(wrongSession) }),
+        stage: (next) => {
+          firstStage = next;
+        },
+      },
       secrets,
     ),
   );
+  assert.equal(firstStage, 'CORRELATION');
   for (const value of [
     `hop_${'e'.repeat(64)}`,
     `cap_${'f'.repeat(64)}`,
@@ -705,6 +1097,7 @@ test('actual registered wrapper seals zero and failed partial callback captures 
         clearTimeout,
         privateCaptureWriter,
         invokeRegisteredProceed,
+        captureProducerLifetime,
         wrapperCommand: 'proceed-qualification-request',
         open: async () => ({
           writeFile: async (bytes) => {

@@ -46,6 +46,7 @@ import {
   compositionErrorCode,
   compositionCurrentFrame,
   compositionReadinessFrame,
+  compositionReadinessObservation,
   compositionLastGuardSample,
   compositionActivation,
   compositionSnapshot,
@@ -882,7 +883,10 @@ try {
                 binding.hostRun = activation.run;
                 binding.hostSetup = activation.setup;
               }
-              const frame = compositionReadinessFrame(transcript.toString(), productMode);
+              const { decoder, frame } = compositionReadinessObservation(
+                transcript.toString(),
+                productMode,
+              );
               const frameToken = transcript.length;
               const response = readObservation('composition-selector-response.json');
               const responseReadAt = response ? Date.now() : undefined;
@@ -896,6 +900,7 @@ try {
                 },
                 binding,
                 activation,
+                decoder,
                 frame,
                 frameToken,
                 request,
@@ -1219,6 +1224,7 @@ try {
           const scenarioDeadline = performance.now() + Math.max(0, end - Date.now() - 45000);
           const integratedWait = (label, predicate) => wait(label, predicate, 0, scenarioDeadline);
           let enrollmentFrame;
+          await progress('rendered-host-and-product-registration');
           await admitReady(() => {
             keys.ctrlE++;
             child.stdin.write('\x05');
@@ -1478,13 +1484,21 @@ try {
         // writer absence and every required input is available and bounded.
         if (child) {
           let scanStage = 'COLLECTION';
+          const collectionStage = (next) => {
+            scanStage = next;
+          };
           try {
+            collectionStage('LISTENER_CLOSE');
             await controls.close();
             controlsClosed = true;
+            collectionStage('PRODUCER_CLOSE');
             if (integratedScenario) await h.finalizeCapture();
+            collectionStage('PROCESS_ABSENCE');
             const remainingPids = (await readdir('/proc')).filter(
               (p) => /^\d+$/.test(p) && !priorPids.has(p),
             );
+            if (productMode) assert.equal(remainingPids.length, 0);
+            collectionStage('HOST_STREAMS');
             const complete = closed && stdoutEnded && stderrEnded && remainingPids.length === 0;
             if (productMode) {
               assert.ok(complete);
@@ -1496,6 +1510,7 @@ try {
                 const root = '/run/proceed/qualification-private/';
                 let total = 0;
                 const captures = new Map();
+                collectionStage('FILE_INVENTORY');
                 const names = (await readdir(root))
                   .filter((n) =>
                     /^(?:mcp\.jsonl|wrapper\.jsonl|(?:mcp|wrapper)-seal\.json|composition-api-seal\.json|composition-action(?:-result)?-\d+\.json|composition-service-inventory\.json|composition-public-api\.jsonl)$/.test(
@@ -1504,11 +1519,22 @@ try {
                   )
                   .sort();
                 for (const name of names) {
+                  collectionStage('PRIVATE_FILE');
                   const bytes = await productCaptureReadFile({}, root + name, 'api', total);
                   total += bytes.length;
                   captures.set(name, bytes);
                   privateInputs.push({ bytes });
                 }
+                collectionStage('SEAL_RECEIPT');
+                const receipts = admitIntegratedPrivateInventory(
+                  captures,
+                  {
+                    mcp: JSON.parse(captures.get('mcp-seal.json').toString()),
+                    callbacks: JSON.parse(captures.get('wrapper-seal.json').toString()),
+                    api: JSON.parse(captures.get('composition-api-seal.json').toString()),
+                  },
+                  collectionStage,
+                );
                 privateCaptureScan = scanIntegratedPrivateCaptures(
                   {
                     mcp: captures.get('mcp.jsonl'),
@@ -1516,11 +1542,8 @@ try {
                     other: [...captures]
                       .filter(([name]) => !['mcp.jsonl', 'wrapper.jsonl'].includes(name))
                       .map(([, bytes]) => bytes),
-                    receipts: admitIntegratedPrivateInventory(captures, {
-                      mcp: JSON.parse(captures.get('mcp-seal.json').toString()),
-                      callbacks: JSON.parse(captures.get('wrapper-seal.json').toString()),
-                      api: JSON.parse(captures.get('composition-api-seal.json').toString()),
-                    }),
+                    receipts,
+                    stage: collectionStage,
                     secretLedger: controls,
                     scenarioSuccess: scenarioSucceeded,
                   },
@@ -1540,6 +1563,7 @@ try {
                   hostExit,
                 }),
               );
+              collectionStage('PRIVATE_FILE');
               await writeFile(join(evidence, 'composition-observations.json'), observations);
               const { journal, api } = await productCaptureInputs(
                 h.state,
@@ -1556,12 +1580,16 @@ try {
                 ...(integratedScenario ? [{ bytes: brokerDiagnostics }] : []),
                 ...privateInputs,
               ];
+              collectionStage('FILE_INVENTORY');
               const entries = await collectProductCapture(
                 { state: '/run/proceed/host-state', evidence },
                 extras,
                 requiredSecrets,
                 Math.min(end, Date.now() + 30000),
+                undefined,
+                collectionStage,
               );
+              collectionStage('FILE_INVENTORY');
               const logEntries = entries.filter((e) => /\.log(?:$|[.-])/.test(e.path));
               assert.ok(logEntries.length > 0);
               const diagnostics = Buffer.concat([
@@ -1574,6 +1602,7 @@ try {
                 .filter(
                   (line) => /component=plugin(?: |$)/.test(line) && /role=cli(?: |$)/.test(line),
                 );
+              collectionStage('ACCOUNTING');
               assert.ok(pluginLines.length <= 4096);
               collectionAdmit(
                 pluginLines.reduce((n, line) => n + Buffer.byteLength(line) + 1, 0),
@@ -1581,6 +1610,7 @@ try {
               );
               const pluginBytes = Buffer.from(pluginLines.join('\n'));
               if (integratedScenario && scenarioSucceeded) {
+                collectionStage('FILE_INVENTORY');
                 assertPluginInventory(pluginLines, {
                   entries: [
                     { plugin: fixture, entry: join(fixture, 'tui.ts') },
@@ -1603,6 +1633,7 @@ try {
                 });
               }
               const pty = entries.find((e) => e.path === '/run/proceed/host-state/pty.raw');
+              collectionStage('FILE_INVENTORY');
               assert.ok(pty);
               const S =
                 transcript.length +
@@ -1613,6 +1644,7 @@ try {
                 pluginBytes.length +
                 api.length +
                 entries.reduce((n, e) => n + Buffer.byteLength(e.path) + e.bytes.length, 0);
+              collectionStage('ACCOUNTING');
               collectionAdmit(S, collectionLimits.surfaces);
               const captures = {
                 tui: Buffer.concat([transcript, pty.bytes]),
@@ -1625,6 +1657,7 @@ try {
                 ]),
                 api,
               };
+              collectionStage('FILE_INVENTORY');
               const details = {
                 'composition-observations.json': observations,
                 'transcript.ansi': Buffer.from(transcript),
@@ -1658,8 +1691,9 @@ try {
                       ],
                     }
                   : undefined,
+                collectionStage,
               );
-              scanStage = 'WRITE';
+              scanStage = 'EXPORT';
               for (const [file, bytes] of Object.entries(frozen.details))
                 await writeFile(join(evidence, file), bytes);
               await writeFile(join(evidence, 'scan-pass.json'), JSON.stringify(frozen.scan));

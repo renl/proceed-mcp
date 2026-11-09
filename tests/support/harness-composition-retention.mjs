@@ -14,15 +14,19 @@ import { safeTransportFailure } from './harness-runtime-transport.mjs';
 // connection. Inspect raw bytes AND decoded frames before deriving any summary.
 // The six-surface public exporter and its blanket capability refusal stay intact.
 export function scanIntegratedPrivateCaptures(
-  { mcp, callbacks, other = [], receipts, secretLedger, scenarioSuccess = false },
+  { mcp, callbacks, other = [], receipts, secretLedger, scenarioSuccess = false, stage = () => {} },
   secrets,
 ) {
+  stage('SECRET_CLASSIFICATION');
   assert.deepEqual(secrets, freezeTransportSecrets(secretLedger));
+  stage('SEAL_RECEIPT');
   assertPrivateCaptureReceipt(mcp, receipts?.mcp);
   assertPrivateCaptureReceipt(callbacks, receipts?.callbacks);
   const inputs = [mcp, callbacks, ...other];
+  stage('FILE_BOUNDS');
   assert.ok(inputs.every(Buffer.isBuffer));
   const bytes = inputs.reduce((n, b) => n + b.length, 0);
+  stage('ACCOUNTING');
   collectionAdmit(bytes, collectionLimits.contents);
   rendererWork(bytes, inputs.length, secrets.length, bytes);
   const parse = (bytes) =>
@@ -33,6 +37,7 @@ export function scanIntegratedPrivateCaptures(
           .trim()
           .split('\n')
           .map((s) => JSON.parse(s));
+  stage('CORRELATION');
   const capture = decodeMcpCapture(parse(mcp), 'composition-shared-owner', {
     allowEmptyDirections: true,
   });
@@ -94,6 +99,7 @@ export function scanIntegratedPrivateCaptures(
     }
   }
   const inspect = (value, path = [], allowed = null) => {
+    stage('SECRET_CLASSIFICATION');
     if (typeof value === 'string') {
       for (const secret of secrets)
         assert.equal(value.includes(secret), false, 'private authority leak');
@@ -127,12 +133,14 @@ export function scanIntegratedPrivateCaptures(
       }
   };
   const checkBytes = (bytes) => {
+    stage('SECRET_CLASSIFICATION');
     for (const secret of secrets)
       assert.equal(bytes.includes(Buffer.from(secret)), false, 'raw private authority leak');
   };
   for (const bytes of inputs) checkBytes(bytes);
   for (const { message } of [...capture.calls, ...capture.results]) {
     checkBytes(Buffer.from(JSON.stringify(message)));
+    stage('CORRELATION');
     let allowed;
     if (prepared.has(message.id) && message.result && message.result.isError !== true) {
       const body = message.result.structuredContent;
@@ -158,6 +166,7 @@ export function scanIntegratedPrivateCaptures(
   }
   const callbackStarts = new Map();
   for (const callback of parse(callbacks)) {
+    stage('CORRELATION');
     let allowed;
     if (['prepare-started', 'wait-started'].includes(callback.phase)) {
       assert.ok(typeof callback.coreCallID === 'string' && callback.coreCallID.length > 0);
@@ -202,6 +211,7 @@ export function scanIntegratedPrivateCaptures(
     inspect(callback, [], allowed);
   }
   if (scenarioSuccess) {
+    stage('CORRELATION');
     assert.equal(callbackStarts.size, 0, 'successful scenario has no unfinished callbacks');
     for (const phase of ['prepare-returned', 'wait-returned'])
       assert.equal(parse(callbacks).filter((c) => c.phase === phase).length, 3);
@@ -219,11 +229,13 @@ export function scanIntegratedPrivateCaptures(
   };
 }
 
-export function admitIntegratedPrivateInventory(captures, seals) {
+export function admitIntegratedPrivateInventory(captures, seals, stage = () => {}) {
+  stage('SEAL_RECEIPT');
   assertPrivateCaptureReceipt(captures.get('mcp.jsonl'), seals.mcp);
   assertPrivateCaptureReceipt(captures.get('wrapper.jsonl'), seals.callbacks);
   assertPrivateCaptureReceipt(captures.get('composition-public-api.jsonl'), seals.api.api);
   const n = seals.api.actionSequence;
+  stage('PROCESSED_ACTION');
   assert.ok(Number.isSafeInteger(n) && n >= 0 && n <= 64);
   for (let i = 1; i <= n; i++) {
     assert.ok(captures.has(`composition-action-${i}.json`), 'missing processed action input');
@@ -232,6 +244,7 @@ export function admitIntegratedPrivateInventory(captures, seals) {
       'missing processed action output',
     );
   }
+  stage('FILE_INVENTORY');
   assert.equal(typeof seals.api.serviceInventoryWritten, 'boolean');
   assert.equal(
     captures.has('composition-service-inventory.json'),
@@ -312,16 +325,28 @@ export async function verifyRetainedProductCapture({
 
 // Filesystem categories are not product scan meanings. Keep the renderer's
 // state/evidence schema closed while adapting only this private product route.
-export function productCaptureReadFile(state, path, surface, used, io, expected) {
+export async function productCaptureReadFile(state, path, surface, used, io, expected) {
   assert.ok(['state', 'evidence', 'diagnostics', 'journal', 'api'].includes(surface));
-  return rendererReadFile(
-    state,
-    path,
-    surface === 'evidence' ? 'evidence' : 'state',
-    used,
-    io,
-    expected,
-  );
+  try {
+    return await rendererReadFile(
+      state,
+      path,
+      surface === 'evidence' ? 'evidence' : 'state',
+      used,
+      io,
+      expected,
+    );
+  } catch {
+    // Existing renderer checkpoints identify the assertion without exposing its
+    // size/path/error operands. IO/identity refusals stay a private-file failure.
+    scanRefuse(
+      state.reason === 'OVERFLOW' && state.stage === 'PER_FILE_SIZE'
+        ? 'FILE_BOUNDS'
+        : state.reason === 'OVERFLOW' && state.stage === 'TOTAL_SIZE'
+          ? 'ACCOUNTING'
+          : 'PRIVATE_FILE',
+    );
+  }
 }
 
 export async function productCaptureInputs(stateRoot, wirePath, io, allowApi = false) {
@@ -374,7 +399,9 @@ export async function collectProductCapture(
   secrets,
   endpoint,
   io = { lstat, open, opendir, flags: constants, allocate: Buffer.alloc },
+  stage = () => {},
 ) {
+  stage('FILE_INVENTORY');
   const state = {},
     entries = [];
   let F = extras.reduce((n, e) => n + e.bytes.length, 0);
@@ -392,6 +419,7 @@ export async function collectProductCapture(
       for (const [path, e] of membership) {
         if (e.metadata[0] !== 'file') continue;
         const size = Number(e.metadata[3]);
+        stage('FILE_BOUNDS');
         collectionAdmit(size, collectionLimits.file);
         planned += size;
         S += size;
@@ -399,6 +427,7 @@ export async function collectProductCapture(
         paths += Buffer.byteLength(path);
         N++;
       }
+      stage('ACCOUNTING');
       collectionAdmit(planned, collectionLimits.contents);
       // Exact projection: complete path/content inventory plus duplicated logs,
       // raw PTY and all explicit product surfaces. No renderer fixture substitution.
@@ -407,18 +436,30 @@ export async function collectProductCapture(
       rendererWork(planned, N, secrets.length, S);
       for (const [path, e] of membership) {
         if (e.metadata[0] !== 'file') continue;
+        stage('PRIVATE_FILE');
         const bytes = await productCaptureReadFile(state, path, e.surface, F, io, e.metadata);
         F += bytes.length;
         entries.push({ path, bytes });
       }
+      stage('FILE_INVENTORY');
     },
   );
   assert.equal(result.complete, true);
+  stage('ACCOUNTING');
   collectionAdmit(F, collectionLimits.contents);
   return entries;
 }
 
-export function productCaptureExport(captures, secrets, complete, overflow, details, inventory) {
+export function productCaptureExport(
+  captures,
+  secrets,
+  complete,
+  overflow,
+  details,
+  inventory,
+  stage = () => {},
+) {
+  stage('FILE_INVENTORY');
   if (inventory !== undefined) {
     assert.deepEqual(Object.keys(inventory), compositionSurfaces);
     for (const surface of compositionSurfaces) {
@@ -431,6 +472,7 @@ export function productCaptureExport(captures, secrets, complete, overflow, deta
       }
     }
   }
+  stage('SCAN');
   const { scan, captures: frozenCaptures } = scanFrozenComposition({
     captures,
     secrets,
@@ -438,6 +480,7 @@ export function productCaptureExport(captures, secrets, complete, overflow, deta
     overflow,
     measured: true,
   });
+  stage('EXPORT');
   assert.deepEqual(Object.keys(details), productCaptureFiles);
   // Every exact export byte must already be in its product scan surface.
   for (const [name, bytes] of Object.entries(details)) {
@@ -460,6 +503,7 @@ export function productCaptureExport(captures, secrets, complete, overflow, deta
     ]),
   );
   if (inventory !== undefined) scan.inventory = structuredClone(inventory);
+  stage('ACCOUNTING');
   collectionAdmit(
     Buffer.byteLength(JSON.stringify(scan)) +
       Object.values(details).reduce((n, b) => n + b.length, 0),
@@ -711,6 +755,20 @@ const scanReasons = Object.freeze([
   'COLLECTION',
   'WRITE',
   'UNKNOWN',
+  'PRODUCER_CLOSE',
+  'LISTENER_CLOSE',
+  'HOST_STREAMS',
+  'PROCESS_ABSENCE',
+  'PRIVATE_FILE',
+  'SEAL_RECEIPT',
+  'PROCESSED_ACTION',
+  'CORRELATION',
+  'SECRET_CLASSIFICATION',
+  'FILE_INVENTORY',
+  'FILE_BOUNDS',
+  'ACCOUNTING',
+  'SCAN',
+  'EXPORT',
 ]);
 // Private object identity, not exception text/code provided by an arbitrary IO
 // dependency. Only locally recognized branches receive a precise classification.
@@ -725,7 +783,7 @@ export function compositionScanReason(error, stage) {
     scanFailures.get(error) ??
     (stage === 'COLLECTION' && own(error, 'code') === 'ENOENT'
       ? 'MISSING'
-      : ['COLLECTION', 'WRITE', 'MISSING'].includes(stage)
+      : scanReasons.includes(stage)
         ? stage
         : 'UNKNOWN')
   );

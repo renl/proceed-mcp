@@ -10,9 +10,11 @@ import { createHash } from 'node:crypto';
 export function privateCaptureWriter(maxBytes = 16 * 1048576) {
   const hash = createHash('sha256');
   let bytes = 0,
-    failed = false;
+    failed = false,
+    sealed = false;
   return {
     written(chunk) {
+      if (sealed) throw Error('private writer sealed');
       bytes += chunk.length;
       if (bytes > maxBytes) {
         failed = true;
@@ -24,6 +26,8 @@ export function privateCaptureWriter(maxBytes = 16 * 1048576) {
       failed = true;
     },
     seal() {
+      if (sealed) throw Error('private writer sealed');
+      sealed = true;
       return { complete: !failed, bytes, sha256: hash.digest('hex') };
     },
   };

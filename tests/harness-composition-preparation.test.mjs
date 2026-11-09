@@ -12,6 +12,9 @@ import {
   productReadyText,
   compositionCurrentFrame,
   compositionReadinessFrame,
+  compositionSourceFrame,
+  compositionDecoderDiagnostic,
+  compositionReadinessObservation,
   compositionLastGuardSample,
   compositionActivation,
   compositionAdmission,
@@ -202,7 +205,7 @@ test('actual capture readiness route never substitutes the unstyled failure obse
   );
   assert.match(
     inner,
-    /const frame = compositionReadinessFrame\(transcript.toString\(\), productMode\)/,
+    /const \{ decoder, frame \} = compositionReadinessObservation\(\s*transcript.toString\(\),\s*productMode,?\s*\)/,
   );
   const catchStart = inner.indexOf('} catch (error) {');
   const failure = inner.slice(catchStart, inner.indexOf('// One exit key only', catchStart));
@@ -213,6 +216,106 @@ test('actual capture readiness route never substitutes the unstyled failure obse
     inner,
     /compositionRenderEvidence\(\s*compositionReadinessFrame\(transcript.toString\(\), productMode\)/,
   );
+});
+
+test('actual integrated post-transport route preserves decoder refusal and readiness phase under the original deadline', async () => {
+  const inner = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = inner.indexOf('let enrollmentFrame;');
+  const route = inner.slice(
+    start,
+    inner.indexOf("await integratedWait('integrated-enrollment-display'", start),
+  );
+  const paint = (s) => '\x1b[?2026h\x1b[1;1H' + s + '\x1b[?2026l';
+  for (const [prefix, reason, hostFrame, success = false] of [
+    [paint('2.2.5 Ask anything') + '\x1b]9998;private\x07', 'UNSUPPORTED_OSC_PAYLOAD', false],
+    [paint('2.2.5 Ask anything') + '\x1b[?2026h', 'INCOMPLETE_UPDATE', false],
+    ['', 'NO_CURRENT_FRAME', false],
+    [paint('2.2.5 Ask anything'), 'NONE', true],
+    [paint('2.2.5 Ask anything'), 'NONE', true, true],
+  ]) {
+    let phase = 'integrated-transport-outcomes',
+      now = 0,
+      keys = 0,
+      fresh = 0;
+    const journal = compositionGuardJournal();
+    const observation = compositionReadinessObservation(prefix, true);
+    const state = {
+      ...admission(),
+      ...observation,
+      response: null,
+      provenance: { prefixSha256: createHash('sha256').update(prefix).digest('hex') },
+    };
+    if (success) {
+      state.request = { ...state.request, frame: observation.frame };
+      state.response = admission().response;
+    }
+    const result = runInNewContext(`(async () => { ${route} })()`, {
+      progress: async (next) => {
+        phase = next;
+      },
+      keys: { ctrlE: 0 },
+      child: { stdin: { write: () => keys++ } },
+      admitReady: (onAdmit) =>
+        awaitCompositionKeyAdmission({
+          observe: async () => state,
+          requestFresh: (s, snapshot) => {
+            if (compositionCanRequestFresh(s, snapshot)) fresh++;
+          },
+          pause: async () => {
+            now++;
+          },
+          now: () => now,
+          deadline: 2,
+          record: (stage, value) => journal.record(stage, value),
+          onAdmit,
+        }),
+    });
+    if (success) await result;
+    else await assert.rejects(result, { code: 'READINESS_DEADLINE' });
+    assert.equal(phase, 'rendered-host-and-product-registration');
+    assert.equal(keys, success ? 1 : 0);
+    const last = journal.value().records.at(-1);
+    assert.equal(last.decoder.reason, reason);
+    assert.equal(last.checks.hostFrameSeen, hostFrame);
+    assert.equal(fresh > 0, hostFrame && !success);
+    assert.equal(last.originalRemainingMs, success ? 2 : 1);
+    assert.equal(last.decoder.operation, null, 'unknown OSC operation never retained');
+    assert.equal(JSON.stringify(last).includes('private'), false);
+  }
+  for (const operation of [12, 66, 7501])
+    assert.equal(compositionDecoderDiagnostic({ operation }).operation, operation);
+  for (const operation of [
+    -1,
+    9998,
+    '12',
+    Infinity,
+    {
+      toString() {
+        throw Error('unsafe');
+      },
+    },
+  ])
+    assert.equal(compositionDecoderDiagnostic({ operation }).operation, null);
+  let read = false;
+  const unsafe = Object.defineProperty({}, 'reason', {
+    get() {
+      read = true;
+      throw Error('raw');
+    },
+  });
+  assert.equal(compositionDecoderDiagnostic(unsafe).reason, 'UNKNOWN');
+  assert.equal(read, false);
+  assert.equal(
+    compositionDecoderDiagnostic({ reason: 'raw secret', byteOffset: 1048577 }).byteOffset,
+    null,
+  );
+  assert.equal(compositionDecoderDiagnostic({ byteOffset: 1048576 }).byteOffset, 1048576);
+  const refused = compositionSourceFrame(paint('A') + '\x1b]66;bad\x07');
+  assert.equal(refused.frames, 1);
+  assert.equal(refused.byteOffset, Buffer.byteLength(paint('A')));
 });
 
 test('failure and cleanup preserve exact last-loop operands and closed provenance, not current activation', () => {
@@ -927,10 +1030,11 @@ test('actual wrapper fences selector observations at Cleanup entry before awaiti
       'const { writeFile } = globalThis.__compositionFixtureTEST;',
     )
     .replace(
-      /import \{ readFileSync, writeFileSync \}[^;]+;/,
+      /import \{ readFileSync, writeFileSync, appendFileSync \}[^;]+;/,
       'const { readFileSync, writeFileSync, setInterval, clearInterval } = globalThis.__compositionFixtureTEST;',
     )
     .replace(/import \{ randomUUID \}[^;]+;/, "const randomUUID = () => 'generation1';")
+    .replaceAll('/payload/tests/support/', new URL('support/', import.meta.url).href)
     .replace(
       "'/payload/tests/support/harness-composition-readiness.mjs'",
       JSON.stringify(new URL('support/harness-composition-readiness.mjs', import.meta.url).href),
@@ -998,6 +1102,7 @@ test('actual wrapper fences selector observations at Cleanup entry before awaiti
     write(requestPath, JSON.stringify({ ...binding, request: 2 }));
     tick();
     assert.equal(JSON.parse(files.get(responsePath)).request, 1);
+    for (let i = 0; i < 20 && !finish; i++) await Promise.resolve();
     finish();
     await pending;
   } finally {

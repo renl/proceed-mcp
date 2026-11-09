@@ -586,20 +586,52 @@ test('product collector reuses bounded complete traversal, refuses metadata race
       )
         f.nodes.delete(path);
     f.nodes.set(metadataRoots.evidence + '/composition-observations.json', { size: 5n });
+    let stage;
     const run = collectProductCapture(
       metadataRoots,
       [{ bytes: Buffer.from('raw') }],
       ['a'.repeat(64), 'b'.repeat(64)],
       fault === 'deadline' ? 0 : Date.now() + 5000,
       f.io,
+      (next) => {
+        stage = next;
+      },
     );
     if (fault === 'none') {
       const entries = await run;
       assert.equal(entries.length, f.nodes.size - 2);
       assert.ok(entries.some((e) => e.path.endsWith('/host.log')));
-    } else await assert.rejects(run);
+    } else
+      await assert.rejects(run, (error) => {
+        assert.equal(
+          compositionScanReason(error, stage),
+          fault === 'oversize'
+            ? 'FILE_BOUNDS'
+            : fault === 'race'
+              ? 'PRIVATE_FILE'
+              : 'FILE_INVENTORY',
+        );
+        return true;
+      });
     f.descriptorBalance();
     if (fault === 'oversize' || fault === 'deadline') assert.equal(f.reads, 0);
+  }
+});
+
+test('actual product read refuses file/accounting bounds before allocation and retains only the fixed first category', async () => {
+  for (const [size, used, expected] of [
+    [16777217n, 0, 'FILE_BOUNDS'],
+    [1n, Number(collectionLimits.contents), 'ACCOUNTING'],
+  ]) {
+    const f = metadataFixture(undefined, true);
+    const path = metadataRoots.evidence + '/host.log';
+    f.nodes.get(path).size = size;
+    await assert.rejects(productCaptureReadFile({}, path, 'diagnostics', used, f.io), (error) => {
+      assert.equal(compositionScanReason(error, 'PRIVATE_FILE'), expected);
+      return true;
+    });
+    assert.equal(f.reads, 0);
+    f.descriptorBalance();
   }
 });
 
@@ -1898,6 +1930,8 @@ test('closed source refusal preserves byte offsets without returning opaque payl
     reason: 'UNSUPPORTED_OSC_PAYLOAD',
     byteOffset: Buffer.byteLength(prefix),
     operation: 7501,
+    frames: 1,
+    generation: 0,
   });
   assert.doesNotMatch(JSON.stringify(refusal), /private|\u25cf/);
   assert.equal(compositionSourceFrame(null).reason, 'CAPTURE_LIMIT');

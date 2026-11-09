@@ -5,16 +5,99 @@ import { randomUUID } from 'node:crypto';
 export const wrapperCommand = 'proceed-qualification-request';
 export const qualificationLabel = 'Equal qualification label';
 
+// Fixture-owned producer lifetime. Abort is a request, not settlement evidence.
+// Uncooperative public calls remain tracked and make complete sealing impossible.
+export function captureProducerLifetime(deadline, now = Date.now) {
+  const controller = new AbortController();
+  const active = new Set();
+  let accepting = true,
+    fenced = false;
+  const refusal = () =>
+    Object.assign(Error('capture producer unsettled'), { code: 'PRODUCER_UNSETTLED' });
+  const abort = () => {
+    accepting = false;
+    controller.abort();
+  };
+  const expire = () => {
+    abort();
+    fenced = true;
+  };
+  const timer = setTimeout(expire, Math.max(0, deadline - now()));
+  const writable = () => {
+    if (fenced || now() >= deadline) {
+      expire();
+      throw refusal();
+    }
+  };
+  const bounded = async (work) => {
+    writable();
+    let timeout;
+    try {
+      return await Promise.race([
+        work,
+        new Promise((_, reject) => {
+          timeout = setTimeout(
+            () => {
+              expire();
+              reject(refusal());
+            },
+            Math.max(0, deadline - now()),
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+  return {
+    signal: controller.signal,
+    writable,
+    abort,
+    run(work) {
+      writable();
+      if (!accepting) throw refusal();
+      const task = Promise.resolve().then(() => {
+        controller.signal.throwIfAborted();
+        return work(controller.signal);
+      });
+      active.add(task);
+      task.then(
+        () => active.delete(task),
+        () => active.delete(task),
+      );
+      return task;
+    },
+    async close(finish = async () => {}) {
+      abort();
+      try {
+        await bounded(Promise.allSettled([...active]));
+        await bounded(
+          Promise.resolve().then(() => {
+            writable();
+            return finish();
+          }),
+        );
+        writable();
+      } finally {
+        fenced = true;
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
 // Ordinary TUI/client test plane. No operator credential, private dialog getter
 // or answer callback is exposed. Every invocation uses the public registered
 // command and rereads the host-selected agent in invokeRegisteredProceed.
 export async function compositionHostAction(context, request, signal, record = async () => {}) {
+  signal.throwIfAborted();
   const unwrap = (v) => {
     assert.equal(v?.error, undefined, 'ordinary public API refused');
     return v?.data ?? v;
   };
   const captureFailures = new WeakSet();
   const persist = async (event) => {
+    signal.throwIfAborted();
     try {
       await record(event);
     } catch {
@@ -22,12 +105,15 @@ export async function compositionHostAction(context, request, signal, record = a
       captureFailures.add(failure);
       throw failure;
     }
+    signal.throwIfAborted();
   };
   const publicCall = async (operation, work) => {
     let value;
     try {
+      signal.throwIfAborted();
       value = await work();
     } catch (error) {
+      signal.throwIfAborted();
       await persist({
         kind: 'ordinary-api',
         operation,
@@ -35,6 +121,7 @@ export async function compositionHostAction(context, request, signal, record = a
       });
       throw error;
     }
+    signal.throwIfAborted();
     await persist({ kind: 'ordinary-api', operation, value });
     return unwrap(value);
   };
@@ -114,7 +201,9 @@ export async function compositionHostAction(context, request, signal, record = a
   const product = inventory.find((i) => i.id === 'proceed.harness');
   // Product has no server RPC. Runtime inventory is the positive surface check,
   // not a guessed RPC refusal alone. Record its complete observed inventory.
+  signal.throwIfAborted();
   await record({ kind: 'service-inventory', value: inventory });
+  signal.throwIfAborted();
   assert.ok(inventory.some((i) => i.source?.type === 'local'));
   assert.ok(product, 'actual product must appear in the service inventory');
   assert.notEqual(product.features?.rpc, true);
@@ -151,14 +240,17 @@ export async function invokeRegisteredProceed(context, invocation, signal, recor
   assert.equal(invocation.prompt.text, '');
   signal.throwIfAborted();
   const session = await context.session.get({ sessionID: invocation.sessionID });
+  signal.throwIfAborted();
   assert.equal(session.id, invocation.sessionID);
   assert.ok(
     session.agent,
     'GAP: host session has no selected agent. Select one through the public host interface, never fabricate one',
   );
   const agent = await context.agent.get({ agentID: session.agent });
+  signal.throwIfAborted();
   assert.equal(agent.data.id, session.agent);
   const tools = await context.tool.list();
+  signal.throwIfAborted();
   const find = (name) => {
     const found = tools.filter((t) => t.name === name && t.options?.namespace === 'proceed');
     assert.equal(found.length, 1, `expected one registered proceed/${name}`);
@@ -176,6 +268,7 @@ export async function invokeRegisteredProceed(context, invocation, signal, recor
       coreCallID,
       identity: 'synthetic-not-assistant',
     });
+    signal.throwIfAborted();
     // Unmodified registered executor retains its own permission.assert. There is
     // deliberately no permission hook, MCP client call, _meta or route injection.
     const value = await tool.execute(input, {
@@ -189,6 +282,7 @@ export async function invokeRegisteredProceed(context, invocation, signal, recor
     signal.throwIfAborted();
     // Private callback capture is Tool.Result, not JSON-RPC or HTTP command output.
     await record({ phase: `${phase}-returned`, sessionID: session.id, coreCallID, value });
+    signal.throwIfAborted();
     return value.output;
   };
   const prepared = await call(prepare, { session_label: qualificationLabel }, 'prepare');

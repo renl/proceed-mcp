@@ -5,7 +5,10 @@ import product from '@meshimize/proceed-mcp/tui';
 import { writeFile } from 'node:fs/promises';
 import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { compositionHostAction } from '/payload/tests/support/harness-wrapper-invocation.mjs';
+import {
+  compositionHostAction,
+  captureProducerLifetime,
+} from '/payload/tests/support/harness-wrapper-invocation.mjs';
 import { privateCaptureWriter } from '/payload/tests/support/harness-transparent-capture.mjs';
 import {
   collectionAdmit,
@@ -28,6 +31,8 @@ export default Plugin.define({
       navigationOnly = false,
       integratedScenario = false,
     } = JSON.parse(readFileSync(root + 'composition-binding.json', 'utf8'));
+    const producerDeadline = Date.now() + (integratedScenario ? 150000 : 60000);
+    const producers = captureProducerLifetime(producerDeadline);
     const snapshot = () =>
       context.data.session.list().map((s, n) => ({
         id: s.id,
@@ -40,18 +45,19 @@ export default Plugin.define({
       timer;
     let actionSequence = 0;
     const actions = new Set();
-    const actionTasks = new Set();
     const privateRoot = '/run/proceed/qualification-private/';
     let publicApiBytes = 0;
     const apiWriter = privateCaptureWriter();
     let serviceInventoryWritten = false;
     if (integratedScenario)
       writeFileSync(privateRoot + 'composition-public-api.jsonl', '', { flag: 'wx', mode: 0o600 });
-    const actionResult = (request, value) =>
+    const actionResult = (request, value) => {
+      producers.writable();
       writeFileSync(
         privateRoot + `composition-action-result-${request.request}.json`,
         JSON.stringify({ run, generation, request: request.request, ...value }),
       );
+    };
     const lifetime = () => ({
       run,
       generation,
@@ -120,10 +126,15 @@ export default Plugin.define({
       // decision, or product hook. Requests are written after a completed frame.
       phase = 'public-command-eligibility';
       let last;
-      const deadline = Date.now() + (integratedScenario ? 150000 : 60000);
+      const deadline = Math.min(
+        producerDeadline,
+        Date.now() + (integratedScenario ? 150000 : 60000),
+      );
       timer = setInterval(() => {
         if (!live || Date.now() >= deadline) {
           clearInterval(timer);
+          producers.abort();
+          for (const c of actions) c.abort();
           return;
         }
         try {
@@ -153,46 +164,51 @@ export default Plugin.define({
                 const controller = new AbortController();
                 actions.add(controller);
                 actionResult(action, { state: 'STARTED' });
-                const task = compositionHostAction(
-                  context,
-                  action,
-                  controller.signal,
-                  async (event) => {
-                    if (event.kind === 'service-inventory') {
-                      writeFileSync(
-                        privateRoot + 'composition-service-inventory.json',
-                        JSON.stringify(event.value),
-                      );
-                      serviceInventoryWritten = true;
-                    } else {
-                      const line = JSON.stringify(event) + '\n';
-                      publicApiBytes += Buffer.byteLength(line);
-                      try {
-                        collectionAdmit(publicApiBytes, collectionLimits.file);
-                        appendFileSync(privateRoot + 'composition-public-api.jsonl', line, {
-                          mode: 0o600,
-                        });
-                        apiWriter.written(Buffer.from(line));
-                      } catch (error) {
-                        apiWriter.failed();
-                        throw error;
+                const task = producers.run((signal) =>
+                  compositionHostAction(
+                    context,
+                    action,
+                    AbortSignal.any([signal, controller.signal]),
+                    async (event) => {
+                      producers.writable();
+                      if (event.kind === 'service-inventory') {
+                        writeFileSync(
+                          privateRoot + 'composition-service-inventory.json',
+                          JSON.stringify(event.value),
+                        );
+                        serviceInventoryWritten = true;
+                      } else {
+                        const line = JSON.stringify(event) + '\n';
+                        publicApiBytes += Buffer.byteLength(line);
+                        try {
+                          collectionAdmit(publicApiBytes, collectionLimits.file);
+                          appendFileSync(privateRoot + 'composition-public-api.jsonl', line, {
+                            mode: 0o600,
+                          });
+                          apiWriter.written(Buffer.from(line));
+                        } catch (error) {
+                          apiWriter.failed();
+                          throw error;
+                        }
                       }
-                    }
-                  },
-                )
-                  .then(
-                    (value) =>
-                      actionResult(action, {
-                        state: 'COMPLETE',
-                        ...(action.kind === 'switch-foreground' ? value : {}),
-                      }),
-                    () => actionResult(action, { state: 'FAILED', error: 'PUBLIC_ACTION_REFUSED' }),
+                    },
                   )
-                  .finally(() => {
-                    actions.delete(controller);
-                    actionTasks.delete(task);
-                  });
-                actionTasks.add(task);
+                    .then(
+                      (value) =>
+                        actionResult(action, {
+                          state: 'COMPLETE',
+                          ...(action.kind === 'switch-foreground' ? value : {}),
+                        }),
+                      () =>
+                        actionResult(action, { state: 'FAILED', error: 'PUBLIC_ACTION_REFUSED' }),
+                    )
+                    .finally(() => {
+                      actions.delete(controller);
+                    }),
+                );
+                task.catch(() => {
+                  apiWriter.failed();
+                });
               }
             }
           }
@@ -238,15 +254,18 @@ export default Plugin.define({
         live = false;
         context.renderer?.off('resize', resized);
         clearInterval(timer);
-        for (const c of actions) c.abort();
-        await Promise.allSettled([...actionTasks]);
-        if (integratedScenario)
-          writeFileSync(
-            privateRoot + 'composition-api-seal.json',
-            JSON.stringify({ api: apiWriter.seal(), actionSequence, serviceInventoryWritten }),
-            { flag: 'wx', mode: 0o600 },
-          );
         publish();
+        for (const c of actions) c.abort();
+        await producers.close(async () => {
+          if (integratedScenario) {
+            producers.writable();
+            writeFileSync(
+              privateRoot + 'composition-api-seal.json',
+              JSON.stringify({ api: apiWriter.seal(), actionSequence, serviceInventoryWritten }),
+              { flag: 'wx', mode: 0o600 },
+            );
+          }
+        });
         const entry = Math.floor(performance.now() - cleanupOrigin);
         writeFileSync(
           root + 'composition-cleanup-entry.json',
@@ -279,6 +298,10 @@ export default Plugin.define({
       live = false;
       context.renderer?.off('resize', resized);
       clearInterval(timer);
+      for (const c of actions) c.abort();
+      await producers.close().catch(() => {
+        apiWriter.failed();
+      });
       publish();
       await writeFile(
         '/run/proceed/evidence/composition-fixture-failure.json',

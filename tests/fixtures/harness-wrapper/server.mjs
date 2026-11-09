@@ -5,6 +5,7 @@ import { privateCaptureWriter } from '/payload/tests/support/harness-transparent
 import {
   invokeRegisteredProceed,
   wrapperCommand,
+  captureProducerLifetime,
 } from '/payload/tests/support/harness-wrapper-invocation.mjs';
 
 export default Plugin.define({
@@ -14,14 +15,16 @@ export default Plugin.define({
     // A separate private capture, never the publishable evidence/diagnostic log.
     // It contains synthetic request capabilities, but no operator-key access.
     const file = await open('/run/proceed/qualification-private/wrapper.jsonl', 'wx', 0o600);
-    const controller = new AbortController();
-    const active = new Set();
+    const producers = captureProducerLifetime(Date.now() + 150000);
     const writer = privateCaptureWriter();
     let writes = Promise.resolve();
     const record = (event) => {
+      producers.writable();
       const pending = writes.then(async () => {
+        producers.writable();
         const bytes = Buffer.from(`${JSON.stringify(event)}\n`);
         await file.writeFile(bytes);
+        producers.writable();
         writer.written(bytes);
       });
       writes = pending.catch(() => writer.failed());
@@ -34,42 +37,37 @@ export default Plugin.define({
           name: wrapperCommand,
           description: 'Test-only registered Proceed invocation. No decision argument.',
           async execute(invocation) {
-            const task = invokeRegisteredProceed(context, invocation, controller.signal, record);
-            active.add(task);
-            try {
-              await task;
-            } finally {
-              active.delete(task);
-            }
+            await producers.run((signal) =>
+              invokeRegisteredProceed(context, invocation, signal, record),
+            );
           },
         }),
       );
     } catch (error) {
-      controller.abort();
-      await file.close();
-      await writeFile(
-        '/run/proceed/qualification-private/wrapper-seal.json',
-        JSON.stringify(writer.seal()),
-        { flag: 'wx', mode: 0o600 },
-      );
+      await producers.close(async () => {
+        await writes;
+        await file.close();
+        producers.writable();
+        await writeFile(
+          '/run/proceed/qualification-private/wrapper-seal.json',
+          JSON.stringify(writer.seal()),
+          { flag: 'wx', mode: 0o600 },
+        );
+      });
       throw error;
     }
-    const timer = setTimeout(
-      () => controller.abort(new Error('Qualification invocation deadline')),
-      150000,
-    );
     return async () => {
-      controller.abort();
-      clearTimeout(timer);
-      await registration.dispose();
-      await Promise.allSettled([...active]);
-      await writes;
-      await file.close();
-      await writeFile(
-        '/run/proceed/qualification-private/wrapper-seal.json',
-        JSON.stringify(writer.seal()),
-        { flag: 'wx', mode: 0o600 },
-      );
+      await producers.close(async () => {
+        await registration.dispose();
+        await writes;
+        await file.close();
+        producers.writable();
+        await writeFile(
+          '/run/proceed/qualification-private/wrapper-seal.json',
+          JSON.stringify(writer.seal()),
+          { flag: 'wx', mode: 0o600 },
+        );
+      });
     };
   },
 });
