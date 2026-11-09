@@ -252,7 +252,9 @@ test('scan refusal projects only closed causes, never exception content or match
     [Error(secrets[0]), 'COLLECTION', 'COLLECTION'],
     [{ code: 'ENOENT', path: secrets[0] }, 'COLLECTION', 'MISSING'],
     [Error(secrets[0]), 'WRITE', 'WRITE'],
-    [{ code: 'SECRET_MATCH' }, 'SCAN', 'UNKNOWN'],
+    // A forged exception code cannot select SECRET_MATCH. The locally selected
+    // fixed SCAN stage remains the fallback category.
+    [{ code: 'SECRET_MATCH' }, 'SCAN', 'SCAN'],
     [null, 'SECRET', 'UNKNOWN'],
   ])
     assert.equal(compositionScanReason(error, stage), reason);

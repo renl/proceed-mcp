@@ -258,7 +258,13 @@ export default Plugin.define({
             producers.writable();
             writeFileSync(
               privateRoot + 'composition-api-seal.json',
-              JSON.stringify({ api: apiWriter.seal(), actionSequence, serviceInventoryWritten }),
+              JSON.stringify({
+                run,
+                generation,
+                api: apiWriter.seal(),
+                actionSequence,
+                serviceInventoryWritten,
+              }),
               { flag: 'wx', mode: 0o600 },
             );
           }

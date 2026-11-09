@@ -209,6 +209,13 @@ export function scanIntegratedPrivateCaptures(
       );
     }
     inspect(callback, [], allowed);
+    stage('CORRELATION');
+    assert.ok(
+      ['prepare-started', 'prepare-returned', 'wait-started', 'wait-returned'].includes(
+        callback.phase,
+      ),
+    );
+    assert.ok(typeof callback.sessionID === 'string' && callback.sessionID.length > 0);
   }
   if (scenarioSuccess) {
     stage('CORRELATION');
@@ -227,6 +234,72 @@ export function scanIntegratedPrivateCaptures(
     hashes: inputs.map(digest),
     scope: 'Raw private protocol capture only. No raw export.',
   };
+}
+
+// Only locally selected fixed enums reach the closed diagnostic. Receipt bodies,
+// source names and assertion operands remain private even when admission fails.
+export function privateReceiptProducer(name) {
+  return name === 'mcp-seal.json'
+    ? 'MCP'
+    : name === 'wrapper-seal.json'
+      ? 'WRAPPER'
+      : name === 'composition-api-seal.json'
+        ? 'PUBLIC_API'
+        : null;
+}
+
+export function readIntegratedPrivateInventory(
+  captures,
+  stage = () => {},
+  receiptStep = () => {},
+  expected,
+) {
+  stage('SEAL_RECEIPT');
+  const seals = {};
+  for (const [producer, key, name] of [
+    ['MCP', 'mcp', 'mcp-seal.json'],
+    ['WRAPPER', 'callbacks', 'wrapper-seal.json'],
+    ['PUBLIC_API', 'api', 'composition-api-seal.json'],
+  ]) {
+    receiptStep({ producer, check: 'READ' });
+    const bytes = captures.get(name);
+    if (!Buffer.isBuffer(bytes)) {
+      receiptStep({ producer, check: 'UNAVAILABLE' });
+      assert.fail('private receipt unavailable');
+    }
+    receiptStep({ producer, check: 'JSON' });
+    seals[key] = JSON.parse(bytes.toString('utf8'));
+    // Validate each producer immediately, preserving the first actual failure.
+    const receipt = key === 'api' ? seals[key]?.api : seals[key];
+    assertPrivateCaptureReceipt(
+      captures.get(
+        key === 'mcp'
+          ? 'mcp.jsonl'
+          : key === 'callbacks'
+            ? 'wrapper.jsonl'
+            : 'composition-public-api.jsonl',
+      ),
+      receipt,
+      (check) => receiptStep({ producer, check }),
+    );
+  }
+  receiptStep({ producer: 'PUBLIC_API', check: 'CORRELATION' });
+  assert.ok(expected && typeof expected.run === 'string' && expected.run.length > 0);
+  assert.ok(typeof expected.generation === 'string' && expected.generation.length > 0);
+  assert.equal(seals.api.run, expected.run);
+  assert.equal(seals.api.generation, expected.generation);
+  for (const [name, bytes] of captures) {
+    const match = /^composition-action(?:-result)?-(\d+)\.json$/.exec(name);
+    if (!match) continue;
+    const action = JSON.parse(bytes.toString('utf8'));
+    assert.equal(action.run, expected.run);
+    assert.equal(action.generation, expected.generation);
+    assert.equal(action.request, Number(match[1]));
+    assert.ok(action.request >= 1 && action.request <= seals.api.actionSequence);
+    if (name.startsWith('composition-action-result-'))
+      assert.ok(['COMPLETE', 'FAILED'].includes(action.state), 'processed action not settled');
+  }
+  return admitIntegratedPrivateInventory(captures, seals, stage);
 }
 
 export function admitIntegratedPrivateInventory(captures, seals, stage = () => {}) {
@@ -901,6 +974,10 @@ export function safeCompositionDiagnostic(input) {
     productCleanup: choice(get('productCleanup'), ['OBSERVED', 'UNRUN']),
     hostExit: choice(get('hostExit'), ['PASS', 'UNRUN']),
     rawScan: choice(get('rawScan'), ['PASS', 'REFUSED', 'UNRUN']),
+    sealRefusal:
+      get('rawScan') === 'REFUSED' && get('scanReason') === 'SEAL_RECEIPT'
+        ? safeSealRefusal(get('sealRefusal'))
+        : null,
     scanReason:
       get('rawScan') === 'REFUSED'
         ? choice(get('scanReason'), scanReasons, 'UNKNOWN')
@@ -912,4 +989,33 @@ export function safeCompositionDiagnostic(input) {
     hostLoadingInventory: 'UNRUN_WITHOUT_SCANNED_OBSERVATIONS',
     elapsed: count(get('elapsed')),
   };
+}
+
+export function safeSealRefusal(value) {
+  try {
+    if (!value || typeof value !== 'object') return null;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Reflect.ownKeys(descriptors).length !== 2) return null;
+    if (!['producer', 'check'].every((key) => Object.hasOwn(descriptors[key] ?? {}, 'value')))
+      return null;
+    const producer = descriptors.producer.value;
+    const check = descriptors.check.value;
+    if (!['MCP', 'WRAPPER', 'PUBLIC_API'].includes(producer)) return null;
+    if (
+      ![
+        'READ',
+        'JSON',
+        'SCHEMA',
+        'COMPLETE',
+        'LENGTH',
+        'HASH',
+        'CORRELATION',
+        'UNAVAILABLE',
+      ].includes(check)
+    )
+      return null;
+    return { producer, check };
+  } catch {
+    return null;
+  }
 }

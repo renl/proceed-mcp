@@ -7,6 +7,7 @@ import {
   bridgeCapturedMcp,
   privateCaptureWriter,
 } from '/payload/tests/support/harness-transparent-capture.mjs';
+import { captureProducerLifetime } from '/payload/tests/support/harness-wrapper-invocation.mjs';
 
 assert.equal(process.platform, 'linux');
 assert.equal(process.version, 'v24.22.2');
@@ -18,6 +19,7 @@ assert.ok(!state.split('/').includes('..'));
 const file = await open('/run/proceed/qualification-private/mcp.jsonl', 'wx', 0o600);
 const controller = new AbortController();
 const writer = privateCaptureWriter(4 * 1048576);
+const capture = captureProducerLifetime(Date.now() + 150000);
 let writes = Promise.resolve();
 let child,
   bridge,
@@ -74,7 +76,9 @@ try {
         throw Error('private capture envelope ceiling');
       }
       const pending = writes.then(async () => {
+        capture.writable();
         await file.writeFile(line);
+        capture.writable();
         writer.written(Buffer.from(line));
       });
       writes = pending.catch(() => writer.failed());
@@ -102,7 +106,6 @@ try {
     ),
   );
   const code = await Promise.race([close, aborted]);
-  await Promise.allSettled([bridge]);
   assert.equal(code, 0);
   assert.equal(stderrBytes, 0);
 } finally {
@@ -127,15 +130,21 @@ try {
       });
     });
   }
-  await Promise.allSettled([bridge]);
-  await writes;
-  await file.close();
-  if (closed && stderrBytes === 0)
-    await writeFile(
-      '/run/proceed/qualification-private/mcp-seal.json',
-      JSON.stringify(writer.seal()),
-      { flag: 'wx', mode: 0o600 },
-    );
-  await rm('/run/proceed/qualification-private/mcp-armed.json', { force: true });
+  try {
+    await capture.close(async () => {
+      await Promise.allSettled([bridge]);
+      await writes;
+      await file.close();
+      capture.writable();
+      if (closed && stderrBytes === 0)
+        await writeFile(
+          '/run/proceed/qualification-private/mcp-seal.json',
+          JSON.stringify(writer.seal()),
+          { flag: 'wx', mode: 0o600 },
+        );
+    });
+  } finally {
+    await rm('/run/proceed/qualification-private/mcp-armed.json', { force: true });
+  }
   assert.ok(!child || closed, 'adapter cleanup unconfirmed');
 }

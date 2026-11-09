@@ -37,7 +37,8 @@ import {
   productCaptureLogs,
   productCaptureReadFile,
   scanIntegratedPrivateCaptures,
-  admitIntegratedPrivateInventory,
+  readIntegratedPrivateInventory,
+  privateReceiptProducer,
 } from './harness-composition-retention.mjs';
 import { digest, collectionAdmit, collectionLimits } from './harness-renderer-observation.mjs';
 import {
@@ -543,6 +544,7 @@ let errorCode,
   renderEvidence,
   scanStatus = 'UNRUN';
 let scanReason = 'UNRUN';
+let sealRefusal = null;
 let productCleanup = 'UNRUN',
   hostExit = 'UNRUN';
 let commandEligibility = 'UNRUN';
@@ -1520,20 +1522,32 @@ try {
                   .sort();
                 for (const name of names) {
                   collectionStage('PRIVATE_FILE');
-                  const bytes = await productCaptureReadFile({}, root + name, 'api', total);
+                  const producer = privateReceiptProducer(name);
+                  if (producer) {
+                    collectionStage('SEAL_RECEIPT');
+                    sealRefusal = { producer, check: 'READ' };
+                  }
+                  let bytes;
+                  try {
+                    bytes = await productCaptureReadFile({}, root + name, 'api', total);
+                  } catch (error) {
+                    // Keep receipt IO in its fixed outer category. Never retain
+                    // filesystem exception fields or private read operands.
+                    if (producer) throw Error('private receipt read refused');
+                    throw error;
+                  }
                   total += bytes.length;
                   captures.set(name, bytes);
                   privateInputs.push({ bytes });
                 }
                 collectionStage('SEAL_RECEIPT');
-                const receipts = admitIntegratedPrivateInventory(
+                const receipts = readIntegratedPrivateInventory(
                   captures,
-                  {
-                    mcp: JSON.parse(captures.get('mcp-seal.json').toString()),
-                    callbacks: JSON.parse(captures.get('wrapper-seal.json').toString()),
-                    api: JSON.parse(captures.get('composition-api-seal.json').toString()),
-                  },
                   collectionStage,
+                  (step) => {
+                    sealRefusal = step;
+                  },
+                  { run, generation: binding.generation },
                 );
                 privateCaptureScan = scanIntegratedPrivateCaptures(
                   {
@@ -1835,6 +1849,7 @@ await persistCompositionDiagnostic(diagnosticIO, {
   hostExit,
   rawScan: scanStatus,
   scanReason,
+  sealRefusal,
   elapsed: Date.now() - started,
 });
 process.exitCode = failure ? 1 : 0;

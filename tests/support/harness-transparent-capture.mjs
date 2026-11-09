@@ -33,11 +33,21 @@ export function privateCaptureWriter(maxBytes = 16 * 1048576) {
   };
 }
 
-export function assertPrivateCaptureReceipt(bytes, receipt) {
+export function assertPrivateCaptureReceipt(bytes, receipt, step = () => {}) {
+  step('SCHEMA');
   assert.ok(Buffer.isBuffer(bytes));
+  assert.ok(receipt && typeof receipt === 'object');
   assert.deepEqual(Object.keys(receipt).sort(), ['bytes', 'complete', 'sha256']);
+  for (const key of ['bytes', 'complete', 'sha256'])
+    assert.ok(Object.hasOwn(Object.getOwnPropertyDescriptor(receipt, key), 'value'));
+  assert.equal(typeof receipt.complete, 'boolean');
+  assert.ok(Number.isSafeInteger(receipt.bytes) && receipt.bytes >= 0);
+  assert.match(receipt.sha256, /^[a-f0-9]{64}$/);
+  step('COMPLETE');
   assert.equal(receipt.complete, true, 'private writer incomplete');
+  step('LENGTH');
   assert.equal(receipt.bytes, bytes.length, 'private writer byte coverage');
+  step('HASH');
   assert.equal(receipt.sha256, createHash('sha256').update(bytes).digest('hex'));
 }
 

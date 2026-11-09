@@ -996,12 +996,16 @@ test('integrated private capture scans decoded original fields before summary an
     const body = JSON.parse(Buffer.from(changed[0].base64, 'base64').toString());
     body.params.extra = ordinary;
     changed[0].base64 = Buffer.from(JSON.stringify(body) + '\n').toString('base64');
+    const ordinaryCallbacks = structuredClone(records);
+    // Harmless payload keys do not fabricate a callback outside the real
+    // producer's phase/session lifecycle.
+    ordinaryCallbacks[0].extra = ordinary;
     assert.equal(
       scanIntegratedPrivateCaptures(
         privateInput({
           ...input,
           mcp: encode(changed),
-          callbacks: Buffer.concat([input.callbacks, Buffer.from(JSON.stringify(ordinary) + '\n')]),
+          callbacks: encode(ordinaryCallbacks),
           other: [Buffer.from(JSON.stringify(ordinary))],
         }),
         secrets,
