@@ -94,6 +94,13 @@ async function fixture(t) {
       layer: (factory) => {
         commands = factory().commands;
       },
+      // Memory model of the pinned public dispatch signature. No keyboard event
+      // is supplied. The actual registered product callback remains unmodified.
+      dispatch: (id, input) => {
+        const command = commands.find((c) => c.id === id);
+        assert.ok(command, 'attack must reach a registered product command');
+        tasks.push(Promise.resolve(command.run(input)));
+      },
     },
     data: {
       session: {
@@ -158,6 +165,7 @@ async function fixture(t) {
     cleanup,
     renderer,
     open,
+    dispatch: context.keymap.dispatch,
     tasks,
     presentation,
     holdDecisions: () => {
@@ -165,6 +173,42 @@ async function fixture(t) {
     },
   };
 }
+
+test('W4 disputed criterion: forged programmatic open preserves the same complete question', async (t) => {
+  // tasks.md W4/I4 and exerciseRenderedProduct require the current question after
+  // EVERY attack, without reopening. Design section 2 simultaneously permits
+  // another open command to replace/fence it. Keep the discrepancy executable
+  // pending contract-owner clarification. RED here is NOT a production verdict.
+  const f = await fixture(t);
+  const current = await f.question();
+  const before = f.calls.length;
+  f.dispatch(
+    'proceed.harness.open',
+    JSON.stringify({
+      choice: 'approve',
+      request_id: f.presentation.request_id,
+      presentation_id: f.presentation.presentation_id,
+      human: true,
+    }),
+  );
+  await flush();
+  const afterAttack = f.dialogs.at(-1);
+  const sameQuestion = afterAttack === current;
+  // Consolidate safety observations before the disputed assertion. Explicitly
+  // dismiss the successor and complete the OLD question late. Neither may decide.
+  if (!sameQuestion) {
+    afterAttack.resolve(undefined);
+    current.resolve('approve');
+  }
+  await flush();
+  assert.equal(f.calls.length, before, 'forged command must not query or decide a new binding');
+  assert.equal(f.calls.filter((c) => c.operation === 'decisions').length, 0);
+  assert.equal(
+    sameQuestion,
+    true,
+    'W4/I4 requires the same complete question after programmatic-command, but the registered open callback replaced it with a session picker',
+  );
+});
 
 for (const stage of ['question', 'respond']) {
   test(`${stage}: immutable expiry fences any late answer and successor`, async (t) => {
