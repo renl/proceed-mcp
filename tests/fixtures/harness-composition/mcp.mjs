@@ -2,7 +2,7 @@
 // NOT a broker, decision API, outer assistant pipeline or standalone test launch.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { open, writeFile, rm } from 'node:fs/promises';
+import { open, writeFile, rm, rename } from 'node:fs/promises';
 import {
   bridgeCapturedMcp,
   privateCaptureWriter,
@@ -150,12 +150,6 @@ try {
   await file.close();
   file = undefined;
   writable();
-  await writeFile(
-    '/run/proceed/qualification-private/mcp-seal.json',
-    JSON.stringify(writer.seal()),
-    { flag: 'wx', mode: 0o600 },
-  );
-  writable();
 } catch {
   failed = true;
   writer.failed();
@@ -168,8 +162,27 @@ try {
   if (close) await close.catch(() => {});
   if (bridge) await bridge.catch(() => {});
   await writes.catch(() => {});
-  if (file) await file.close().catch(() => {});
-  await rm('/run/proceed/qualification-private/mcp-armed.json', { force: true });
+  try {
+    if (file) await file.close();
+    await rm('/run/proceed/qualification-private/mcp-armed.json', { force: true });
+    writable();
+    assert.equal(failed, false);
+    // No complete marker exists until every fallible owned cleanup has settled.
+    // A partial/failed write can leave only an inadmissible staging file.
+    await writeFile(
+      '/run/proceed/qualification-private/mcp-seal.pending',
+      JSON.stringify(writer.seal()),
+      { flag: 'wx', mode: 0o600 },
+    );
+    writable();
+    await rename(
+      '/run/proceed/qualification-private/mcp-seal.pending',
+      '/run/proceed/qualification-private/mcp-seal.json',
+    );
+  } catch {
+    failed = true;
+    writer.failed();
+  }
   fenced = true;
   clearTimeout(timer);
   process.stdin.removeListener('end', finish);

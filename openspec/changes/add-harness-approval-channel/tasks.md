@@ -1,5 +1,42 @@
 # Tasks
 
+## MCP-RECEIPT-POST-CLEANUP-ORDER - correction 1
+
+Entry `f60c7b10e466c12149b09138ef32c471d1230138`, executable parent `19d4a6359198765328e53101f137769aa7ef3e53`. Entry index empty, only README/status overlays dirty. Both remain untouched and unselected. Correction counter 1. Finding: the actual MCP producer published a complete receipt before awaiting armed-file removal. A removal rejection escaped its finally body, while collection could still admit the receipt without attesting producer exit status.
+
+Criteria: settle all fallible owned cleanup before publishing complete. Actual removal rejection must yield handled nonzero exit, no complete receipt and refusal through the actual collection/five-transfer consumer. Preserve adapter code 0/no signal/no stderr, bridge/write/file settlement, shared EOF/SIGTERM deadline, original lifetime and unchanged budgets. No fake failure, skipped cleanup, relaxed receipt/exit meaning or old-run re-signing.
+
+The entire maintained MCP owner was inspected. Adapter, bridge, accepted writes and file close precede publication. Finally settles child/bridge/write failure routes, then awaits file cleanup and actual armed-file removal inside a closed catch. Receipt bytes go to private `mcp-seal.pending`, then rename publishes `mcp-seal.json` only after successful write and deadline check. Failed/partial receipt writes cannot create the complete filename. Successful rename consumes the staging file. Failed staging remains private and inadmissible, with no complete marker. After publication only synchronous fence, timer/listener removal and terminal exit remain. No fallible async owned cleanup follows it. No receipt schema or consumer was changed.
+
+Affected correction paths are `tests/fixtures/harness-composition/mcp.mjs`, `tests/harness-mcp-lifecycle.test.mjs` and `tests/harness-early-failure-chain.test.mjs`. Actual-body memory controls cover removal, file close, receipt-write rejection after bytes and rename rejection. Each resolves its owner body with exit 1, no receipt and removed timer/handlers. Actual whole-chain removal failure reaches MCP/UNAVAILABLE, refuses scan, creates no marker and stops the actual transfer consumer before detailed exports. Existing successful zero/partial/normal cases and EOF/SIGTERM draining still pass.
+
+Native selection: `node --test tests/harness-mcp-lifecycle.test.mjs tests/harness-early-failure-chain.test.mjs tests/harness-request-result.test.mjs tests/harness-transport-controls.test.mjs tests/harness-failure-retention.test.mjs`. PASS 75/75, zero failed/skipped/cancelled, exit 0, 9215.44 ms, command bound 30000 ms. First selection was 74/75: the new negative incorrectly asserted that all detailed source files were absent, although controlled progress exists before collection. Corrected the assertion to no marker and actual transfer refusal before detailed exports. No implementation or admission assertion was loosened.
+
+Checks: native controls PASS as static proxy, not real-resource/runtime proof. Selected syntax, scoped Prettier (`--ignore-path .gitignore`), whitespace and telemetry-disabled strict structural validation are required before freeze. Pre-merge focused independent ownership/privacy review remains PENDING, next owner coordination to route review. Review all three corrected paths against entry, plus unchanged fourth lifecycle path `tests/support/harness-transparent-capture.mjs` and the 28-path context below. The existing combined decomposition/boundary review requirement remains. Pre-exposure compiled-host/resource and useful-flow proof UNRUN, verification-owned on separate authorization. Post-deploy not applicable. Deferred historical MCP/READ cause and glyph8059 remain UNKNOWN, coordination-owned until admitted evidence. No runtime, production feature, release, archive, merge, cleanup or publication authority follows.
+
+### Correction 1 current freeze
+
+This table supersedes only earlier static manifests, not failure history. Same SHA-256 ordered `{path,sha256}` algorithm and payload/outer/product membership as the prior lifecycle freeze. Affected tests remain the four sorted paths against `a61dfebda17b9233923c68a2d3b551d8c81cce69`. Cumulative remains 22 sorted test paths against `607a181`. Review order remains the 25-path table under "Complete ordered review records", then early-failure-chain, failure-retention and MCP-lifecycle tests. All 22 cumulative members are covered by the 28-path review union. No production bytes changed. Tasks is pinned by commit, not self-hashed.
+
+| Set              | Members |   Bytes | SHA-256                                                            |
+| ---------------- | ------: | ------: | ------------------------------------------------------------------ |
+| Payload          |      99 | 1313065 | `9d72d678b0495144394972f72385f8457a0fa9733175d7a8271be9308d6ac677` |
+| Outer            |       3 |  139193 | `9ad48be516fbc7c21be3f378d9b396c9b0777330973f8b805cb8ca2fa98d8f8a` |
+| Product          |      59 |  817537 | `044d948090a5d391b93d7bfe13e30374f8738e78da39385d1eb44edce85ccb81` |
+| Affected tests   |       4 |   53727 | `50cf6fd193e8b6a7fe26fa3388350b128aaf94701378b9bdadd3798757cdbc61` |
+| Cumulative tests |      22 |  580953 | `55b3e058f19687b0d211f6f2078c51b158edac39b72b071b4fa3f4ede544b7b7` |
+| Review union     |      28 |  757897 | `6c0832a1dfdc37dbcc592051a16b403bfffa6375eb79a4d6f6e1961b91ac1d1b` |
+
+Current replacements in the prior lifecycle path table:
+
+| Path                                         | SHA-256                                                            |
+| -------------------------------------------- | ------------------------------------------------------------------ |
+| `tests/fixtures/harness-composition/mcp.mjs` | `9fe67fbe1050ad21049847e7ad3815404f3b422b69d1f6c9f03eb9f37ee4e2be` |
+| `tests/harness-early-failure-chain.test.mjs` | `1e94296443d8a2bf0df1ec4ac83f1a4edd510e5c65e048fc63947bb8788d7e2c` |
+| `tests/harness-mcp-lifecycle.test.mjs`       | `7547411b540fbca56f4f85f5e571792dd563d21a8c87fac7ece7e35f4789a796` |
+
+Last landed useful outcome remains startup/skill. Next merge remains the single harness change, blocked on integrated useful-flow/privacy proof and final acceptance. Worktree/branch/change `add-harness-approval-channel`, owner test engineering, retained with cleanup pending verified landing. This narrow static correction is necessary for truthful lifecycle admission, not a new outcome or runtime proposal.
+
 ## Static MCP EOF/SIGTERM lifecycle correction - brief before edits
 
 Entry `a61dfebda17b9233923c68a2d3b551d8c81cce69`. Index empty, only README/status overlays dirty. Preserve both and unknown work. Scope is test-owned MCP producer, transparent bridge stop control and actual-body memory-IO tests. No production, spec, design, archive, dependencies, image or budget changes. Historical MCP/READ operation and glyph8059 remain UNKNOWN. No raw recovery or runtime is authorized.

@@ -161,7 +161,15 @@ async function producers(mode, target = 'MCP') {
         spawn: () => child,
         open,
         writeFile: async (...args) => m.put(...args),
-        rm: async (path) => m.files.delete(path),
+        rm: async (path) => {
+          if (mode === 'remove-failure') throw Error('controlled actual removal failure');
+          m.files.delete(path);
+        },
+        rename: async (from, to) => {
+          assert.equal(m.files.has(root + 'mcp-armed.json'), false);
+          m.put(to, m.get(from), { flag: 'wx' });
+          m.files.delete(from);
+        },
         setTimeout: (fn, delay) => setTimeout(fn, Math.min(delay, 250)),
         clearTimeout,
         ...C,
@@ -642,6 +650,26 @@ test('actual unreached and unsettled producers never become fictional complete c
   assert.equal(result.scanReason, 'SEAL_RECEIPT');
   assert.equal(result.fixtureFailure.code, 'PRODUCER_UNSETTLED');
   assert.equal(m.files.has(evidence + '/scan-pass.json'), false);
+});
+
+test('actual MCP armed-file removal failure refuses the actual consumer and all exports', async () => {
+  const m = await producers('remove-failure');
+  const result = await collect(m);
+  assert.equal(result.scanStatus, 'REFUSED');
+  assert.equal(result.scanReason, 'SEAL_RECEIPT');
+  assert.equal(result.sealRefusal.producer, 'MCP');
+  assert.equal(result.sealRefusal.check, 'UNAVAILABLE');
+  assert.equal(result.fixtureFailure.code, 'PRODUCER_UNSETTLED');
+  assert.equal(m.files.has(root + 'mcp-seal.json'), false);
+  assert.equal(m.files.has(evidence + '/scan-pass.json'), false);
+  const transfers = [];
+  await assert.rejects(
+    R.transferProductCapture(async (name) => {
+      transfers.push(name);
+      return archive(name, m.get(evidence + '/' + name));
+    }),
+  );
+  assert.deepEqual(transfers, ['scan-pass.json'], 'no detailed export is reached');
 });
 
 test('actual producer receipts drive first fixed consumer substep failures, never five-transfer admission', async () => {

@@ -14,7 +14,7 @@ const flush = async () => {
   for (let i = 0; i < 8; i++) await new Promise(setImmediate);
 };
 const root = '/run/proceed/qualification-private/';
-async function fixture({ stalledWrite = false, ignores = false } = {}) {
+async function fixture({ stalledWrite = false, ignores = false, fault } = {}) {
   let now = 0,
     release,
     fileClosed = false,
@@ -74,15 +74,27 @@ async function fixture({ stalledWrite = false, ignores = false } = {}) {
           files.set(path, Buffer.concat([files.get(path), Buffer.from(line)]));
         },
         close: async () => {
+          if (fault === 'close') throw Error('controlled close failure');
           fileClosed = true;
         },
       };
     },
     writeFile: async (path, data) => {
-      if (path.endsWith('seal.json')) assert.equal(fileClosed, true);
+      if (path.endsWith('seal.pending')) assert.equal(fileClosed, true);
       files.set(path, Buffer.from(data));
+      if (fault === 'receipt-write' && path.endsWith('seal.pending'))
+        throw Error('controlled receipt write failure after bytes');
     },
-    rm: async (path) => files.delete(path),
+    rm: async (path) => {
+      if (fault === 'remove') throw Error('controlled removal failure');
+      files.delete(path);
+    },
+    rename: async (from, to) => {
+      assert.equal(files.has(root + 'mcp-armed.json'), false);
+      if (fault === 'publish') throw Error('controlled publication failure');
+      files.set(to, files.get(from));
+      files.delete(from);
+    },
     ...capture,
   });
   body.catch(() => {});
@@ -135,6 +147,20 @@ for (const route of ['EOF', 'SIGTERM']) {
     assert.equal(f.p.stdin.listenerCount('end'), 0);
     assert.equal(f.timers.size, 0);
     capture.assertPrivateCaptureReceipt(f.files.get(root + 'mcp.jsonl'), JSON.parse(f.receipt()));
+  });
+}
+
+for (const fault of ['remove', 'close', 'receipt-write', 'publish']) {
+  test(`actual MCP ${fault} failure settles closed with no complete receipt`, async () => {
+    const f = await fixture({ fault });
+    f.p.stdin.end();
+    await f.adapter();
+    await f.body;
+    assert.deepEqual(f.exits, [1]);
+    assert.equal(f.receipt(), undefined);
+    assert.equal(f.timers.size, 0);
+    assert.equal(f.p.listenerCount('SIGTERM'), 0);
+    assert.equal(f.p.stdin.listenerCount('end'), 0);
   });
 }
 
