@@ -74,9 +74,17 @@ export async function exerciseRenderedProduct(driver, presentation, choice, sess
     assertAttackNonEffect(before, await driver.observe(presentation));
     return;
   }
-  driver.stdin.write(
-    choice === 'reject' ? '\r' : `${choice === 'approve' ? 'Approve' : 'Respond'}\r`,
-  );
+  if (typeof driver.chooseCurrentQuestion === 'function') {
+    // Integrated actual-host adapters own fresh current selection/Enter fences.
+    // A text search or `current` option alone is not selected-role proof.
+    await driver.chooseCurrentQuestion(presentation, choice);
+  } else {
+    // Legacy memory-driver orchestration controls only. Integrated orchestration
+    // requires chooseCurrentQuestion and never takes this synthetic fallback.
+    driver.stdin.write(
+      choice === 'reject' ? '\r' : `${choice === 'approve' ? 'Approve' : 'Respond'}\r`,
+    );
+  }
   if (choice === 'respond') {
     await driver.waitResponsePrompt(presentation);
     driver.stdin.write('approved\r');

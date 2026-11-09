@@ -62,6 +62,7 @@ export function assertOriginalCallRouting(calls, results, expected) {
     const body = matching[0].message.result?.structuredContent;
     assert.ok(body, 'original waiting-call structured result required');
     assert.equal(body.request_id, e.request_id);
+    if (e.decision_id !== undefined) assert.equal(body.decision_id, e.decision_id);
     assert.equal(body.resolution, e.resolution);
     assert.equal(body.response_text, e.response_text);
   }

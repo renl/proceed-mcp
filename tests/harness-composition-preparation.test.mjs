@@ -1170,7 +1170,7 @@ test('actual navigation setup skips all transport listeners and inventories ever
   assert.equal(listeners, 0);
 });
 
-test('actual broker setup capture branch cannot send a pending probe or expose its callable, including failures', async () => {
+test('actual broker setup separates zero-work capture from explicitly scoped scenario completion', async () => {
   const credential = 'hop_' + 'a'.repeat(64); // Synthetic memory-only operand.
   const keyId = createHash('sha256').update(credential).digest('hex');
   let source = await readFile(
@@ -1189,10 +1189,17 @@ test('actual broker setup capture branch cannot send a pending probe or expose i
     .replaceAll('process.platform', "'linux'")
     .replaceAll('process.env.PROCEED_TEST_ISOLATED_PID_NAMESPACE', "'1'")
     .replaceAll('process.geteuid()', '1000');
-  for (const failWork of [false, true]) {
+  for (const { failWork, scenario } of [
+    { failWork: false, scenario: null },
+    { failWork: true, scenario: null },
+    { failWork: false, scenario: 'request-to-originating-result' },
+    { failWork: true, scenario: 'request-to-originating-result' },
+  ]) {
     const requests = [];
     let removed = false,
-      entered = false;
+      entered = false,
+      completion = false;
+    const captureOnly = scenario === null;
     globalThis.__captureSetupTEST = {
       mkdir: async () => {},
       mkdtemp: async (p) => p + 'memory',
@@ -1219,9 +1226,16 @@ test('actual broker setup capture branch cannot send a pending probe or expose i
           cli: async () => keyId,
           http: async (path, key) => {
             requests.push(path);
-            assert.notEqual(path, '/v1/harness/pending');
+            if (captureOnly) assert.notEqual(path, '/v1/harness/pending');
             assert.notEqual(path, '/v1/harness/decisions');
-            if (path === '/v1/status') return { status: 200, json: async () => ({ requests: [] }) };
+            if (path === '/v1/status')
+              return {
+                status: 200,
+                json: async () => ({
+                  requests: entered && scenario ? [{ request_id: 'synthetic-terminal' }] : [],
+                }),
+              };
+            if (path === '/v1/harness/pending') return { status: 401 };
             return key === credential
               ? { status: 202, json: async () => ({ state: 'pending', key_id: keyId }) }
               : { status: 403, json: async () => ({ error: { code: 'FORBIDDEN' } }) };
@@ -1231,20 +1245,56 @@ test('actual broker setup capture branch cannot send a pending probe or expose i
     try {
       const { withQualificationBroker } = await import(
         'data:text/javascript;base64,' +
-          Buffer.from(source + `\n// case ${failWork}`).toString('base64')
+          Buffer.from(source + `\n// case ${failWork} ${scenario}`).toString('base64')
+      );
+      await assert.rejects(withQualificationBroker(async () => {}, { scenario: 'unknown' }));
+      await assert.rejects(
+        withQualificationBroker(async () => {}, {
+          scenario: 'request-to-originating-result',
+          captureOnly: true,
+          verifyCompletion() {},
+        }),
+      );
+      await assert.rejects(
+        withQualificationBroker(async () => {}, {
+          scenario: 'request-to-originating-result',
+        }),
       );
       const run = withQualificationBroker(
         async (h) => {
           entered = true;
-          assert.equal(h.pending, undefined);
+          assert.equal(typeof h.pending, captureOnly ? 'undefined' : 'function');
           if (failWork) throw Error('injected capture failure');
+          return 'scenario-result';
         },
-        { brokerObserver: true, captureOnly: true },
+        {
+          brokerObserver: true,
+          captureOnly,
+          scenario,
+          ...(scenario
+            ? {
+                verifyCompletion(result, status) {
+                  completion = true;
+                  assert.equal(result, 'scenario-result');
+                  assert.deepEqual(status.requests, [{ request_id: 'synthetic-terminal' }]);
+                },
+              }
+            : {}),
+        },
       );
       if (failWork) await assert.rejects(run);
       else await run;
       assert.ok(entered && removed);
-      assert.ok(requests.every((p) => ['/v1/status', '/v1/harness/enrollments'].includes(p)));
+      assert.equal(completion, Boolean(scenario && !failWork));
+      assert.ok(
+        requests.every((p) =>
+          [
+            '/v1/status',
+            '/v1/harness/enrollments',
+            ...(scenario ? ['/v1/harness/pending'] : []),
+          ].includes(p),
+        ),
+      );
     } finally {
       delete globalThis.__captureSetupTEST;
     }

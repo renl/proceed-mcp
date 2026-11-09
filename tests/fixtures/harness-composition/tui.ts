@@ -20,6 +20,7 @@ export default Plugin.define({
       run,
       captureOnly,
       navigationOnly = false,
+      integratedScenario = false,
     } = JSON.parse(readFileSync(root + 'composition-binding.json', 'utf8'));
     const snapshot = () =>
       context.data.session.list().map((s, n) => ({
@@ -49,7 +50,7 @@ export default Plugin.define({
           run,
           generation,
           live,
-          snapshot: captureOnly || navigationOnly ? snapshot() : undefined,
+          snapshot: captureOnly || navigationOnly || integratedScenario ? snapshot() : undefined,
           geometry: {
             width: context.renderer?.width,
             height: context.renderer?.height,
@@ -75,7 +76,7 @@ export default Plugin.define({
       phase = 'host-session-sync';
       await context.data.session.sync(session.id);
       if (!context.data.session.get(session.id)) throw new Error('Host session unresolved');
-      if (captureOnly || navigationOnly) {
+      if (captureOnly || navigationOnly || integratedScenario) {
         const second = await context.client.session.create({ title: 'Composition empty exchange' });
         await context.data.session.sync((second.data ?? second).id);
       }
@@ -91,7 +92,7 @@ export default Plugin.define({
           return;
         }
         try {
-          if (captureOnly || navigationOnly) publish();
+          if (captureOnly || navigationOnly || integratedScenario) publish();
           const request = JSON.parse(
             readFileSync(root + 'composition-selector-request.json', 'utf8'),
           );
@@ -124,6 +125,9 @@ export default Plugin.define({
           node: process.versions.node,
           run,
           generation,
+          // Public host identities only. This is not an agent selection setter
+          // or authority claim. Registered invocation rereads the real agent.
+          sessions: integratedScenario ? snapshot() : undefined,
         }),
       );
       return async () => {

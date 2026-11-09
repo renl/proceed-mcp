@@ -58,8 +58,11 @@ export async function confirmQualificationEnrollment(h, operator, proposal, disp
 
 export async function withQualificationBroker(
   work,
-  { brokerObserver = false, captureOnly = false } = {},
+  { brokerObserver = false, captureOnly = false, scenario = null, verifyCompletion } = {},
 ) {
+  assert.ok(scenario === null || scenario === 'request-to-originating-result');
+  assert.ok(scenario === null || !captureOnly, 'capture mode cannot create work');
+  assert.equal(typeof verifyCompletion, scenario === null ? 'undefined' : 'function');
   assert.equal(process.platform, 'linux', 'contained Linux setup required');
   assert.equal(process.env.PROCEED_TEST_ISOLATED_PID_NAMESPACE, '1');
   const root = '/run/proceed/qualification-private';
@@ -114,7 +117,7 @@ export async function withQualificationBroker(
           assert.deepEqual((await status.json()).requests, [], 'setup must create no work');
         };
         await noWork();
-        await work({
+        const result = await work({
           ...h,
           operator,
           proposal,
@@ -122,7 +125,14 @@ export async function withQualificationBroker(
           pending: captureOnly ? undefined : pending,
           noWork,
         });
-        await noWork();
+        if (scenario === null) await noWork();
+        else {
+          // Explicit scenario scope only. Never silently weaken setup/capture's
+          // zero-work postcondition or treat a created request as setup success.
+          const status = await h.http('/v1/status', h.control);
+          assert.equal(status.status, 200);
+          await verifyCompletion(result, await status.json());
+        }
         for (const text of [
           JSON.stringify(h.fixture.calls),
           await readFile(join(h.state, 'journal.log'), 'utf8'),
