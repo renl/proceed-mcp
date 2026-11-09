@@ -36,6 +36,7 @@ import {
   productCaptureInputs,
   productCaptureLogs,
   productCaptureReadFile,
+  readPrivateReceiptFile,
   scanIntegratedPrivateCaptures,
   readIntegratedPrivateInventory,
   privateReceiptProducer,
@@ -1529,7 +1530,11 @@ try {
                   }
                   let bytes;
                   try {
-                    bytes = await productCaptureReadFile({}, root + name, 'api', total);
+                    bytes = producer
+                      ? await readPrivateReceiptFile(root + name, producer, total, (step) => {
+                          sealRefusal = step;
+                        })
+                      : await productCaptureReadFile({}, root + name, 'api', total);
                   } catch (error) {
                     // Keep receipt IO in its fixed outer category. Never retain
                     // filesystem exception fields or private read operands.

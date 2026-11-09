@@ -995,6 +995,8 @@ export function rendererSize(state, size, total = false, surface) {
 }
 // One admitted allocation, bounded positional reads, then identity/EOF rechecks.
 // The injectable filesystem is test-only and is never supplied by the host runner.
+const readRefusals = new WeakMap();
+export const rendererReadRefusal = (state) => readRefusals.get(state);
 export async function rendererReadFile(
   state,
   path,
@@ -1003,64 +1005,118 @@ export async function rendererReadFile(
   io = { lstat, open, allocate: Buffer.alloc },
   expected,
 ) {
-  rendererSize(state, used, true);
-  const snapshot = async (action) => {
-    const stat = await rendererStep(state, 'READ_FILE', 'IO', action);
-    rendererCheckpoint(state, 'SYMLINK', 'INCOMPLETE');
-    assert.equal(stat.isSymbolicLink?.() ?? false, false);
-    rendererCheckpoint(state, 'READ_FILE', 'INCOMPLETE');
-    assert.equal(stat.isFile(), true);
-    assert.ok(
-      typeof stat.size === 'bigint' &&
-        stat.size >= 0n &&
-        stat.size <= BigInt(Number.MAX_SAFE_INTEGER),
-    );
-    for (const field of ['dev', 'ino', 'mtimeNs', 'ctimeNs'])
-      assert.equal(typeof stat[field], 'bigint');
-    return stat;
-  };
-  const before = await snapshot(() => io.lstat(path, { bigint: true }));
-  if (expected)
-    assert.deepEqual(
-      ['file', ...['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].map((k) => before[k])],
-      expected,
-    );
-  const size = Number(before.size);
-  rendererSize(state, size, false, surface);
-  rendererSize(state, used + size, true);
-  const flags = io.flags ?? constants;
-  const handle = await rendererStep(state, 'READ_FILE', 'IO', () =>
-    io.open(path, flags.O_RDONLY | (flags.O_NOFOLLOW ?? 0) | (flags.O_NONBLOCK ?? 0)),
-  );
-  const unchanged = (stat) => {
-    rendererCheckpoint(state, 'READ_FILE', 'INCOMPLETE');
-    for (const field of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'])
-      assert.equal(stat[field], before[field]);
+  let operation = 'BUDGET';
+  readRefusals.delete(state);
+  const refusal = (error) => {
+    if (readRefusals.has(state)) return;
+    let errno = 'UNCLASSIFIED';
+    try {
+      const code = Object.getOwnPropertyDescriptor(error, 'code');
+      if (
+        code &&
+        Object.hasOwn(code, 'value') &&
+        [
+          'ENOENT',
+          'EACCES',
+          'EPERM',
+          'ELOOP',
+          'EIO',
+          'EBADF',
+          'EINVAL',
+          'EISDIR',
+          'ENOTDIR',
+          'EMFILE',
+          'ENFILE',
+        ].includes(code.value)
+      )
+        errno = code.value;
+    } catch {
+      /* Unknown errors never contribute arbitrary properties. */
+    }
+    readRefusals.set(state, { operation, errno });
   };
   try {
-    unchanged(await snapshot(() => handle.stat({ bigint: true })));
-    const bytes = io.allocate(size);
-    for (let offset = 0; offset < size;) {
-      const length = Math.min(65536, size - offset);
+    rendererSize(state, used, true);
+    const snapshot = async (action) => {
+      const stat = await rendererStep(state, 'READ_FILE', 'IO', action);
+      operation = 'SYMLINK';
+      rendererCheckpoint(state, 'SYMLINK', 'INCOMPLETE');
+      assert.equal(stat.isSymbolicLink?.() ?? false, false);
+      operation = 'FILE_TYPE';
+      rendererCheckpoint(state, 'READ_FILE', 'INCOMPLETE');
+      assert.equal(stat.isFile(), true);
+      operation = 'SIZE';
+      assert.ok(
+        typeof stat.size === 'bigint' &&
+          stat.size >= 0n &&
+          stat.size <= BigInt(Number.MAX_SAFE_INTEGER),
+      );
+      operation = 'IDENTITY';
+      for (const field of ['dev', 'ino', 'mtimeNs', 'ctimeNs'])
+        assert.equal(typeof stat[field], 'bigint');
+      return stat;
+    };
+    operation = 'LSTAT';
+    const before = await snapshot(() => io.lstat(path, { bigint: true }));
+    if (expected)
+      assert.deepEqual(
+        ['file', ...['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].map((k) => before[k])],
+        expected,
+      );
+    const size = Number(before.size);
+    operation = 'SIZE';
+    rendererSize(state, size, false, surface);
+    operation = 'BUDGET';
+    rendererSize(state, used + size, true);
+    operation = 'OPEN';
+    const flags = io.flags ?? constants;
+    const handle = await rendererStep(state, 'READ_FILE', 'IO', () =>
+      io.open(path, flags.O_RDONLY | (flags.O_NOFOLLOW ?? 0) | (flags.O_NONBLOCK ?? 0)),
+    );
+    const unchanged = (stat) => {
+      operation = 'IDENTITY';
+      rendererCheckpoint(state, 'READ_FILE', 'INCOMPLETE');
+      for (const field of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'])
+        assert.equal(stat[field], before[field]);
+    };
+    try {
+      operation = 'FSTAT';
+      unchanged(await snapshot(() => handle.stat({ bigint: true })));
+      operation = 'ALLOCATION';
+      const bytes = io.allocate(size);
+      for (let offset = 0; offset < size;) {
+        const length = Math.min(65536, size - offset);
+        operation = 'READ_PROGRESS';
+        const { bytesRead } = await rendererStep(state, 'READ_FILE', 'IO', () =>
+          handle.read(bytes, offset, length, offset),
+        );
+        rendererCheckpoint(state, 'READ_FILE', 'INCOMPLETE');
+        assert.ok(Number.isSafeInteger(bytesRead) && bytesRead > 0 && bytesRead <= length);
+        offset += bytesRead;
+      }
+      // Fixed one-byte EOF probe, not an unbounded read or retained overflow data.
+      operation = 'EOF';
       const { bytesRead } = await rendererStep(state, 'READ_FILE', 'IO', () =>
-        handle.read(bytes, offset, length, offset),
+        handle.read(Buffer.alloc(1), 0, 1, size),
       );
       rendererCheckpoint(state, 'READ_FILE', 'INCOMPLETE');
-      assert.ok(Number.isSafeInteger(bytesRead) && bytesRead > 0 && bytesRead <= length);
-      offset += bytesRead;
+      assert.equal(bytesRead, 0);
+      operation = 'FSTAT';
+      unchanged(await snapshot(() => handle.stat({ bigint: true })));
+      operation = 'LSTAT';
+      unchanged(await snapshot(() => io.lstat(path, { bigint: true })));
+      state.reason = 'NONE';
+      return bytes;
+    } catch (error) {
+      refusal(error);
+      throw error;
+    } finally {
+      operation = 'CLOSE';
+      await handle.close();
     }
-    // Fixed one-byte EOF probe, not an unbounded read or retained overflow data.
-    const { bytesRead } = await rendererStep(state, 'READ_FILE', 'IO', () =>
-      handle.read(Buffer.alloc(1), 0, 1, size),
-    );
-    rendererCheckpoint(state, 'READ_FILE', 'INCOMPLETE');
-    assert.equal(bytesRead, 0);
-    unchanged(await snapshot(() => handle.stat({ bigint: true })));
-    unchanged(await snapshot(() => io.lstat(path, { bigint: true })));
-    state.reason = 'NONE';
-    return bytes;
-  } finally {
-    await handle.close();
+  } catch (error) {
+    refusal(error);
+    throw error;
   }
 }
 export function rendererDiagnostics(state, entries) {

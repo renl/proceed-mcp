@@ -330,6 +330,7 @@ import { constants } from 'node:fs';
 import {
   rendererMetadataInventory,
   rendererReadFile,
+  rendererReadRefusal,
   rendererWork,
   collectionAdmit,
   collectionLimits,
@@ -419,6 +420,18 @@ export async function productCaptureReadFile(state, path, surface, used, io, exp
           ? 'ACCOUNTING'
           : 'PRIVATE_FILE',
     );
+  }
+}
+
+// Same bounded route as the collector. Only selected enums survive a refusal.
+export async function readPrivateReceiptFile(path, producer, used, receiptStep, io) {
+  const state = {};
+  try {
+    return await productCaptureReadFile(state, path, 'api', used, io);
+  } catch {
+    if (producer)
+      receiptStep({ producer, check: 'READ', read: safeReadRefusal(rendererReadRefusal(state)) });
+    throw Error('private receipt read refused');
   }
 }
 
@@ -995,7 +1008,8 @@ export function safeSealRefusal(value) {
   try {
     if (!value || typeof value !== 'object') return null;
     const descriptors = Object.getOwnPropertyDescriptors(value);
-    if (Reflect.ownKeys(descriptors).length !== 2) return null;
+    const names = Reflect.ownKeys(descriptors);
+    if (!(names.length === 2 || (names.length === 3 && names.includes('read')))) return null;
     if (!['producer', 'check'].every((key) => Object.hasOwn(descriptors[key] ?? {}, 'value')))
       return null;
     const producer = descriptors.producer.value;
@@ -1014,8 +1028,61 @@ export function safeSealRefusal(value) {
       ].includes(check)
     )
       return null;
+    if (names.includes('read')) {
+      if (check !== 'READ' || !Object.hasOwn(descriptors.read, 'value')) return null;
+      return { producer, check, read: safeReadRefusal(descriptors.read.value) };
+    }
     return { producer, check };
   } catch {
     return null;
+  }
+}
+
+export function safeReadRefusal(value) {
+  const unknown = { operation: 'UNCLASSIFIED', errno: 'UNCLASSIFIED' };
+  try {
+    const d = Object.getOwnPropertyDescriptors(value);
+    if (
+      Reflect.ownKeys(d).length !== 2 ||
+      !['operation', 'errno'].every((key) => Object.hasOwn(d[key] ?? {}, 'value'))
+    )
+      return unknown;
+    const operation = d.operation.value;
+    const errno = d.errno.value;
+    if (
+      ![
+        'LSTAT',
+        'FSTAT',
+        'FILE_TYPE',
+        'SYMLINK',
+        'SIZE',
+        'BUDGET',
+        'IDENTITY',
+        'OPEN',
+        'ALLOCATION',
+        'READ_PROGRESS',
+        'EOF',
+        'CLOSE',
+        'UNCLASSIFIED',
+      ].includes(operation) ||
+      ![
+        'ENOENT',
+        'EACCES',
+        'EPERM',
+        'ELOOP',
+        'EIO',
+        'EBADF',
+        'EINVAL',
+        'EISDIR',
+        'ENOTDIR',
+        'EMFILE',
+        'ENFILE',
+        'UNCLASSIFIED',
+      ].includes(errno)
+    )
+      return unknown;
+    return { operation, errno };
+  } catch {
+    return unknown;
   }
 }

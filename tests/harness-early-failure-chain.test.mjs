@@ -557,6 +557,8 @@ async function collect(m, mutate = () => {}) {
     },
     collectionAdmit,
     collectionLimits,
+    readPrivateReceiptFile: (path, producer, used, step) =>
+      R.readPrivateReceiptFile(path, producer, used, step, m.io),
     productCaptureReadFile: (state, path, surface, used) =>
       R.productCaptureReadFile(state, path, surface, used, m.io),
     productCaptureInputs: (state, path, _io, allow) =>
@@ -787,7 +789,11 @@ test('actual receipt reads retain READ on controlled IO failure for every produc
       scanReason: result.scanReason,
       sealRefusal: result.sealRefusal,
     });
-    assert.deepEqual(safe.sealRefusal, { producer, check: 'READ' });
+    assert.deepEqual(safe.sealRefusal, {
+      producer,
+      check: 'READ',
+      read: { operation: 'OPEN', errno: 'UNCLASSIFIED' },
+    });
     assert.equal(JSON.stringify(safe).includes('controlled private read'), false);
   }
 });
