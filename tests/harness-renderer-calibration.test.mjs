@@ -656,7 +656,14 @@ test('actual product readiness and final input routes adapt semantic labels with
   for (const surface of ['diagnostics', 'journal', 'api']) {
     await assert.rejects(rendererReadFile({}, metadataRoots.state + '/host.log', surface, 0, f.io));
   }
-  assert.throws(() => productCaptureReadFile({}, 'unused', 'fixture', 0, f.io));
+  const readsBeforeInvalidSurface = f.reads;
+  for (const surface of ['fixture', 'unknown', '', null]) {
+    await assert.rejects(productCaptureReadFile({}, 'unused', surface, 0, f.io), {
+      code: 'ERR_ASSERTION',
+    });
+  }
+  assert.equal(f.reads, readsBeforeInvalidSurface);
+  f.descriptorBalance();
   f.nodes.get(metadataRoots.state + '/host.log').size = 16777217n;
   await assert.rejects(
     productCaptureLogs(metadataRoots.state, { ...accounting, bytes: 0 }, 0, f.io),
@@ -1743,18 +1750,21 @@ test('exact finite program report preserves source cells, styles, cursor and sav
   assert.deepEqual(compositionSourceFrame(setup + report + paint), expected);
   // Alternate-screen active, before the first completed frame, outside paint is
   // deliberately narrower observer policy, not a source-enforced emitter order.
-  for (const [prefix, suffix] of [
-    ['', begin + '\x1b[HX' + end],
-    ['\x1b[?1049h' + begin, '\x1b[HX' + end],
-    [setup + paint, ''],
-    [setup + paint + '\x1b[?1049l', ''],
+  for (const [prefix, suffix, frames, generation] of [
+    ['', begin + '\x1b[HX' + end, 0, 0],
+    ['\x1b[?1049h' + begin, '\x1b[HX' + end, 0, 1],
+    [setup + paint, '', 1, 1],
+    [setup + paint + '\x1b[?1049l', '', 1, 2],
   ]) {
     assert.deepEqual(compositionSourceFrame(prefix + report + suffix), {
       supported: false,
       reason: 'UNSAFE_PROGRAM_STATUS_PHASE',
       byteOffset: Buffer.byteLength(prefix),
       operation: 7501,
+      frames,
+      generation,
     });
+    assert.equal(compositionCurrentFrame(prefix + report + suffix, { styled: true }), '');
   }
 });
 
@@ -1811,7 +1821,10 @@ test('finite program report refuses other states, fields, order, bounds and enco
       reason: 'UNSUPPORTED_OSC_PAYLOAD',
       byteOffset: Buffer.byteLength(setup),
       operation: 7501,
+      frames: 0,
+      generation: 1,
     });
+    assert.equal(compositionCurrentFrame(setup + token + paint, { styled: true }), '');
   }
   const exact = wrap(body);
   for (let n = 1; n < exact.length; n++)
