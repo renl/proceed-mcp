@@ -6,6 +6,111 @@ import {
   compositionGuardJournal,
 } from './harness-composition-readiness.mjs';
 import { scanRequiredCaptures } from './harness-transport-fixtures.mjs';
+import { decodeMcpCapture } from './harness-transparent-capture.mjs';
+
+// Raw private MCP/callback captures are not publishable surfaces. Preparation
+// capabilities are expected only at their contract-defined paths on the original
+// connection. Inspect raw bytes AND decoded frames before deriving any summary.
+// The six-surface public exporter and its blanket capability refusal stay intact.
+export function scanIntegratedPrivateCaptures({ mcp, callbacks, other = [] }, secrets) {
+  assert.ok(Buffer.isBuffer(mcp) && Buffer.isBuffer(callbacks) && mcp.length && callbacks.length);
+  const inputs = [mcp, callbacks, ...other];
+  assert.ok(inputs.every(Buffer.isBuffer));
+  const bytes = inputs.reduce((n, b) => n + b.length, 0);
+  collectionAdmit(bytes, collectionLimits.contents);
+  rendererWork(bytes, inputs.length, secrets.length, bytes);
+  const parse = (bytes) =>
+    bytes
+      .toString('utf8')
+      .trim()
+      .split('\n')
+      .map((s) => JSON.parse(s));
+  const capture = decodeMcpCapture(parse(mcp), 'composition-shared-owner');
+  const prepared = new Map();
+  for (const { message } of capture.calls)
+    if (message.method === 'tools/call' && message.params.name === 'prepare_approval')
+      prepared.set(message.id, message.params._meta?.['ai.opencode/sessionID']);
+  const capabilities = new Map();
+  for (const { message } of capture.results)
+    if (prepared.has(message.id)) {
+      const p = message.result?.structuredContent;
+      assert.match(p?.request_capability, /^cap_[a-f0-9]{64}$/);
+      capabilities.set(p.request_capability, {
+        session: prepared.get(message.id),
+        request: p.request_id,
+      });
+    }
+  assert.equal(capabilities.size, 3, 'all three actual preparations must be captured');
+  const inspect = (value, path = [], allowed = null) => {
+    if (typeof value === 'string') {
+      for (const secret of secrets)
+        assert.equal(value.includes(secret), false, 'private authority leak');
+      assert.equal(
+        /(?:sk-|ghp_)[A-Za-z0-9_-]{20,}|Bearer [A-Za-z0-9_.-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(
+          value,
+        ),
+        false,
+      );
+      const matches = value.match(/cap_[a-f0-9]{64}/g) ?? [];
+      for (const cap of matches)
+        assert.ok(
+          allowed?.some(
+            (a) => path.join('.') === a.path && value === (a.value ?? cap) && cap === a.cap,
+          ),
+          'capability outside its original private protocol field',
+        );
+    } else if (value && typeof value === 'object')
+      for (const [key, child] of Object.entries(value)) inspect(child, [...path, key], allowed);
+  };
+  const checkBytes = (bytes) => {
+    for (const secret of secrets)
+      assert.equal(bytes.includes(Buffer.from(secret)), false, 'raw private authority leak');
+  };
+  for (const bytes of inputs) checkBytes(bytes);
+  for (const { message } of [...capture.calls, ...capture.results]) {
+    checkBytes(Buffer.from(JSON.stringify(message)));
+    let allowed;
+    if (prepared.has(message.id) && message.result) {
+      const body = message.result.structuredContent;
+      allowed = [
+        { path: 'result.structuredContent.request_capability', cap: body.request_capability },
+      ];
+      assert.equal(message.result.content.length, 1);
+      assert.equal(message.result.content[0].type, 'text');
+      assert.deepEqual(JSON.parse(message.result.content[0].text), body);
+      allowed.push({
+        path: 'result.content.0.text',
+        cap: body.request_capability,
+        value: message.result.content[0].text,
+      });
+    } else if (message.method === 'tools/call' && message.params.name === 'request_approval') {
+      const cap = message.params.arguments.request_capability;
+      assert.equal(capabilities.get(cap)?.session, message.params._meta?.['ai.opencode/sessionID']);
+      allowed = [{ path: 'params.arguments.request_capability', cap }];
+    }
+    inspect(message, [], allowed);
+  }
+  for (const callback of parse(callbacks)) {
+    let allowed;
+    if (callback.phase === 'prepare-returned') {
+      const p = callback.value?.output;
+      assert.deepEqual(capabilities.get(p?.request_capability), {
+        session: callback.sessionID,
+        request: p?.request_id,
+      });
+      allowed = [{ path: 'value.output.request_capability', cap: p.request_capability }];
+    }
+    inspect(callback, [], allowed);
+  }
+  for (const bytes of other) inspect(bytes.toString('utf8'));
+  return {
+    status: 'PASS',
+    bytes,
+    files: inputs.length,
+    hashes: inputs.map(digest),
+    scope: 'Raw private protocol capture only. No raw export.',
+  };
+}
 import { lstat, open, opendir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import {
@@ -91,10 +196,10 @@ export function productCaptureReadFile(state, path, surface, used, io, expected)
   );
 }
 
-export async function productCaptureInputs(stateRoot, wirePath, io) {
+export async function productCaptureInputs(stateRoot, wirePath, io, allowApi = false) {
   const journal = await productCaptureReadFile({}, stateRoot + '/journal.log', 'journal', 0, io);
   const api = await productCaptureReadFile({}, wirePath, 'api', journal.length, io);
-  assert.equal(api.length, 0);
+  if (!allowApi) assert.equal(api.length, 0);
   return { journal, api };
 }
 
@@ -265,6 +370,15 @@ const phases = new Set([
   'exact-product-PluginCleanup',
   'rendered-product-picker-dismissal',
   'actual-host-exit',
+  'integrated-capture-armed',
+  'integrated-transport-outcomes',
+  'integrated-enrollment-display',
+  'integrated-public-action',
+  'integrated-original-result',
+  'integrated-current-cells',
+  'integrated-losing-channel',
+  'concurrent-product-pending',
+  'matching-product-retained-outcome',
 ]);
 const own = (object, name) => {
   try {

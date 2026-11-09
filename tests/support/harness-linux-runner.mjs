@@ -69,7 +69,8 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
   if (rendererInventory) assert.equal(preflight, false);
   const pickerCapture = mode === 'product-picker-capture';
   const navigationOnly = mode === 'product-navigation';
-  const productMode = pickerCapture || navigationOnly;
+  const integratedScenario = mode === 'composition';
+  const productMode = pickerCapture || navigationOnly || integratedScenario;
   if (productMode) assert.equal(preflight, false);
   const composition = mode === 'composition' || productMode;
   const helper = mode === 'helper-contract' || parent;
@@ -292,7 +293,11 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           image: linuxImage,
           ...(productMode
             ? {
-                purpose: navigationOnly ? 'PRODUCT_NAVIGATION_ONLY' : 'PRODUCT_PICKER_CAPTURE_ONLY',
+                purpose: integratedScenario
+                  ? 'PRODUCT_REQUEST_RESULT_PROXY'
+                  : navigationOnly
+                    ? 'PRODUCT_NAVIGATION_ONLY'
+                    : 'PRODUCT_PICKER_CAPTURE_ONLY',
                 qualification: 'UNQUALIFIED',
                 selectionProfile: null,
               }
@@ -726,7 +731,11 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           image: linuxImage,
           ...(productMode
             ? {
-                purpose: navigationOnly ? 'PRODUCT_NAVIGATION_ONLY' : 'PRODUCT_PICKER_CAPTURE_ONLY',
+                purpose: integratedScenario
+                  ? 'PRODUCT_REQUEST_RESULT_PROXY'
+                  : navigationOnly
+                    ? 'PRODUCT_NAVIGATION_ONLY'
+                    : 'PRODUCT_PICKER_CAPTURE_ONLY',
                 qualification: 'UNQUALIFIED',
                 selectionProfile: null,
               }
@@ -752,7 +761,11 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           evidence: run,
           ...(productMode
             ? {
-                purpose: navigationOnly ? 'PRODUCT_NAVIGATION_ONLY' : 'PRODUCT_PICKER_CAPTURE_ONLY',
+                purpose: integratedScenario
+                  ? 'PRODUCT_REQUEST_RESULT_PROXY'
+                  : navigationOnly
+                    ? 'PRODUCT_NAVIGATION_ONLY'
+                    : 'PRODUCT_PICKER_CAPTURE_ONLY',
                 qualification: 'UNQUALIFIED',
                 selectionProfile: null,
               }

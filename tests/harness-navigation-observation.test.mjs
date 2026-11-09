@@ -271,13 +271,13 @@ function navigationCase({
       observer.moved();
       return observer;
     },
-    identity: () => {
+    identity: (index = 1) => {
       state.raw = Buffer.concat([
         state.raw,
         Buffer.from(
           '\x1b[?2026h' +
             [1, 2, 3, 4, 5].map((r) => `\x1b[${r};1H` + ' '.repeat(120)).join('') +
-            frame({ ...productSnapshot[1] })
+            frame({ ...productSnapshot[index] })
               .split('\n')
               .map((line, n) => `\x1b[${n + 1};1H${line}`)
               .join('') +
@@ -286,7 +286,7 @@ function navigationCase({
       ]);
       assertCurrentIdentityFrame(
         compositionSourceFrame(state.raw.toString()).text,
-        productSnapshot[1],
+        productSnapshot[index],
         binding.geometry,
       );
     },
@@ -316,6 +316,27 @@ test('fresh interval permits only expected ordinal then separate full identity, 
     assert.throws(() => observer.openQuestion(), /navigation admission refused/);
     assert.equal(c.writes.length, 3);
   }
+});
+
+test('integrated first-session navigation requires a fresh reverse role transfer before both fenced Enters', () => {
+  const c = navigationCase();
+  c.io.targetIndex = 0;
+  c.io.moveUp = () => c.writes.push('Up');
+  const observer = c.ready();
+  observer.moveBack();
+  c.state.raw = Buffer.concat([c.state.raw, Buffer.from(c.paint(1))]);
+  observer.returned();
+  observer.pickerEnter(productSnapshot[0]);
+  c.identity(0);
+  observer.identity();
+  observer.openQuestion();
+  assert.deepEqual(c.writes, ['Down', 'Up', 'Enter', 'Enter']);
+  assert.throws(() => observer.openQuestion(), /navigation admission refused/);
+  const missing = navigationCase();
+  missing.io.targetIndex = 0;
+  const unfenced = missing.ready();
+  assert.throws(() => unfenced.pickerEnter(productSnapshot[0]), /navigation admission refused/);
+  assert.deepEqual(missing.writes, ['Down']);
 });
 
 test('all fixed-input/live/snapshot invalidations before picker admission write zero Enters', () => {

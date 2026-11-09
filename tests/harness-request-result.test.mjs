@@ -5,7 +5,23 @@ import {
   observeCurrentQuestion,
   currentQuestionAdapter,
   requestResultWireAdapter,
+  runCompositionRequestResult,
 } from './support/harness-request-result.mjs';
+import {
+  invokeRegisteredProceed,
+  compositionHostAction,
+} from './support/harness-wrapper-invocation.mjs';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { runInNewContext } from 'node:vm';
+import { createProductNavigationObserver } from './support/harness-navigation-observation.mjs';
+import { compositionSourceFrame } from './support/harness-composition-readiness.mjs';
+import { integratedCompositionConfiguration } from './support/harness-linux-plan.mjs';
+import {
+  scanFrozenComposition,
+  compositionScanReason,
+  scanIntegratedPrivateCaptures,
+} from './support/harness-composition-retention.mjs';
 
 const presentation = {
   request_id: `req_${'a'.repeat(32)}`,
@@ -43,6 +59,68 @@ const lines = [
   'Respond',
   'Approve',
 ];
+
+test('integrated config connects the sole transparent owner entry and registered server wrapper without a permission override', () => {
+  const staging = {
+    options: {
+      state_dir: '/run/proceed/managed-fixtures/memory',
+      harness_id: 'qualification',
+      owner_id: 'shared',
+      operator_key_file: '/run/proceed/qualification-private/memory.token',
+    },
+    wrapper: '/run/proceed/plugins/wrapper',
+    adversary: '/run/proceed/plugins/adversary',
+    transport: '/run/proceed/plugins/transport',
+  };
+  const config = integratedCompositionConfiguration(
+    staging,
+    '/run/proceed/plugins/product',
+    staging.options.state_dir,
+  );
+  assert.equal(config.cli.plugins[0].options, staging.options);
+  assert.ok(config.service.plugins.some((p) => p.package === staging.wrapper));
+  assert.deepEqual(Object.keys(config.service.mcp.servers), ['proceed']);
+  assert.deepEqual(config.service.mcp.servers.proceed.command, [
+    '/usr/local/bin/node',
+    '/payload/tests/fixtures/harness-composition/mcp.mjs',
+    staging.options.state_dir,
+  ]);
+  assert.equal(
+    config.service.mcp.servers.proceed.environment.PROCEED_TEST_ISOLATED_PID_NAMESPACE,
+    '1',
+  );
+  assert.equal('permissions' in config.service, false);
+  assert.equal('agents' in config.service, false);
+});
+
+test('integrated ordinary RPC capture failure cannot masquerade as an authorized negative result', async () => {
+  const context = {
+    client: {
+      plugin: {
+        list: async () => ({
+          data: [{ id: 'proceed.harness', source: { type: 'local' }, features: { tui: true } }],
+        }),
+      },
+      rpc: {
+        call: async () => {
+          throw Error('ordinary host refusal');
+        },
+      },
+    },
+    data: { location: { default: () => ({ directory: 'memory' }) } },
+  };
+  await assert.rejects(
+    compositionHostAction(
+      context,
+      { kind: 'public-rpc', sessionID: presentation.session_id, presentation },
+      new AbortController().signal,
+      async (event) => {
+        if (event.operation === 'rpc.call') throw Error('memory writer unavailable');
+      },
+    ),
+    /private API capture failed/,
+  );
+});
 
 test('current question requires every immutable field and all current controls, not old transcript text', () => {
   const raw = paint(lines);
@@ -145,4 +223,605 @@ test('explicit wire adapter requires independently read presentation and preserv
   });
   await assert.rejects(adapter.observe({ ...p, session_id: 'foreign-session' }));
   assert.equal(calls.length, 2, 'forged expected presentation cannot initiate a public read');
+});
+
+test('integrated raw callback privacy: raw preparation capture must never enter a public scan surface', async () => {
+  // tasks.md registered-wrapper contract: raw callback/MCP captures may contain
+  // synthetic request capabilities and MUST stay private. W5 also requires full
+  // raw capture scanning BEFORE redaction. No broker, adapter or file is opened.
+  const records = [];
+  const capability = `cap_${'d'.repeat(64)}`;
+  const prepared = {
+    request_id: presentation.request_id,
+    request_handle: `hdl_${'e'.repeat(32)}`,
+    request_capability: capability,
+  };
+  const context = {
+    session: {
+      get: async () => ({ id: presentation.session_id, agent: 'actual-listed-memory-agent' }),
+    },
+    agent: { get: async () => ({ data: { id: 'actual-listed-memory-agent' } }) },
+    tool: {
+      list: async () =>
+        ['prepare_approval', 'request_approval'].map((name) => ({
+          name,
+          options: { namespace: 'proceed' },
+          execute: async (input) => {
+            if (name === 'request_approval') assert.equal(input.request_capability, capability);
+            return {
+              output:
+                name === 'prepare_approval'
+                  ? prepared
+                  : { request_id: presentation.request_id, resolution: 'rejected' },
+            };
+          },
+        })),
+    },
+  };
+  await invokeRegisteredProceed(
+    context,
+    { sessionID: presentation.session_id, prompt: { text: '' } },
+    new AbortController().signal,
+    async (record) => records.push(record),
+  );
+  const rawCallback = Buffer.from(records.map((r) => JSON.stringify(r) + '\n').join(''));
+  assert.ok(
+    rawCallback.includes(Buffer.from(capability)),
+    'the real wrapper must retain the unmodified private prepare output',
+  );
+  const captures = Object.fromEntries(
+    ['tui', 'telegram', 'journal', 'diagnostics', 'evidence'].map((name) => [
+      name,
+      Buffer.from(`complete synthetic ${name}`),
+    ]),
+  );
+  captures.api = rawCallback;
+  assert.throws(
+    () =>
+      scanFrozenComposition({
+        captures,
+        secrets: ['synthetic-operator', 'synthetic-owner', 'synthetic-control', 'synthetic-psk'],
+        complete: true,
+        overflow: false,
+        measured: true,
+      }),
+    (error) => {
+      assert.equal(compositionScanReason(error, 'SCAN'), 'SECRET_MATCH');
+      return true;
+    },
+  );
+});
+
+test('integrated private capture scans decoded original fields before summary and refuses leaked or misplaced authority', async () => {
+  const events = [],
+    records = [];
+  const emit = (direction, message) =>
+    events.push({
+      connection: 'composition-shared-owner',
+      sequence: events.length,
+      direction,
+      base64: Buffer.from(JSON.stringify(message) + '\n').toString('base64'),
+    });
+  let ordinal = 0;
+  const context = {
+    session: { get: async ({ sessionID }) => ({ id: sessionID, agent: 'memory-host-agent' }) },
+    agent: { get: async () => ({ data: { id: 'memory-host-agent' } }) },
+    tool: {
+      list: async () =>
+        ['prepare_approval', 'request_approval'].map((name) => ({
+          name,
+          options: { namespace: 'proceed' },
+          execute: async (input, invocation) => {
+            if (name === 'prepare_approval') ordinal++;
+            const n = String(ordinal);
+            const prepared = {
+              request_id: `req_${n.repeat(32)}`,
+              request_handle: `hdl_${n.repeat(32)}`,
+              request_capability: `cap_${n.repeat(64)}`,
+            };
+            const id = 'wire-' + events.length;
+            emit('host-to-adapter', {
+              jsonrpc: '2.0',
+              id,
+              method: 'tools/call',
+              params: {
+                name,
+                arguments: input,
+                _meta: { 'ai.opencode/sessionID': invocation.sessionID },
+              },
+            });
+            const output =
+              name === 'prepare_approval'
+                ? prepared
+                : { request_id: prepared.request_id, resolution: 'rejected' };
+            emit('adapter-to-host', {
+              jsonrpc: '2.0',
+              id,
+              result: {
+                structuredContent: output,
+                content: [{ type: 'text', text: JSON.stringify(output) }],
+              },
+            });
+            return { output };
+          },
+        })),
+    },
+  };
+  for (const sessionID of ['memory-first', 'memory-second', 'memory-first'])
+    await invokeRegisteredProceed(
+      context,
+      { sessionID, prompt: { text: '' } },
+      new AbortController().signal,
+      async (record) => records.push(record),
+    );
+  const encode = (v) => Buffer.from(v.map((e) => JSON.stringify(e) + '\n').join(''));
+  const secrets = ['synthetic-operator', 'synthetic-owner', 'synthetic-control', 'synthetic-psk'];
+  const input = {
+    mcp: encode(events),
+    callbacks: encode(records),
+    other: [Buffer.from('complete current private action record')],
+  };
+  assert.equal(scanIntegratedPrivateCaptures(input, secrets).status, 'PASS');
+  assert.throws(
+    () =>
+      scanIntegratedPrivateCaptures(
+        { ...input, other: [Buffer.from(`cap_${'1'.repeat(64)}`)] },
+        secrets,
+      ),
+    /capability outside/,
+  );
+  assert.throws(
+    () =>
+      scanIntegratedPrivateCaptures(
+        {
+          ...input,
+          callbacks: Buffer.concat([
+            input.callbacks,
+            Buffer.from(JSON.stringify({ phase: 'extra', value: 'synthetic-operator' }) + '\n'),
+          ]),
+        },
+        secrets,
+      ),
+    /raw private authority leak/,
+  );
+  const mutated = structuredClone(events);
+  const body = JSON.parse(Buffer.from(mutated[0].base64, 'base64').toString());
+  body.params.extra = 'synthetic-operator';
+  mutated[0].base64 = Buffer.from(JSON.stringify(body) + '\n').toString('base64');
+  assert.throws(
+    () => scanIntegratedPrivateCaptures({ ...input, mcp: encode(mutated) }, secrets),
+    /raw private authority leak/,
+  );
+});
+
+test('integrated maintained entry executes registered calls, both navigation fences, current choice cells and reverse original results', async () => {
+  // Fully memory-only compound route control. Actual driver, wrapper, cell
+  // decoder, role/identity fences and original-result comparators run unchanged.
+  // These synthetic PTY/API/broker operands are NOT actual-host or human proof.
+  const hash = (s) => createHash('sha256').update(s).digest('hex');
+  const sessions = [1, 2].map((n) => ({
+    id: `memory-session-${n}`,
+    title: 'Equal host title',
+    ordinal: `Session ${n}`,
+  }));
+  const fixed = {
+    scope: 'product-capture',
+    executable: hash('memory'),
+    package: hash('package'),
+    wrapper: hash('wrapper'),
+    config: hash('{}'),
+    configBytes: '{}',
+    source: '9bbb8ce18c80f099e0e448775f59d965ead40a21',
+    rendererSource: '738067f47e940dcec3f5aab74868908574335c6c',
+    sourceBinding: 'PINNED_IMAGE_PROVENANCE_NOT_RUNTIME_ACCESSOR',
+    environment: { TERM: 'memory' },
+    terminalResponsePolicy: [{ query: 'memory', flags: 'g', reply: 'memory' }],
+  };
+  fixed.payload = [
+    'package.json',
+    'src/harness/tui-entry.js',
+    'bin/proceed-mcp.js',
+    'tests/fixtures/harness-composition/tui.ts',
+  ];
+  fixed.inputs = fixed.payload.map((path) => ({
+    path,
+    sha256:
+      path === 'package.json'
+        ? fixed.package
+        : path.endsWith('tui.ts')
+          ? fixed.wrapper
+          : hash(path),
+  }));
+  const runtime = { version: '2.2.5', bun: '1.4.4', node: '24.22.2', sessions };
+  const bound = {
+    ...fixed,
+    runtime: { version: runtime.version, bun: runtime.bun, node: runtime.node },
+    run: 'memory-run',
+    setup: 'memory-setup',
+    geometry: { width: 120, height: 40, resizeSequence: 0 },
+  };
+  const live = {
+    live: true,
+    run: bound.run,
+    generation: bound.setup,
+    geometry: bound.geometry,
+    snapshot: sessions,
+  };
+  let raw = Buffer.from('\x1b[?1049h'),
+    screen = 'host',
+    selected = 0,
+    chosenSession,
+    activePresentation,
+    next = 0;
+  const writes = [],
+    events = [],
+    callbacks = [],
+    actions = new Map(),
+    requests = new Map(),
+    reserved = new Map(),
+    completion = [];
+  const paint = (values, role = -1) => {
+    raw = Buffer.concat([
+      raw,
+      Buffer.from(
+        '\x1b[?2026h' +
+          Array.from({ length: 40 }, (_, i) => `\x1b[${i + 1};1H\x1b[0m${' '.repeat(120)}`).join(
+            '',
+          ) +
+          values
+            .map(
+              (text, i) =>
+                `\x1b[${i + 1};1H` +
+                (i === role
+                  ? '\x1b[1;38;2;255;255;255;48;2;10;20;30m'
+                  : '\x1b[0;38;2;0;0;0;48;2;200;200;200m') +
+                text,
+            )
+            .join('') +
+          '\x1b[0m\x1b[?2026l',
+      ),
+    ]);
+  };
+  paint(['2.2.5', 'Ask anything']);
+  const hostFrame = compositionSourceFrame(raw.toString()).text;
+  const picker = () => {
+    screen = 'picker';
+    selected = 0;
+    paint(['Select the Proceed session', ...sessions.map((s) => s.ordinal + ' - ' + s.title)], 1);
+  };
+  const question = () => {
+    screen = 'question';
+    selected = 0;
+    activePresentation = requests.get(chosenSession).presentation;
+    paint(
+      [
+        'Proceed approval request',
+        activePresentation.request_id,
+        activePresentation.session_label,
+        activePresentation.action,
+        activePresentation.context,
+        activePresentation.expires_at,
+        'Reject',
+        'Respond',
+        'Approve',
+      ],
+      6,
+    );
+  };
+  const emit = (direction, message) =>
+    events.push({
+      connection: 'composition-shared-owner',
+      sequence: events.length,
+      direction,
+      base64: Buffer.from(JSON.stringify(message) + '\n').toString('base64'),
+    });
+  const settle = (choice, text = null) => {
+    const r = requests.get(chosenSession);
+    assert.equal(r.status.resolution, 'pending');
+    r.effects++;
+    r.status = {
+      schema_version: 1,
+      request_id: r.presentation.request_id,
+      decision_id: `dec_${String(r.number).repeat(32)}`,
+      resolution: { approve: 'approved', reject: 'rejected', respond: 'responded' }[choice],
+      response_text: text,
+    };
+    r.finish(r.status);
+    completion.push(chosenSession);
+    screen = 'host';
+    paint(['2.2.5', 'Ask anything']);
+  };
+  const send = (bytes) => {
+    writes.push(bytes);
+    if (bytes === '\x07') return picker();
+    if (bytes === '\x1b') {
+      screen = 'host';
+      paint(['2.2.5', 'Ask anything']);
+      return;
+    }
+    if (bytes === '\x1b[B' || bytes === '\x1b[A') {
+      selected += bytes === '\x1b[B' ? 1 : -1;
+      if (screen === 'picker')
+        paint(
+          ['Select the Proceed session', ...sessions.map((s) => s.ordinal + ' - ' + s.title)],
+          selected + 1,
+        );
+      else {
+        assert.equal(screen, 'question');
+        paint(
+          [
+            'Proceed approval request',
+            activePresentation.request_id,
+            activePresentation.session_label,
+            activePresentation.action,
+            activePresentation.context,
+            activePresentation.expires_at,
+            'Reject',
+            'Respond',
+            'Approve',
+          ],
+          selected + 6,
+        );
+      }
+      return;
+    }
+    if (screen === 'picker' && bytes === '\r') {
+      chosenSession = sessions[selected].id;
+      screen = 'identity';
+      const s = sessions[selected];
+      paint([
+        'Open Proceed question?',
+        s.ordinal,
+        'Navigation only - no decision',
+        'Title:',
+        s.title,
+        'Exact session ID:',
+        s.id,
+        '',
+        'Open question   Cancel',
+      ]);
+      return;
+    }
+    if (screen === 'identity' && bytes === '\r') return question();
+    if (screen === 'question' && bytes === '\r') {
+      if (selected === 1) {
+        screen = 'response';
+        paint([
+          'Proceed response for ' + activePresentation.request_id,
+          'Text is recorded as instructions for this request and is never an approval.',
+        ]);
+        return;
+      }
+      return settle(selected === 0 ? 'reject' : 'approve');
+    }
+    assert.equal(screen, 'response');
+    assert.equal(bytes, 'approved\r');
+    settle('respond', 'approved');
+  };
+  const server = {
+    session: { get: async ({ sessionID }) => ({ id: sessionID, agent: 'listed-memory-agent' }) },
+    agent: { get: async () => ({ data: { id: 'listed-memory-agent' } }) },
+    tool: {
+      list: async () =>
+        ['prepare_approval', 'request_approval'].map((name) => ({
+          name,
+          options: { namespace: 'proceed' },
+          execute: async (input, invocation) => {
+            const id = 'original-wire-' + events.length;
+            emit('host-to-adapter', {
+              jsonrpc: '2.0',
+              id,
+              method: 'tools/call',
+              params: {
+                name,
+                arguments: input,
+                _meta: { 'ai.opencode/sessionID': invocation.sessionID },
+              },
+            });
+            let output;
+            if (name === 'prepare_approval') {
+              const n = ++next;
+              output = {
+                request_id: `req_${String(n).repeat(32)}`,
+                request_handle: `hdl_${String(n).repeat(32)}`,
+                request_capability: `cap_${String(n).repeat(64)}`,
+              };
+              reserved.set(invocation.sessionID, { output, n });
+            } else {
+              const { output: p, n } = reserved.get(invocation.sessionID);
+              assert.equal(input.request_capability, p.request_capability);
+              const presentation = {
+                ...p,
+                request_handle: undefined,
+                request_capability: undefined,
+                presentation_id: `hpr_${String(n).repeat(32)}`,
+                session_id: invocation.sessionID,
+                session_label: 'Equal qualification label',
+                action: 'Qualification action',
+                context: 'Distinct request ' + n,
+                expires_at: '2030-01-01T00:00:00.000Z',
+              };
+              delete presentation.request_handle;
+              delete presentation.request_capability;
+              output = await new Promise((finish) =>
+                requests.set(invocation.sessionID, {
+                  presentation,
+                  number: n,
+                  finish,
+                  effects: 0,
+                  status: {
+                    schema_version: 1,
+                    request_id: p.request_id,
+                    decision_id: null,
+                    resolution: 'pending',
+                    response_text: null,
+                  },
+                }),
+              );
+            }
+            emit('adapter-to-host', {
+              jsonrpc: '2.0',
+              id,
+              result: {
+                structuredContent: output,
+                content: [{ type: 'text', text: JSON.stringify(output) }],
+              },
+            });
+            return { output };
+          },
+        })),
+    },
+  };
+  let foreground = { type: 'home' };
+  const publicContext = {
+    client: {
+      session: {
+        command: ({ sessionID }) =>
+          invokeRegisteredProceed(
+            server,
+            { sessionID, prompt: { text: '' } },
+            new AbortController().signal,
+            async (e) => callbacks.push(e),
+          ),
+        form: { create: async () => ({ id: 'real-memory-form' }), reply: async () => {} },
+        synthetic: async (input) => {
+          assert.equal(input.resume, false);
+          return { id: 'memory-record' };
+        },
+      },
+      plugin: {
+        list: async () => ({
+          data: [
+            {
+              id: 'proceed.harness',
+              source: { type: 'local', path: 'memory' },
+              features: { tui: true },
+            },
+          ],
+        }),
+      },
+      rpc: {
+        call: async () => {
+          throw Error('unregistered');
+        },
+      },
+    },
+    keymap: { dispatch: () => picker() },
+    data: {
+      location: { default: () => ({ directory: 'memory' }) },
+      session: { get: (id) => sessions.find((s) => s.id === id) },
+    },
+    ui: {
+      router: {
+        navigate: (route) => {
+          foreground = route;
+        },
+        current: () => foreground,
+      },
+    },
+  };
+  const wait = async (label, predicate) => {
+    for (let i = 0; i < 500; i++) {
+      if (await predicate()) return;
+      await Promise.resolve();
+    }
+    assert.fail('native compound wait ' + label);
+  };
+  const wire = {
+    connection: 'composition-shared-owner',
+    captureArmed: async () => true,
+    waitPending: async (id) => {
+      await wait('pending', () => requests.get(id)?.status.resolution === 'pending');
+      return requests.get(id).presentation;
+    },
+    observe: async (p) => ({ presentation: p, status: requests.get(p.session_id).status }),
+    waitRetainedOutcome: async (p) => requests.get(p.session_id).status,
+    readPrivateCapture: async () => events,
+    readPrivateCallbacks: async () => callbacks,
+    readInteractionExchanges: async () => events.length,
+    directAttack: async () => {},
+    assertSingleDurableEffect: async (p) => assert.equal(requests.get(p.session_id).effects, 1),
+    assertStaleAndLosingNonEffect: async () => {},
+    assertOldCannotResolveNew: async (old, p) => assert.notEqual(old.request_id, p.request_id),
+  };
+  const io = {
+    readBinding: () => bound,
+    readLive: () => live,
+    readRaw: () => raw,
+    readExecutionBinding: () => fixed,
+    send,
+    readObservation: () => live,
+    writeObservation() {},
+    pause: async () => {},
+    hostFrame: () => hostFrame,
+    writeAction(request) {
+      actions.set(request.request, { ...request, state: 'STARTED' });
+      compositionHostAction(publicContext, request, new AbortController().signal).then(
+        (value) =>
+          actions.set(request.request, {
+            ...request,
+            state: 'COMPLETE',
+            ...(request.kind === 'switch-foreground' ? value : {}),
+          }),
+        (error) =>
+          actions.set(request.request, { ...request, state: 'FAILED', error: error.message }),
+      );
+    },
+    readAction: (n) => actions.get(n) ?? null,
+  };
+  const bridge = async (o) => {
+    const index = sessions.findIndex((s) => s.id === o.intendedSession.id);
+    let enters = 0;
+    const observer = createProductNavigationObserver({
+      binding: bound,
+      snapshot: sessions,
+      sample: () => ({ binding: bound, raw, snapshot: sessions, live }),
+      now: () => 1,
+      deadline: 100,
+      targetIndex: index,
+      moveDown: o.moveDown,
+      moveUp: o.moveUp,
+      enter: () => (enters++ === 0 ? o.pickerEnter() : o.openQuestion()),
+    });
+    return {
+      ...observer,
+      openPicker: o.openPicker,
+      pickerEnter: () => observer.pickerEnter(sessions[index]),
+    };
+  };
+  const source = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('export async function compositionIntegratedScenario(');
+  const finish = source.indexOf('// TEST ONLY. File-observation/PTY', start);
+  assert.ok(start >= 0 && finish > start);
+  assert.match(source, /integratedResult\s*=\s*await compositionIntegratedScenario\(/);
+  const actualEntry = runInNewContext(
+    '(' + source.slice(start + 'export '.length, finish).trim() + ')',
+    { assert, runCompositionRequestResult },
+    { timeout: 100 },
+  );
+  const result = await actualEntry({
+    wire,
+    io,
+    bridge,
+    binding: bound,
+    executionBinding: fixed,
+    runtime,
+    wait,
+    now: () => 1,
+    deadline: 100,
+    ready: async (open) => open(),
+  });
+  assert.equal(result.assertion, 'AUTOMATED_COMPOSITION_PROXY');
+  assert.equal(result.human, 'UNRUN');
+  assert.equal(result.request_ids.length, 3);
+  assert.deepEqual(completion, [sessions[1].id, sessions[0].id, sessions[0].id]);
+  assert.ok(writes.includes('approved\r'));
+  assert.equal([...actions.values()].filter((a) => a.kind === 'invoke').length, 3);
+  assert.equal([...actions.values()].filter((a) => a.kind === 'switch-foreground').length, 3);
+  assert.equal([...actions.values()].filter((a) => a.kind === 'programmatic-command').length, 1);
+  for (const kind of ['native-form-reply', 'synthetic-record', 'public-rpc'])
+    assert.equal([...actions.values()].filter((a) => a.kind === kind).length, 5);
 });

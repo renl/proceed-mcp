@@ -3,8 +3,13 @@
 import * as Plugin from '@opencode/plugin/tui/plugin';
 import product from '@meshimize/proceed-mcp/tui';
 import { writeFile } from 'node:fs/promises';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { compositionHostAction } from '/payload/tests/support/harness-wrapper-invocation.mjs';
+import {
+  collectionAdmit,
+  collectionLimits,
+} from '/payload/tests/support/harness-renderer-observation.mjs';
 import {
   observeCompositionSelectors,
   createCompositionSessionReader,
@@ -32,6 +37,18 @@ export default Plugin.define({
     let resizeSequence = 0;
     let live = true,
       timer;
+    let actionSequence = 0;
+    const actions = new Set();
+    const actionTasks = new Set();
+    const privateRoot = '/run/proceed/qualification-private/';
+    let publicApiBytes = 0;
+    if (integratedScenario)
+      writeFileSync(privateRoot + 'composition-public-api.jsonl', '', { flag: 'wx', mode: 0o600 });
+    const actionResult = (request, value) =>
+      writeFileSync(
+        privateRoot + `composition-action-result-${request.request}.json`,
+        JSON.stringify({ run, generation, request: request.request, ...value }),
+      );
     const lifetime = () => ({
       run,
       generation,
@@ -80,12 +97,27 @@ export default Plugin.define({
         const second = await context.client.session.create({ title: 'Composition empty exchange' });
         await context.data.session.sync((second.data ?? second).id);
       }
+      if (integratedScenario) {
+        for (const item of snapshot()) {
+          const actual = await context.client.session.get({ sessionID: item.id });
+          const info = actual.data ?? actual;
+          if (!info.agent) {
+            const listed = await context.client.agent.list();
+            const agents = listed.data ?? listed;
+            const candidates = Array.isArray(agents) ? agents : agents.items;
+            const selected = candidates?.find((a) => a.mode !== 'subagent' && !a.hidden);
+            if (!selected?.id) throw new Error('No selectable public host agent');
+            await context.client.session.switchAgent({ sessionID: item.id, agent: selected.id });
+            await context.data.session.sync(item.id);
+          }
+        }
+      }
       publish();
       // Fixed-purpose evidence observation only. No command dispatch, callback,
       // decision, or product hook. Requests are written after a completed frame.
       phase = 'public-command-eligibility';
       let last;
-      const deadline = Date.now() + 60000;
+      const deadline = Date.now() + (integratedScenario ? 150000 : 60000);
       timer = setInterval(() => {
         if (!live || Date.now() >= deadline) {
           clearInterval(timer);
@@ -93,6 +125,67 @@ export default Plugin.define({
         }
         try {
           if (captureOnly || navigationOnly || integratedScenario) publish();
+          if (integratedScenario) {
+            // Separate monotonically numbered files allow the two long-running
+            // public commands to remain concurrent. No overwritten mailbox.
+            let action;
+            try {
+              action = JSON.parse(
+                readFileSync(privateRoot + `composition-action-${actionSequence + 1}.json`, 'utf8'),
+              );
+            } catch {}
+            if (action) {
+              if (
+                action.run !== run ||
+                action.generation !== generation ||
+                action.request !== actionSequence + 1 ||
+                actionSequence >= 64
+              )
+                throw new Error('Action binding refused');
+              actionSequence++;
+              if (action.kind === 'abort') {
+                for (const c of actions) c.abort();
+                actionResult(action, { state: 'COMPLETE' });
+              } else {
+                const controller = new AbortController();
+                actions.add(controller);
+                actionResult(action, { state: 'STARTED' });
+                const task = compositionHostAction(
+                  context,
+                  action,
+                  controller.signal,
+                  async (event) => {
+                    if (event.kind === 'service-inventory')
+                      writeFileSync(
+                        privateRoot + 'composition-service-inventory.json',
+                        JSON.stringify(event.value),
+                      );
+                    else {
+                      const line = JSON.stringify(event) + '\n';
+                      publicApiBytes += Buffer.byteLength(line);
+                      collectionAdmit(publicApiBytes, collectionLimits.file);
+                      appendFileSync(privateRoot + 'composition-public-api.jsonl', line, {
+                        mode: 0o600,
+                      });
+                    }
+                  },
+                )
+                  .then(
+                    (value) =>
+                      actionResult(action, {
+                        state: 'COMPLETE',
+                        ...(action.kind === 'switch-foreground' ? value : {}),
+                      }),
+                    () => actionResult(action, { state: 'FAILED', error: 'PUBLIC_ACTION_REFUSED' }),
+                  )
+                  .finally(() => {
+                    actions.delete(controller);
+                    actionTasks.delete(task);
+                  });
+                actionTasks.add(task);
+              }
+            }
+          }
           const request = JSON.parse(
             readFileSync(root + 'composition-selector-request.json', 'utf8'),
           );
@@ -135,6 +228,8 @@ export default Plugin.define({
         live = false;
         context.renderer?.off('resize', resized);
         clearInterval(timer);
+        for (const c of actions) c.abort();
+        await Promise.allSettled([...actionTasks]);
         publish();
         const entry = Math.floor(performance.now() - cleanupOrigin);
         writeFileSync(

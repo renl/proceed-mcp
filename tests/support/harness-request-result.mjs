@@ -11,12 +11,26 @@ import {
   assertRegisteredWrapperCapture,
 } from './harness-transparent-capture.mjs';
 import { assertBoundRetainedOutcome } from './harness-qualification-assertions.mjs';
+import {
+  productPickerInterval,
+  productPickerObservation,
+  productPickerDismissal,
+} from './harness-navigation-observation.mjs';
+import { readJournal } from '../../src/journal/framing.js';
 
 const digest = (v) => createHash('sha256').update(v).digest('hex');
 
 // Actual protected-broker/private-capture adapters. Does not create a request or
 // connect an owner adapter. The real host alone starts the transparent stdio entry.
-export function requestResultWireAdapter(h, { scenario, wait, now = () => performance.now() }) {
+export function requestResultWireAdapter(
+  h,
+  {
+    scenario,
+    wait,
+    now = () => performance.now(),
+    readPrivate = (name) => readFile('/run/proceed/qualification-private/' + name),
+  },
+) {
   assert.equal(scenario, 'request-to-originating-result');
   assert.equal(h.shared, null, 'host owns the sole owner adapter');
   assert.equal(typeof wait, 'function');
@@ -29,7 +43,7 @@ export function requestResultWireAdapter(h, { scenario, wait, now = () => perfor
     return response.json();
   };
   const lines = async (name) => {
-    const bytes = await readFile('/run/proceed/qualification-private/' + name);
+    const bytes = await readPrivate(name);
     assert.ok(bytes.length <= 16 * 1048576);
     return bytes
       .toString('utf8')
@@ -55,9 +69,7 @@ export function requestResultWireAdapter(h, { scenario, wait, now = () => perfor
   return Object.freeze({
     connection: 'composition-shared-owner',
     async captureArmed() {
-      const marker = JSON.parse(
-        await readFile('/run/proceed/qualification-private/mcp-armed.json', 'utf8'),
-      );
+      const marker = JSON.parse((await readPrivate('mcp-armed.json')).toString());
       return marker.connection === 'composition-shared-owner' && marker.capture === 'ATTACHED';
     },
     async waitPending(session_id) {
@@ -88,7 +100,135 @@ export function requestResultWireAdapter(h, { scenario, wait, now = () => perfor
     },
     readPrivateCapture: () => lines('mcp.jsonl'),
     readPrivateCallbacks: () => lines('wrapper.jsonl'),
-    verifyCompletion(result, status) {
+    readInteractionExchanges: async () => (await lines('composition-wire.jsonl')).length,
+    async requestCapabilities() {
+      const capture = decodeMcpCapture(await lines('mcp.jsonl'), 'composition-shared-owner');
+      return capture.results.flatMap(({ message }) =>
+        message.result?.structuredContent?.request_capability
+          ? [message.result.structuredContent.request_capability]
+          : [],
+      );
+    },
+    async assertSingleDurableEffect(presentation, retained) {
+      const bytes = await readFile(h.state + '/journal.log');
+      const journal = readJournal(bytes);
+      assert.equal(
+        journal.validLength,
+        bytes.length,
+        'durable proof cannot accept an incomplete tail',
+      );
+      const mutations = journal.transactions
+        .flatMap((t) => t.mutations)
+        .filter(
+          (m) => /^request\.resolve\./.test(m.op) && m.request_id === presentation.request_id,
+        );
+      assert.equal(mutations.length, 1, 'exactly one durable decision effect');
+      assert.equal(mutations[0].decision_id, retained.decision_id);
+      const accepted = (await lines('composition-wire.jsonl')).filter(
+        (r) =>
+          r.path === '/v1/harness/decisions' &&
+          r.body?.accepted === true &&
+          r.body.request_id === presentation.request_id,
+      );
+      assert.equal(accepted.length, 1, 'one actual accepted operator-wire effect');
+      assert.equal(accepted[0].body.decision_id, retained.decision_id);
+      assert.equal(accepted[0].cipher.name, 'PSK-AES256-GCM-SHA384');
+      assert.equal(
+        accepted[0].helpers.length,
+        1,
+        'accepted choice must traverse the genuine private helper',
+      );
+      const helper = accepted[0].helpers[0];
+      assert.equal(helper.executable, '/usr/local/bin/node');
+      assert.equal(helper.argv.length, 2);
+      assert.ok(helper.argv[1].endsWith('/src/harness/operator-helper.js'));
+      for (const fd of [helper.fd3, helper.fd4]) assert.match(fd, /^(socket|pipe):\[\d+\]$/);
+    },
+    async assertStaleAndLosingNonEffect(presentation, retained) {
+      const response = await post('/v1/harness/decisions', {
+        ...scope,
+        session_id: presentation.session_id,
+        request_id: presentation.request_id,
+        presentation_id: presentation.presentation_id,
+        choice: 'reject',
+        response_text: null,
+      });
+      assert.equal(response.accepted, false);
+      for (const field of ['request_id', 'decision_id', 'resolution', 'response_text'])
+        assert.deepEqual(response[field], retained[field]);
+      const message = h.fixture.messages.find(
+        (m) =>
+          m.text.includes(presentation.request_id) &&
+          m.reply_markup?.inline_keyboard?.flat().some((b) => b.callback_data?.startsWith('a:')),
+      );
+      assert.ok(message, 'actual losing Telegram surface must exist');
+      const before = h.fixture.calls.length;
+      const batchesBefore = h.fixture.batches.length;
+      h.fixture.choose(message, 'a');
+      await wait('integrated-losing-channel', () =>
+        h.fixture.batches
+          .slice(batchesBefore)
+          .flatMap((b) => b.updates)
+          .some((u) => {
+            const q = u.callback_query;
+            return (
+              q?.message.message_id === message.message_id &&
+              q.data.startsWith('a:') &&
+              h.fixture.calls
+                .slice(before)
+                .some(
+                  (c) => c.method === 'answerCallbackQuery' && c.body.callback_query_id === q.id,
+                )
+            );
+          }),
+      );
+      assert.deepEqual((await observe(presentation)).status, retained);
+      await this.assertSingleDurableEffect(presentation, retained);
+    },
+    async assertOldCannotResolveNew(old, current) {
+      const retained = (await observe(old)).status;
+      await post('/v1/harness/decisions', {
+        ...scope,
+        session_id: old.session_id,
+        request_id: old.request_id,
+        presentation_id: old.presentation_id,
+        choice: 'approve',
+        response_text: null,
+      });
+      assert.deepEqual((await observe(old)).status, retained);
+      assert.equal((await observe(current)).status.resolution, 'pending');
+      await this.assertSingleDurableEffect(old, retained);
+    },
+    async directAttack(id, presentation) {
+      const capabilities = await this.requestCapabilities();
+      const credential =
+        id === 'direct-broker-owner'
+          ? h.owner
+          : id === 'direct-broker-capability'
+            ? capabilities[0]
+            : h.owner;
+      assert.ok(credential);
+      const response = await h.http('/v1/harness/decisions', credential, {
+        method: 'POST',
+        body: {
+          ...scope,
+          session_id: presentation.session_id,
+          request_id: presentation.request_id,
+          presentation_id: presentation.presentation_id,
+          choice: 'approve',
+          response_text: null,
+        },
+        ...(id === 'direct-broker-basic'
+          ? {
+              headers: {
+                authorization: 'Basic ' + Buffer.from('opencode:' + credential).toString('base64'),
+              },
+            }
+          : {}),
+      });
+      assert.ok([401, 403].includes(response.status));
+    },
+    async verifyCompletion(result, status) {
       assert.equal(result.assertion, 'AUTOMATED_COMPOSITION_PROXY');
       assert.equal(result.human, 'UNRUN');
       assert.equal(new Set(result.request_ids).size, 3);
@@ -98,6 +238,16 @@ export function requestResultWireAdapter(h, { scenario, wait, now = () => perfor
       );
       assert.ok(
         status.requests.every((r) => ['approved', 'rejected', 'responded'].includes(r.resolution)),
+      );
+      const wire = await lines('composition-wire.jsonl');
+      assert.equal(
+        wire.filter((r) => r.path === '/v1/harness/pending' && r.helpers.length > 0).length,
+        5,
+        'only the five confirmed genuine navigation paths may query pending through a product helper',
+      );
+      assert.equal(
+        wire.filter((r) => r.path === '/v1/harness/decisions' && r.body.accepted === true).length,
+        3,
       );
     },
   });
@@ -198,6 +348,324 @@ export function currentQuestionAdapter({ readRaw, readLive, readBinding, binding
   });
 }
 
+// Maintained actual composition driver. The inner entry supplies file/PTY IO and
+// the existing public navigation bridge. Tests can replace IO, never the scenario
+// or its current-cell/selection/result assertions. No resource starts on import.
+export function compositionRequestResultDriver({
+  wire,
+  io,
+  bridge,
+  binding,
+  executionBinding,
+  runtime,
+  wait,
+  now,
+  deadline,
+  ready,
+}) {
+  const sessions = structuredClone(runtime.sessions);
+  assert.equal(sessions.length, 2);
+  let sequence = 0;
+  const pendingInvocations = new Set();
+  const clock = () => {
+    assert.ok(now() < deadline);
+    assert.deepEqual(io.readBinding(), binding);
+    const live = io.readLive();
+    assert.equal(live.live, true);
+    assert.equal(live.run, binding.run);
+    assert.equal(live.generation, binding.setup);
+    assert.deepEqual(live.geometry, binding.geometry);
+    assert.deepEqual(live.snapshot, sessions);
+  };
+  const action = async (kind, data = {}, invocation = false) => {
+    clock();
+    const request = {
+      run: binding.run,
+      generation: binding.setup,
+      request: ++sequence,
+      kind,
+      ...data,
+    };
+    io.writeAction(request);
+    let response;
+    await wait('integrated-public-action', () => {
+      clock();
+      response = io.readAction(request.request);
+      return response !== null && (invocation || response.state !== 'STARTED');
+    });
+    assert.equal(response.request, request.request);
+    assert.equal(response.run, binding.run);
+    assert.equal(response.generation, binding.setup);
+    assert.equal(response.error, undefined, `public action ${kind} refused`);
+    if (invocation) assert.equal(response.state, 'STARTED');
+    else assert.equal(response.state, 'COMPLETE');
+    return { request, response };
+  };
+  const frame = () => {
+    clock();
+    const raw = Buffer.from(io.readRaw());
+    const cells = compositionSourceFrame(new TextDecoder('utf-8', { fatal: true }).decode(raw));
+    assert.equal(cells.supported, true);
+    return { raw, cells };
+  };
+  const fresh = async (previousFrames, predicate) => {
+    let state;
+    await wait('integrated-current-cells', () => {
+      state = frame();
+      return state.cells.frames > previousFrames && predicate(state);
+    });
+    return state;
+  };
+  const sameInput = (state, bytes) => {
+    clock();
+    const current = frame();
+    assert.deepEqual(current.raw, state.raw);
+    clock();
+    assert.deepEqual(io.readRaw(), state.raw);
+    io.send(bytes);
+  };
+  const driver = {
+    ...wire,
+    async readPublicSessions() {
+      clock();
+      return structuredClone(sessions);
+    },
+    invokeRegistered(sessionID) {
+      assert.ok(sessions.some((s) => s.id === sessionID));
+      const task = (async () => {
+        const { request } = await action('invoke', { sessionID }, true);
+        await wait('integrated-original-result', () => {
+          clock();
+          const next = io.readAction(request.request);
+          assert.equal(next?.error, undefined, 'registered invocation refused');
+          return next?.state === 'COMPLETE';
+        });
+      })();
+      pendingInvocations.add(task);
+      task.finally(() => pendingInvocations.delete(task)).catch(() => {});
+      return task;
+    },
+    async abortInvocations() {
+      if (pendingInvocations.size) await action('abort');
+    },
+    async forSession(session) {
+      assert.ok(sessions.some((s) => JSON.stringify(s) === JSON.stringify(session)));
+      let question,
+        last,
+        navigation,
+        replacement,
+        questionProof,
+        currentPresentation,
+        replacementExchanges;
+      const checkQuestion = (presentation) => {
+        currentPresentation = presentation;
+        clock();
+        question ??= currentQuestionAdapter({
+          binding,
+          readBinding: io.readBinding,
+          readLive: io.readLive,
+          readRaw: io.readRaw,
+          now,
+          deadline,
+        });
+        questionProof = question.check(presentation);
+        return frame();
+      };
+      const choices = (presentation) => {
+        const state = checkQuestion(presentation);
+        const lines = state.cells.text.split('\n');
+        const rows = ['Reject', 'Respond', 'Approve'].map((label) => {
+          const indices = lines.flatMap((line, row) => (line.trim() === label ? [row] : []));
+          assert.equal(indices.length, 1);
+          const row = indices[0],
+            col = lines[row].indexOf(label);
+          const cells = state.cells.styles[row].slice(col, col + label.length);
+          assert.equal(cells.length, label.length);
+          assert.ok(cells.every((s) => JSON.stringify(s) === JSON.stringify(cells[0])));
+          return { label, row, col, style: cells[0] };
+        });
+        return {
+          ...state,
+          supported: true,
+          binding,
+          snapshot: ['reject', 'respond', 'approve'],
+          rows,
+          frames: state.cells.frames,
+          screen: state.cells.generation,
+          bytes: state.raw.length,
+          sha256: digest(state.raw),
+          previousSha256: null,
+        };
+      };
+      const navigate = async (selected, presentation) => {
+        assert.deepEqual(selected, session);
+        const base = frame().cells.frames;
+        navigation = await bridge({
+          executionBinding,
+          runtime,
+          run: binding.run,
+          setup: binding.setup,
+          intendedSession: session,
+          readExecutionBinding: io.readExecutionBinding,
+          readObservation: io.readObservation,
+          writeObservation: io.writeObservation,
+          readRaw: io.readRaw,
+          now,
+          deadline,
+          pause: io.pause,
+          allowQuestion: true,
+          openPicker: () => io.send('\x07'),
+          moveDown: () => io.send('\x1b[B'),
+          moveUp: () => io.send('\x1b[A'),
+          pickerEnter: () => io.send('\r'),
+          openQuestion: () => io.send('\r'),
+        });
+        await ready(() => navigation.openPicker());
+        await fresh(base, ({ cells }) => cells.text.includes('Select the Proceed session'));
+        const initial = await navigation.initial();
+        await navigation.moveDown();
+        await fresh(initial.frames, () => true);
+        let moved = await navigation.moved();
+        if (sessions[0].id === session.id) {
+          await navigation.moveBack();
+          await fresh(moved.frames, () => true);
+          moved = await navigation.returned();
+        }
+        await navigation.pickerEnter();
+        await fresh(moved.frames, ({ cells }) => cells.text.includes('Open Proceed question?'));
+        const identity = await navigation.identity();
+        await navigation.openQuestion();
+        await fresh(
+          identity.frames,
+          ({ cells }) =>
+            cells.text.includes(presentation.request_id) &&
+            cells.text.split('\n').some((s) => s.trim() === 'Approve'),
+        );
+        checkQuestion(presentation);
+        last = frame();
+      };
+      return {
+        observe: wire.observe,
+        waitRetainedOutcome: wire.waitRetainedOutcome,
+        stdin: {
+          write(bytes) {
+            assert.equal(bytes, '\x1b', 'unfenced decision input is forbidden');
+            if (replacement) sameInput(replacement, bytes);
+            else {
+              question.input(currentPresentation, () => sameInput(last, bytes), bytes);
+              question.invalidate();
+            }
+          },
+        },
+        navigateCurrentSession: navigate,
+        async waitRendered() {
+          assert.ok(questionProof);
+        },
+        async waitCurrentProductDialog(p) {
+          last = checkQuestion(p);
+        },
+        async ordinaryAttacks(p, afterEach) {
+          for (const id of ['native-form-reply', 'synthetic-record', 'public-rpc']) {
+            await action(id, { sessionID: session.id, presentation: p });
+            await afterEach(id);
+          }
+          for (const id of [
+            'direct-broker-basic',
+            'direct-broker-owner',
+            'direct-broker-capability',
+          ]) {
+            await wire.directAttack(id, p);
+            await afterEach(id);
+          }
+        },
+        async programmaticCommandAttack(p) {
+          last = checkQuestion(p);
+          replacementExchanges = await wire.readInteractionExchanges();
+          question.invalidate();
+          navigation.invalidate();
+          await action('programmatic-command', { presentation: p });
+        },
+        async waitReplacementNavigation() {
+          replacement = await fresh(
+            last.cells.frames,
+            ({ raw }) => productPickerObservation(raw, binding, sessions).supported,
+          );
+          assert.equal(replacement.cells.text.includes('Proceed approval request'), false);
+          assert.equal(
+            await wire.readInteractionExchanges(),
+            replacementExchanges,
+            'replacement cannot query pending or decide without genuine confirmation',
+          );
+        },
+        async waitDismissed() {
+          const baseline = replacement ?? last;
+          const previous = {
+            ...questionProof,
+            supported: true,
+            binding,
+            frames: baseline.cells.frames,
+            screen: baseline.cells.generation,
+            bytes: baseline.raw.length,
+            sha256: digest(baseline.raw),
+          };
+          await fresh(
+            baseline.cells.frames,
+            ({ raw }) => productPickerDismissal(raw, binding, previous, io.hostFrame()).supported,
+          );
+        },
+        async chooseCurrentQuestion(p, choice) {
+          const other = sessions.find((s) => s.id !== session.id);
+          const switched = await action('switch-foreground', {
+            sessionID: other.id,
+            presentation: p,
+          });
+          assert.equal(switched.response.foreground, other.id);
+          let selected = 0;
+          let state = choices(p);
+          assert.ok(state.rows[0].style.bold && state.rows.slice(1).every((r) => !r.style.bold));
+          const target = ['reject', 'respond', 'approve'].indexOf(choice);
+          assert.ok(target >= 0);
+          // Even default Reject needs a causal transfer, not a `current` option.
+          for (const next of target === 0 ? [1, 0] : target === 1 ? [1] : [1, 2]) {
+            const before = state;
+            sameInput(before, next > selected ? '\x1b[B' : '\x1b[A');
+            await fresh(before.frames, () => true);
+            state = choices(p);
+            state.previousSha256 = digest(state.raw.subarray(0, before.bytes));
+            assert.equal(
+              productPickerInterval(before, state, selected, next).emittedTransfer,
+              true,
+            );
+            selected = next;
+          }
+          question.input(p, () => sameInput(state, '\r'), '\r');
+          question.invalidate();
+          last = state;
+        },
+        async waitResponsePrompt(p) {
+          last = await fresh(
+            last.cells.frames,
+            ({ cells }) =>
+              cells.text.includes('Proceed response for ' + p.request_id) &&
+              cells.text.includes('never an approval'),
+          );
+        },
+        async submitCurrentResponse(p, text) {
+          assert.equal(text, 'approved');
+          assert.ok(last.cells.text.includes('Proceed response for ' + p.request_id));
+          assert.ok(Date.parse(p.expires_at) > Date.now());
+          sameInput(last, text + '\r');
+        },
+      };
+    },
+  };
+  return driver;
+}
+
+export async function runCompositionRequestResult(options) {
+  return exerciseRequestToOriginatingResult(compositionRequestResultDriver(options));
+}
+
 // Driver owns real resources. Its invoke promise is the actual registered host
 // command completion. A pending request cannot be replaced by a callback record.
 // Capture must already be armed, before the sole adapter is started by the host.
@@ -240,6 +708,8 @@ export async function exerciseRequestToOriginatingResult(driver) {
         await exerciseRenderedProduct(rendered, presentations[n], 'dismiss', sessions[n]);
         rendered = await driver.forSession(sessions[n]);
         assert.equal(typeof rendered.chooseCurrentQuestion, 'function');
+        await exerciseRenderedProduct(rendered, presentations[n], 'replace', sessions[n]);
+        rendered = await driver.forSession(sessions[n]);
       }
       const choice = n === 1 ? 'approve' : 'reject';
       await exerciseRenderedProduct(rendered, presentations[n], choice, sessions[n]);
@@ -267,6 +737,7 @@ export async function exerciseRequestToOriginatingResult(driver) {
       presentations.some((p) => p.request_id === responsePresentation.request_id),
       false,
     );
+    await driver.assertOldCannotResolveNew(presentations[0], responsePresentation);
     const responding = await driver.forSession(sessions[0]);
     assert.equal(typeof responding.chooseCurrentQuestion, 'function');
     await exerciseRenderedProduct(responding, responsePresentation, 'respond', sessions[0]);

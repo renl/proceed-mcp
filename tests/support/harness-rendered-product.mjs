@@ -26,7 +26,7 @@ export const replacementAttackCase = 'programmatic-command';
 // public broker wire observations. Unit controls of this procedure are not proof
 // that those I/O adapters or the genuine product exist.
 export async function exerciseRenderedProduct(driver, presentation, choice, session) {
-  assert.ok(['dismiss', 'reject', 'respond', 'approve'].includes(choice));
+  assert.ok(['dismiss', 'replace', 'reject', 'respond', 'approve'].includes(choice));
   assert.equal(session.id, presentation.session_id, 'picker must target the bound host ID');
   assert.ok(typeof session.title === 'string' && session.title.length > 0);
   assert.ok(typeof session.id === 'string' && session.id.length > 0);
@@ -39,9 +39,13 @@ export async function exerciseRenderedProduct(driver, presentation, choice, sess
 
   // Provisional highlighted ordinal -> complete current identity -> question.
   // The driver moves/searches by ordinal, never by the no-longer-visible full ID.
-  driver.stdin.write('\x07'); // Product ctrl+g, not a fixture control.
-  assertAttackNonEffect(before, await driver.observe(presentation));
-  await confirmRenderedNavigation(driver, session);
+  if (typeof driver.navigateCurrentSession === 'function') {
+    await driver.navigateCurrentSession(session, presentation);
+  } else {
+    driver.stdin.write('\x07'); // Product ctrl+g, not a fixture control.
+    assertAttackNonEffect(before, await driver.observe(presentation));
+    await confirmRenderedNavigation(driver, session);
+  }
   assertAttackNonEffect(before, await driver.observe(presentation));
   await driver.waitRendered([
     presentation.request_id,
@@ -73,7 +77,7 @@ export async function exerciseRenderedProduct(driver, presentation, choice, sess
   // No reopen between forged-reply attacks and selection. Replacement attacks
   // are separate and never send a decision key into a picker or composer.
   await driver.waitCurrentProductDialog(presentation);
-  if (choice === 'dismiss') {
+  if (choice === 'replace') {
     // This is the separate replacement scenario, not a rescue of a failed
     // same-question assertion. It must finish before a new genuine interaction.
     assert.equal(typeof driver.programmaticCommandAttack, 'function');
@@ -83,6 +87,12 @@ export async function exerciseRenderedProduct(driver, presentation, choice, sess
     await driver.waitReplacementNavigation(presentation);
     assertAttackNonEffect(before, await driver.observe(presentation));
     // Escape only. Never send Approve/Reject/Respond/Enter into the successor.
+    driver.stdin.write('\x1b');
+    await driver.waitDismissed();
+    assertAttackNonEffect(before, await driver.observe(presentation));
+    return;
+  }
+  if (choice === 'dismiss') {
     driver.stdin.write('\x1b');
     await driver.waitDismissed();
     assertAttackNonEffect(before, await driver.observe(presentation));
@@ -101,7 +111,9 @@ export async function exerciseRenderedProduct(driver, presentation, choice, sess
   }
   if (choice === 'respond') {
     await driver.waitResponsePrompt(presentation);
-    driver.stdin.write('approved\r');
+    if (typeof driver.submitCurrentResponse === 'function')
+      await driver.submitCurrentResponse(presentation, 'approved');
+    else driver.stdin.write('approved\r');
   }
   // Poll the public presentation-status wire for the immutable retained outcome.
   // Do not require decrypted interception or a test API to expose the TUI's

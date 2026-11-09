@@ -34,6 +34,8 @@ import {
   productCaptureExport,
   productCaptureInputs,
   productCaptureLogs,
+  productCaptureReadFile,
+  scanIntegratedPrivateCaptures,
 } from './harness-composition-retention.mjs';
 import { digest, collectionAdmit, collectionLimits } from './harness-renderer-observation.mjs';
 import {
@@ -49,7 +51,11 @@ import {
   compositionGuardJournal,
   compositionSourceFrame,
 } from './harness-composition-readiness.mjs';
-import { assertPluginInventory } from './harness-plugin-inventory.mjs';
+import { assertPluginInventory, assertServiceInventory } from './harness-plugin-inventory.mjs';
+import {
+  requestResultWireAdapter,
+  runCompositionRequestResult,
+} from './harness-request-result.mjs';
 import {
   captureProductPicker,
   productPickerObservation,
@@ -61,9 +67,18 @@ import {
 } from './harness-navigation-observation.mjs';
 import {
   stageQualification,
+  integratedCompositionConfiguration,
   isolatedLinuxEnvironment,
   linuxScriptArguments,
 } from './harness-linux-plan.mjs';
+
+// Pure dispatch seam of the actual contained entry, exercised natively without
+// importing the resource-owning module body or replacing the integrated driver.
+export async function compositionIntegratedScenario(options) {
+  assert.equal(options.wire.connection, 'composition-shared-owner');
+  assert.equal(typeof options.io.send, 'function');
+  return runCompositionRequestResult(options);
+}
 
 // TEST ONLY. File-observation/PTY bridge for the separate navigation-only mode.
 // The wrapper owns public session reads. IO supplies current PTY bytes, not
@@ -84,6 +99,10 @@ export async function compositionPublicNavigationBridge({
   pickerEnter,
   openPicker,
   cancel,
+  intendedSession,
+  allowQuestion = false,
+  openQuestion,
+  moveUp,
 }) {
   const fixed = structuredClone(executionBinding);
   let invalid = false,
@@ -94,7 +113,7 @@ export async function compositionPublicNavigationBridge({
     sequence = 0,
     opened = false,
     confirmed = false;
-  let intended,
+  let intended = intendedSession && Object.freeze(structuredClone(intendedSession)),
     geometry,
     lastClock = -Infinity;
   const invalidate = () => {
@@ -165,8 +184,8 @@ export async function compositionPublicNavigationBridge({
       await pause();
     }
     current();
-    intended ??= Object.freeze(structuredClone(response.snapshot[1]));
-    assert.deepEqual(response.snapshot[1], intended);
+    intended ??= Object.freeze(structuredClone(intendedSession ?? response.snapshot[1]));
+    assert.ok(response.snapshot.some((s) => JSON.stringify(s) === JSON.stringify(intended)));
     assert.deepEqual(response.exact, structuredClone({ id: intended.id, title: intended.title }));
     clock();
   };
@@ -214,11 +233,14 @@ export async function compositionPublicNavigationBridge({
       },
       deadline,
       moveDown,
+      moveUp,
+      targetIndex: response.snapshot.findIndex((s) => s.id === intended.id),
       pickerEnter,
       // No second Enter capability exists in this navigation-only bridge.
       openQuestion: () => {
-        invalidate();
-        assert.fail('navigation admission refused');
+        assert.equal(allowQuestion, true);
+        assert.equal(typeof openQuestion, 'function');
+        openQuestion();
       },
     });
     active();
@@ -248,6 +270,8 @@ export async function compositionPublicNavigationBridge({
       initial: () => stage('initial'),
       moveDown: () => stage('moveDown'),
       moved: () => stage('moved'),
+      moveBack: () => stage('moveBack'),
+      returned: () => stage('returned'),
       pickerEnter: () => stage('pickerEnter'),
       identity: () => stage('identity'),
       cancel: () => {
@@ -266,8 +290,11 @@ export async function compositionPublicNavigationBridge({
         }
       },
       openQuestion: () => {
-        invalidate();
-        assert.fail('navigation admission refused');
+        if (!allowQuestion) {
+          invalidate();
+          assert.fail('navigation admission refused');
+        }
+        return stage('openQuestion');
       },
       invalidate,
     });
@@ -367,6 +394,7 @@ export function compositionNavigationSelection({
   readSession,
   pickerEnter,
   openQuestion,
+  targetIndex = 1,
   ...io
 }) {
   let observer;
@@ -377,7 +405,7 @@ export function compositionNavigationSelection({
       ...io,
       readLive: () => {
         const live = io.readLive();
-        assert.deepEqual(live.snapshot[1], intended);
+        assert.deepEqual(live.snapshot[targetIndex], intended);
         // Independent public data.session.get(id) projection. Never a preview
         // lookup or a session inferred from the rendered picker cells.
         const current = readSession(intended.id);
@@ -392,11 +420,14 @@ export function compositionNavigationSelection({
         assert.equal(typeof input, 'function');
         input();
       },
+      targetIndex,
     });
     return Object.freeze({
       initial: () => observer.initial(),
       moveDown: () => observer.moveDown(),
       moved: () => observer.moved(),
+      moveBack: () => observer.moveBack(),
+      returned: () => observer.returned(),
       pickerEnter: () => observer.pickerEnter(intended),
       identity: () => observer.identity(),
       openQuestion: () => observer.openQuestion(),
@@ -422,6 +453,8 @@ export function compositionNavigationObserver({
   now,
   deadline,
   moveDown,
+  moveUp,
+  targetIndex = 1,
   enter,
 }) {
   const live = readLive();
@@ -442,6 +475,8 @@ export function compositionNavigationObserver({
     now,
     deadline,
     moveDown,
+    moveUp,
+    targetIndex,
     enter,
     sample: () => {
       const current = readLive();
@@ -473,7 +508,9 @@ assert.ok(
 );
 const pickerCapture = process.argv[2] === '--product-picker-capture';
 const navigationOnly = process.argv[2] === '--product-navigation';
-const productMode = pickerCapture || navigationOnly;
+const integratedScenario = !pickerCapture && !navigationOnly;
+const productMode = true;
+let integratedResult, integratedWire;
 let pickerEvidence, executionBinding;
 let dismissalAdmitted = false;
 let productExitSnapshot;
@@ -504,7 +541,7 @@ let scanReason = 'UNRUN';
 let productCleanup = 'UNRUN',
   hostExit = 'UNRUN';
 let commandEligibility = 'UNRUN';
-const keys = { ctrlG: 0, enter: 0, exit: 0, down: 0, escape: 0 };
+const keys = { ctrlG: 0, ctrlE: 0, enter: 0, exit: 0, down: 0, up: 0, escape: 0 };
 let readinessFrame = '';
 let readinessObservation;
 const guardJournal = compositionGuardJournal();
@@ -643,10 +680,12 @@ try {
         join(fixture, 'tui.ts'),
         await readFile('/payload/tests/fixtures/harness-composition/tui.ts'),
       );
-      await writeFile(
-        staging.config,
-        JSON.stringify({ plugins: [{ package: fixture, options: staging.options }] }),
-      );
+      const configuration = integratedScenario
+        ? integratedCompositionConfiguration(staging, fixture, h.state)
+        : { cli: { plugins: [{ package: fixture, options: staging.options }] } };
+      await writeFile(staging.config, JSON.stringify(configuration.cli));
+      const serviceConfig = join(env.OPENCODE_CONFIG_DIR, 'opencode.json');
+      if (integratedScenario) await writeFile(serviceConfig, JSON.stringify(configuration.service));
       if (productMode) {
         executionBinding = {
           scope: 'product-capture',
@@ -661,6 +700,7 @@ try {
           sourceBinding: 'PINNED_IMAGE_PROVENANCE_NOT_RUNTIME_ACCESSOR',
           config: digest(await readFile(staging.config)),
           configBytes: (await readFile(staging.config)).toString('utf8'),
+          ...(integratedScenario ? { serviceConfig: digest(await readFile(serviceConfig)) } : {}),
           environment: env,
           terminalResponsePolicy: terminalResponses.map(([query, reply]) => ({
             query: query.source,
@@ -696,6 +736,18 @@ try {
       try {
         requiredSecrets = navigationOnly ? controls.secrets : freezeTransportSecrets(controls);
         assert.equal(new Set(requiredSecrets).size, requiredSecrets.length);
+        if (integratedScenario) {
+          await writeFile(
+            '/run/proceed/qualification-private/cases.json',
+            JSON.stringify(controls.plan),
+            { mode: 0o600 },
+          );
+          Object.assign(env, {
+            HTTP_PROXY: controls.proxy,
+            HTTPS_PROXY: controls.proxy,
+            ALL_PROXY: controls.proxy,
+          });
+        }
         if (navigationOnly) assert.equal(h.pending, undefined);
         assert.match(
           execFileSync('/usr/local/bin/opencode', ['--version'], {
@@ -710,7 +762,7 @@ try {
         const run = randomUUID();
         await writeFile(
           join(evidence, 'composition-binding.json'),
-          JSON.stringify({ run, captureOnly: pickerCapture, navigationOnly }),
+          JSON.stringify({ run, captureOnly: pickerCapture, navigationOnly, integratedScenario }),
         );
         // Establish the empty observer stream before any exchange. Missing later
         // is a capture failure, never an invented zero-response scan input.
@@ -1118,46 +1170,167 @@ try {
           );
           await h.noWork();
         } else {
-          // STATIC-ONLY: no historical capture/profile or injected-IO PASS can
-          // authorize real navigation. Fresh runtime/input authority and review
-          // of the compositionNavigationObserver bindings are separate gates.
-          assert.fail('product navigation requires separate runtime/input authority');
-          await wait('rendered-product-empty-result', () =>
-            compositionCurrentFrame(transcript.toString()).includes(
-              'selected session has no pending question',
-            ),
+          assert.equal(integratedScenario, true);
+          await wait(
+            'integrated-transport-outcomes',
+            () => exists(join(evidence, 'runtime-transport.json')),
+            Math.max(0, readinessEnd - Date.now()),
           );
-          const wire = JSON.parse(
-            '[' +
-              (await readFile('/run/proceed/qualification-private/composition-wire.jsonl', 'utf8'))
-                .trim()
-                .split('\n')
-                .join(',') +
-              ']',
+          const transport = readObservation('runtime-transport.json');
+          assert.notEqual(transport.status, 'FAIL', 'embedded transport controls failed');
+          assert.deepEqual(
+            transport.observations.map((o) => o.id).sort(),
+            [
+              ...controls.plan.roles.cases.map((c) => c.id),
+              ...controls.plan.product.controls.map((c) => c.id),
+              'product-loader-unsafe-files',
+            ].sort(),
           );
-          const admitted = wire.filter((v) => v.status === 200);
-          assert.equal(wire.filter((v) => v.path === '/v1/harness/decisions').length, 0);
-          assert.equal(admitted.length, 1);
-          const actual = admitted[0];
-          assert.equal(actual.method, 'POST');
-          assert.deepEqual(actual.body, { schema_version: 1, presentation: null });
-          assert.equal(actual.cipher.name, 'PSK-AES256-GCM-SHA384');
-          assert.equal(actual.helpers.length, 1);
-          const helper = actual.helpers[0];
-          assert.equal(helper.executable, '/usr/local/bin/node');
-          assert.equal(
-            execFileSync(helper.executable, ['--version'], {
-              env,
-              timeout: 5000,
-              encoding: 'utf8',
-            }).trim(),
-            'v24.22.2',
+          await controls.assertObserved();
+          const fixed = structuredClone(executionBinding);
+          const live = readObservation('composition-live.json');
+          const integratedBinding = {
+            ...fixed,
+            runtime: { version: runtime.version, bun: runtime.bun, node: runtime.node },
+            run,
+            setup: runtime.generation,
+            geometry: structuredClone(live.geometry),
+          };
+          const readFixed = () => ({
+            ...fixed,
+            config: digest(readFileSync(staging.config)),
+            configBytes: readFileSync(staging.config).toString('utf8'),
+            serviceConfig: digest(readFileSync(serviceConfig)),
+            wrapper: digest(readFileSync(join(fixture, 'tui.ts'))),
+            package: digest(readFileSync(join(staging.product, 'package.json'))),
+            environment: env,
+          });
+          // Reserve the existing teardown/scan budget inside the original bound.
+          const scenarioDeadline = performance.now() + Math.max(0, end - Date.now() - 45000);
+          const integratedWait = (label, predicate) => wait(label, predicate, 0, scenarioDeadline);
+          let enrollmentFrame;
+          await admitReady(() => {
+            keys.ctrlE++;
+            child.stdin.write('\x05');
+          });
+          await integratedWait('integrated-enrollment-display', () => {
+            const cells = compositionSourceFrame(transcript.toString());
+            if (!cells.supported) return false;
+            const lines = cells.text.split('\n').map((s) => s.trim());
+            if (
+              !lines.includes('Operator key fingerprint (this TUI): ' + h.operator.keyId) ||
+              !lines.includes('Broker fingerprint: ' + h.proposal.key_id) ||
+              !lines.includes('State: enrolled')
+            )
+              return false;
+            assert.deepEqual(readFixed(), fixed);
+            assert.deepEqual(
+              readObservation('composition-live.json').geometry,
+              integratedBinding.geometry,
+            );
+            enrollmentFrame = {
+              raw: Buffer.from(transcript),
+              frames: cells.frames,
+              screen: cells.generation,
+            };
+            return true;
+          });
+          assert.deepEqual(transcript, enrollmentFrame.raw);
+          assert.deepEqual(readFixed(), fixed);
+          assertProductPickerDeadline(() => performance.now(), scenarioDeadline);
+          assert.deepEqual(transcript, enrollmentFrame.raw);
+          keys.escape++;
+          child.stdin.write('\x1b');
+          await integratedWait(
+            'integrated-enrollment-display',
+            () =>
+              productPickerDismissal(
+                Buffer.from(transcript),
+                integratedBinding,
+                {
+                  supported: true,
+                  binding: integratedBinding,
+                  bytes: enrollmentFrame.raw.length,
+                  sha256: digest(enrollmentFrame.raw),
+                  frames: enrollmentFrame.frames,
+                  screen: enrollmentFrame.screen,
+                },
+                readinessFrame,
+              ).supported,
           );
-          assert.equal(helper.argv.length, 2);
-          assert.equal(helper.argv[1], join(staging.product, 'src/harness/operator-helper.js'));
-          for (const fd of [helper.fd3, helper.fd4]) assert.match(fd, /^(socket|pipe):\[\d+\]$/);
-          await wait('physical-helper-absence', async () => !(await exists('/proc/' + helper.pid)));
           await h.noWork();
+          integratedWire = requestResultWireAdapter(h, {
+            scenario: 'request-to-originating-result',
+            wait: integratedWait,
+          });
+          await wait(
+            'integrated-capture-armed',
+            () => exists('/run/proceed/qualification-private/mcp-armed.json'),
+            0,
+            scenarioDeadline,
+          );
+          let first = true;
+          const io = {
+            ...navigationBridgeIO,
+            readLive: () => readObservation('composition-live.json'),
+            readExecutionBinding: readFixed,
+            readBinding: () => ({
+              ...readFixed(),
+              runtime: integratedBinding.runtime,
+              run,
+              setup: runtime.generation,
+              geometry: readObservation('composition-live.json').geometry,
+            }),
+            send: (bytes) => {
+              assert.ok(!exited && !closed && !overflow);
+              if (bytes === '\x07') keys.ctrlG++;
+              if (bytes === '\r' || bytes === 'approved\r') keys.enter++;
+              if (bytes === '\x1b[B') keys.down++;
+              if (bytes === '\x1b[A') keys.up++;
+              if (bytes === '\x1b') keys.escape++;
+              child.stdin.write(bytes);
+            },
+            writeAction: (request) =>
+              writeFileSync(
+                '/run/proceed/qualification-private/composition-action-' +
+                  request.request +
+                  '.json',
+                JSON.stringify(request),
+                { mode: 0o600, flag: 'wx' },
+              ),
+            readAction: (id) => {
+              try {
+                return JSON.parse(
+                  readFileSync(
+                    '/run/proceed/qualification-private/composition-action-result-' + id + '.json',
+                    'utf8',
+                  ),
+                );
+              } catch {
+                return null;
+              }
+            },
+            pause: () => delay(20),
+            hostFrame: () => readinessFrame,
+          };
+          integratedResult = await compositionIntegratedScenario({
+            wire: integratedWire,
+            io,
+            bridge: compositionPublicNavigationBridge,
+            binding: integratedBinding,
+            executionBinding: fixed,
+            runtime,
+            wait: integratedWait,
+            now: () => performance.now(),
+            deadline: scenarioDeadline,
+            ready: async (open) => {
+              if (first) {
+                first = false;
+                await admitReady(open);
+              } else open();
+            },
+          });
+          dismissalAdmitted = true;
         }
         const cleanupEnd = navigationOnly
           ? navigationCleanupEnd
@@ -1190,29 +1363,18 @@ try {
         );
         cleanupObservation = cleanupTiming.value(cleanupMarker);
         assert.equal(cleanupMarker.productCleanup, 'PASS');
+        if (integratedScenario)
+          assert.deepEqual(readObservation('transport-cleanup.json'), {
+            aborted: true,
+            timerCleared: true,
+          });
         assert.ok(
           cleanupObservation.timely &&
             cleanupObservation.wrapper &&
             cleanupObservation.wrapper.RETURN !== null,
         );
         await wait('actual-host-exit', () => exited);
-        if (!productMode)
-          await writeFile(
-            join(evidence, 'composition-summary.json'),
-            JSON.stringify({
-              status: 'PASS',
-              runtime,
-              helperNode: process.version,
-              response: actual.body,
-              statusCode: actual.status,
-              cipher: actual.cipher.name,
-              privateDescriptors: 'PASS',
-              helperAbsence: 'PASS',
-              productCleanup: 'PASS',
-              zeroWork: 'PASS',
-              scope: 'One compiled-host empty pending exchange only',
-            }),
-          );
+        return integratedResult;
       } catch (error) {
         errorCode = compositionErrorCode(error);
         // Preserve the last complete loop sample, not reconstructed failure-time
@@ -1312,10 +1474,43 @@ try {
             const complete = closed && remainingPids.length === 0;
             if (productMode) {
               assert.ok(complete && productCleanup === 'OBSERVED');
-              assert.ok(navigationOnly ? keys.enter <= 1 : keys.enter === 0);
+              if (!integratedScenario)
+                assert.ok(navigationOnly ? keys.enter <= 1 : keys.enter === 0);
+              let privateCaptureScan;
+              const privateInputs = [];
+              if (integratedScenario) {
+                const root = '/run/proceed/qualification-private/';
+                let total = 0;
+                const captures = new Map();
+                const names = (await readdir(root))
+                  .filter((n) =>
+                    /^(?:mcp\.jsonl|wrapper\.jsonl|composition-action(?:-result)?-\d+\.json|composition-service-inventory\.json|composition-public-api\.jsonl)$/.test(
+                      n,
+                    ),
+                  )
+                  .sort();
+                for (const name of names) {
+                  const bytes = await productCaptureReadFile({}, root + name, 'api', total);
+                  total += bytes.length;
+                  captures.set(name, bytes);
+                  privateInputs.push({ bytes });
+                }
+                privateCaptureScan = scanIntegratedPrivateCaptures(
+                  {
+                    mcp: captures.get('mcp.jsonl'),
+                    callbacks: captures.get('wrapper.jsonl'),
+                    other: [...captures]
+                      .filter(([name]) => !['mcp.jsonl', 'wrapper.jsonl'].includes(name))
+                      .map(([, bytes]) => bytes),
+                  },
+                  requiredSecrets,
+                );
+              }
               const observations = Buffer.from(
                 JSON.stringify({
                   pickerEvidence,
+                  integratedResult,
+                  privateCaptureScan,
                   cleanupObservation,
                   executionBinding,
                   keys,
@@ -1328,9 +1523,14 @@ try {
               const { journal, api } = await productCaptureInputs(
                 h.state,
                 '/run/proceed/qualification-private/composition-wire.jsonl',
+                undefined,
+                integratedScenario,
               );
               const telegram = Buffer.from(JSON.stringify(h.fixture.calls));
-              const extras = [journal, api, telegram, transcript].map((bytes) => ({ bytes }));
+              const extras = [
+                ...[journal, api, telegram, transcript].map((bytes) => ({ bytes })),
+                ...privateInputs,
+              ];
               const entries = await collectProductCapture(
                 { state: '/run/proceed/host-state', evidence },
                 extras,
@@ -1352,6 +1552,28 @@ try {
                 collectionLimits.detail,
               );
               const pluginBytes = Buffer.from(pluginLines.join('\n'));
+              if (integratedScenario) {
+                assertPluginInventory(pluginLines, {
+                  entries: [
+                    { plugin: fixture, entry: join(fixture, 'tui.ts') },
+                    { plugin: staging.adversary, entry: join(staging.adversary, 'tui.ts') },
+                    { plugin: staging.transport, entry: join(staging.transport, 'tui.ts') },
+                  ],
+                  complete: true,
+                });
+                const inventory = JSON.parse(
+                  readFileSync(
+                    '/run/proceed/qualification-private/composition-service-inventory.json',
+                    'utf8',
+                  ),
+                );
+                assertServiceInventory(inventory, {
+                  entries: [
+                    { plugin: fixture, features: { tui: true, server: false, rpc: false } },
+                    ...staging.serviceEntries,
+                  ],
+                });
+              }
               const pty = entries.find((e) => e.path === '/run/proceed/host-state/pty.raw');
               assert.ok(pty);
               const S =
@@ -1481,7 +1703,16 @@ try {
           throw Object.assign(Error('scan refused'), { code: 'CAPTURE_SCAN_REFUSED' });
       }
     },
-    { brokerObserver: true, captureOnly: productMode },
+    {
+      brokerObserver: true,
+      captureOnly: !integratedScenario,
+      ...(integratedScenario
+        ? {
+            scenario: 'request-to-originating-result',
+            verifyCompletion: (result, status) => integratedWire.verifyCompletion(result, status),
+          }
+        : {}),
+    },
   );
 } catch (error) {
   errorCode ??= compositionErrorCode(error);

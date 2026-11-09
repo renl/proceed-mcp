@@ -51,6 +51,48 @@ export function qualificationPayload(tracked) {
   ].sort();
 }
 
+export function integratedCompositionConfiguration(staging, fixture, state) {
+  assert.ok(state.startsWith('/run/proceed/managed-fixtures/'));
+  return {
+    cli: {
+      plugins: [
+        { package: fixture, options: staging.options },
+        { package: staging.adversary, options: { evidence_directory: '/run/proceed/evidence' } },
+        {
+          package: staging.transport,
+          options: {
+            cases_file: '/run/proceed/qualification-private/cases.json',
+            evidence_directory: '/run/proceed/evidence',
+          },
+        },
+      ],
+    },
+    service: {
+      plugins: [
+        { package: fixture, options: staging.options },
+        { package: staging.adversary },
+        { package: staging.transport },
+        { package: staging.wrapper },
+      ],
+      mcp: {
+        servers: {
+          proceed: {
+            type: 'local',
+            command: [
+              '/usr/local/bin/node',
+              '/payload/tests/fixtures/harness-composition/mcp.mjs',
+              state,
+            ],
+            environment: { PROCEED_TEST_ISOLATED_PID_NAMESPACE: '1' },
+            protocol: 'legacy',
+            timeout: { startup: 15000, catalog: 15000, execution: 150000 },
+          },
+        },
+      },
+    },
+  };
+}
+
 export async function stageQualification(env, evidence, payload, destination, options, files) {
   for (const key of ['HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR'])
     assert.deepEqual(await readdir(env[key]), [], `initial ${key} must be empty`);

@@ -81,7 +81,7 @@ export function productPickerObservation(raw, binding, snapshot, previous) {
   }
 }
 
-export function productPickerInterval(before, after) {
+export function productPickerInterval(before, after, from = 0, to = 1) {
   // Interval facts are not reusable profiles. Unknown semantic bindings refuse
   // qualification even when emitted identities visibly transfer between rows.
   try {
@@ -95,16 +95,18 @@ export function productPickerInterval(before, after) {
       before.rows.map(({ style, ...r }) => r),
       after.rows.map(({ style, ...r }) => r),
     );
-    assert.ok(before.rows[0].style.bold && after.rows[1].style.bold);
-    assert.ok(before.rows.slice(1).every((r) => !r.style.bold));
-    assert.ok(after.rows.filter((_, n) => n !== 1).every((r) => !r.style.bold));
-    assert.deepEqual(before.rows[0].style, after.rows[1].style);
-    assert.deepEqual(before.rows[1].style, after.rows[0].style);
-    for (let n = 2; n < before.rows.length; n++) {
-      assert.deepEqual(before.rows[n].style, before.rows[1].style);
-      assert.deepEqual(after.rows[n].style, before.rows[1].style);
+    assert.ok(Number.isInteger(from) && Number.isInteger(to) && from !== to);
+    assert.ok(before.rows[from].style.bold && after.rows[to].style.bold);
+    assert.ok(before.rows.filter((_, n) => n !== from).every((r) => !r.style.bold));
+    assert.ok(after.rows.filter((_, n) => n !== to).every((r) => !r.style.bold));
+    assert.deepEqual(before.rows[from].style, after.rows[to].style);
+    assert.deepEqual(before.rows[to].style, after.rows[from].style);
+    for (let n = 0; n < before.rows.length; n++) {
+      if (n === from || n === to) continue;
+      assert.deepEqual(before.rows[n].style, before.rows[to].style);
+      assert.deepEqual(after.rows[n].style, before.rows[to].style);
     }
-    assert.notEqual(before.rows[0].style.bg, before.rows[1].style.bg);
+    assert.notEqual(before.rows[from].style.bg, before.rows[to].style.bg);
     return {
       qualification: 'UNQUALIFIED',
       reason: 'MISSING_SEMANTIC_BINDING',
@@ -174,10 +176,13 @@ export function createProductNavigationObserver({
   now,
   deadline,
   moveDown,
+  moveUp,
+  targetIndex = 1,
   enter,
 }) {
   const admitted = structuredClone(binding);
   const sessions = structuredClone(snapshot);
+  assert.ok(targetIndex === 0 || targetIndex === 1);
   let stage = 'INITIAL',
     initial,
     moved,
@@ -281,10 +286,33 @@ export function createProductNavigationObserver({
         return structuredClone(moved); // Still UNQUALIFIED and null profile.
       });
     },
+    moveBack() {
+      return fence(() => {
+        assert.equal(targetIndex, 0);
+        assert.equal(stage, 'PICKER');
+        unchangedPicker(moved);
+        advance('AWAIT_RETURNED');
+        assert.equal(typeof moveUp, 'function');
+        clock();
+        active();
+        moveUp();
+      });
+    },
+    returned() {
+      return fence(() => {
+        assert.equal(stage, 'AWAIT_RETURNED');
+        const returned = observe(moved);
+        assert.equal(returned.frames, moved.frames + 1);
+        assert.equal(productPickerInterval(moved, returned, 1, 0).emittedTransfer, true);
+        moved = returned;
+        advance('RETURNED');
+        return structuredClone(moved);
+      });
+    },
     pickerEnter(session) {
       return fence(() => {
-        assert.equal(stage, 'PICKER');
-        assert.deepEqual(session, sessions[1]);
+        assert.equal(stage, targetIndex === 0 ? 'RETURNED' : 'PICKER');
+        assert.deepEqual(session, sessions[targetIndex]);
         unchangedPicker(moved);
         selected = structuredClone(session);
         advance('AWAIT_IDENTITY');

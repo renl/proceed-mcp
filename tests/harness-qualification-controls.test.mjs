@@ -242,7 +242,7 @@ test('QUAL-RENDERED driver control cannot substitute missing attacks, callback r
   assert.deepEqual(writes, ['\x07', '\r', '\r', 'Respond\r', 'approved\r']);
   writes.length = 0;
   terminal = false;
-  await exerciseRenderedProduct(driver, question, 'dismiss', session);
+  await exerciseRenderedProduct(driver, question, 'replace', session);
   assert.equal(replacement, true);
   assert.deepEqual(writes, ['\x07', '\r', '\r', '\x1b']);
   writes.length = 0;
@@ -251,7 +251,7 @@ test('QUAL-RENDERED driver control cannot substitute missing attacks, callback r
     exerciseRenderedProduct(
       { ...driver, waitReplacementNavigation: undefined },
       question,
-      'dismiss',
+      'replace',
       session,
     ),
   );
