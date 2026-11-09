@@ -2,6 +2,8 @@
 
 ## MCP-RECEIPT-POST-CLEANUP-ORDER - correction 1
 
+Frozen executable `512fac29091112391917e1a858efc94884e23eec`, direct child of the entry below. Exactly three corrected test/fixture paths plus this tasks file were selected. Native 75/75 evidence and six current manifests below bind identical committed executable inputs. All three selected `node --check` commands, scoped Prettier check over those paths and tasks, selected/staged `git diff --check` and telemetry-disabled `openspec validate add-harness-approval-channel --strict` PASS, exit 0 within 30000 ms. This finalization is tasks-only. Focused independent review is ready, not accepted. No runtime proof or new run authority. README/status overlays remain untouched and unselected.
+
 Entry `f60c7b10e466c12149b09138ef32c471d1230138`, executable parent `19d4a6359198765328e53101f137769aa7ef3e53`. Entry index empty, only README/status overlays dirty. Both remain untouched and unselected. Correction counter 1. Finding: the actual MCP producer published a complete receipt before awaiting armed-file removal. A removal rejection escaped its finally body, while collection could still admit the receipt without attesting producer exit status.
 
 Criteria: settle all fallible owned cleanup before publishing complete. Actual removal rejection must yield handled nonzero exit, no complete receipt and refusal through the actual collection/five-transfer consumer. Preserve adapter code 0/no signal/no stderr, bridge/write/file settlement, shared EOF/SIGTERM deadline, original lifetime and unchanged budgets. No fake failure, skipped cleanup, relaxed receipt/exit meaning or old-run re-signing.
