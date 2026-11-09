@@ -285,6 +285,26 @@ for (const stage of ['question', 'respond']) {
   });
 }
 
+test('resize aborts an already-owned decision exchange before its delayed result', async (t) => {
+  // Design section 2 requires abort as well as callback fencing when display
+  // admission is lost. This is an injected pending promise, not a real helper.
+  const f = await fixture(t);
+  const current = await f.question();
+  f.holdDecisions();
+  current.resolve('reject');
+  await flush();
+  const exchange = f.calls.at(-1);
+  assert.equal(exchange.operation, 'decisions');
+  assert.equal(exchange.signal.aborted, false);
+  f.renderer.width = 20;
+  f.renderer.height = 6;
+  f.renderer.emit('resize');
+  await flush();
+  assert.equal(exchange.isActive(), false, 'lost display admission fences further phases');
+  assert.equal(exchange.signal.aborted, true, 'resize must abort the outstanding exchange now');
+  assert.equal(f.calls.filter((c) => c.operation === 'decisions').length, 1, 'no automatic retry');
+});
+
 test('Respond approved is instructions on the exact captured request, never approval', async (t) => {
   const f = await fixture(t);
   const current = await f.question();
