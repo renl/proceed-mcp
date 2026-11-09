@@ -2,6 +2,8 @@
 
 ## Broader calibration regression disposition - static correction
 
+Frozen corrected executable `1d8a378f1cc50ce9a81269b2f534e6412cf971d6` contains only calibration assertions and this tasks update relative to entry. All three broader RED checks are resolved by the complete 64/64 run, not waived. Subsequent finalization is tasks-only with code/tests/helpers unchanged. The six manifests and selected complete-byte hashes below identify the candidate for independent combined review, which remains PENDING. This is a clean scoped static candidate, not all-program green, useful-flow or release acceptance.
+
 Entry HEAD `84d9f925e91257f704d7216b21d64043a1d5de58`, reader executable `a990ac9697d8c1e8dfbd52f7ca87f1289be4cb6a`. One live entry check found an empty index and only the existing README/status overlays dirty. Both remain untouched and unselected. This correction changes only `tests/harness-renderer-calibration.test.mjs` and this active tasks record. No production, helper, contract, diagnostic schema, dependency, image, budget or timeout changed. No runtime, preflight, service, network, credentials, refused capture or external filesystem recovery occurred.
 
 ### Exact three-RED disposition
