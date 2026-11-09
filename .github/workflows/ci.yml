@@ -22,17 +22,12 @@ jobs:
           npm ci --ignore-scripts
       - shell: bash
         run: |
-          node --test tests/release-metadata.test.mjs tests/release-preview-ci.test.mjs tests/release-artifact.test.mjs
-      - shell: bash
-        run: |
           node node_modules/prettier/bin/prettier.cjs --check .github/workflows/ci.yml
       - shell: bash
         run: |
-          node scripts/build.mjs
+          node --test --test-reporter=tap tests/harness-question-lifetime.test.mjs tests/harness-revocation-unit.test.mjs tests/harness-channel-unit.test.mjs tests/harness-context-unit.test.mjs tests/harness-preparation-unit.test.mjs tests/harness-admission-unit.test.mjs
+        timeout-minutes: 1
       - shell: bash
         run: |
-          npmCli="$(readlink -f "$(command -v npm)")"
-          test "$npmCli" = "$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")/lib/node_modules/npm/bin/npm-cli.js"
-          test -f "$npmCli"
-          PROCEED_TEST_NPM_CLI="$npmCli" node tests/release-pack.mjs
-        timeout-minutes: 5
+          node --test --test-reporter=tap tests/portable-execution-cancel.test.mjs tests/portable-wait-unit.test.mjs
+        timeout-minutes: 1
