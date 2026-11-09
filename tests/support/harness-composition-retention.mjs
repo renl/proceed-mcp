@@ -113,6 +113,9 @@ export function scanIntegratedPrivateCaptures(
         );
     } else if (value && typeof value === 'object')
       for (const [key, child] of Object.entries(value)) {
+        // Names are decoded JSON strings too. Private protocol exceptions are
+        // for correlated values only and must never authorize a property name.
+        inspect(key);
         assert.equal(
           /^(?:authorization|credential|operator_credential|owner_token|control_token|psk|secret)$/i.test(
             key,

@@ -1,5 +1,43 @@
 # Tasks
 
+## Decoded property authority - correction 1
+
+Gap `INTEGRATED-DECODED-PROPERTY-AUTHORITY`, correction 1. Entry is `fcefa1821035400ad307156c7e155f31aa101c6a` with an empty index and only README/status overlays dirty. Both overlays and unknown work are preserved and unselected. This section supersedes the previous review-ready assertion and freeze only for the affected inputs. Scope is the retention helper, existing request-result native test and this tasks file. Production, contracts, design, specifications, dependencies, image, budgets and baseline are unchanged.
+
+Source criteria remain the top corrected integrated-failure privacy acceptance below: complete generated-secret universe, canonical unknown authority refusal and full raw/decoded coverage independent of scenario success. Every decoded JSON property name now passes the existing secret/authority string inspector with no allowed-value placement context. Recursion through decoded MCP messages, callbacks and other JSON therefore checks nested names too. Existing correlation exceptions apply only to their existing values. No normalization beyond JSON decoding, broader `cap_` name ban, new interface, getter execution or parsing framework is introduced. Existing collection/work/depth/failure bounds are unchanged. No callsite change is needed because those maintained consumers already reach the recursive inspector.
+
+Executable evidence is the existing `integrated private capture scans decoded original fields before summary and refuses leaked or misplaced authority` test in `tests/harness-request-result.test.mjs`. Its added table exercises five name attacks on each of decoded framed MCP, sealed callbacks and other JSON: unknown capability, Unicode-escaped capability, escaped listed secret, nested escaped capability and known correlated capability in an illegal name. MCP mutation retains a legal preparation-result capability value to ensure value exceptions cannot authorize names. Four ordinary-key controls, including `cap_hint`, uppercase nonmatching hex and `request_capability`, PASS through all three consumers. Existing unknown-value, wrong-session/missing binding, full-secret-set, zero/partial/failed preparation, incomplete frame and missing receipt refusals remain intact. These are native privacy proxies, not wire, human or feature proof.
+
+### Checks and failure history
+
+Windows PowerShell, Node 26.13.0, finite commands bounded to 30000 ms. Initial table execution failed because its supposedly unknown capability contained a listed fixture secret. A mixed-hex capability with an explicit no-listed-secret assertion corrected that test input. The next focused execution reproduced the finding: missing expected exception for decoded MCP unknown capability key. After the helper correction:
+
+- Scoped Prettier write and two `node --check` commands PASS.
+- `node --test tests/harness-request-result.test.mjs tests/harness-transport-controls.test.mjs`: PASS 22/22, exit 0, 7876.4459 ms, no failures/skips/cancellations. This retains actual wrapper, quiescence, producer inventory, correlation and original-result controls.
+- `node --test --test-name-pattern='^actual transport producer|^product exports require' tests/harness-renderer-calibration.test.mjs`: PASS 2/2, exit 0, 127.6796 ms, no failures/skips/cancellations. Full secret-universe coverage, all six surfaces and exact five-transfer refusal/admission controls remain unchanged.
+
+Pre-merge focused independent privacy recheck is pending, owned by test engineering/review coordination at this freeze. Existing integrated runtime failure remains unresolved until separately authorized execution. Pre-exposure genuine-human first use remains UNRUN/not waived, maintainer-owned at final acceptance. Existing post-deploy/deferred checks retain their owners and triggers below. No preflight, runtime, service, network, raw-capture recovery or cleanup was performed. Reuse prior accepted actual helper-path/pre-decision-gate review and unchanged privacy controls by input/assertion scope, not as a new framework stage or runtime proof.
+
+### Corrected frozen inputs and focused review
+
+Manifest algorithm/order/membership are exactly the previous integrated freeze below, recomputed from repository bytes. Membership remains 99/3/59, fifteen changed executable/test paths against `607a181a2b801020732443798cc26c00db5c2640` and the same ordered 22-path review union. Only two executable members changed. Tasks is pinned by commit, not a self-referential hash.
+
+| Set                           | Members | Member bytes | SHA-256                                                            |
+| ----------------------------- | ------: | -----------: | ------------------------------------------------------------------ |
+| Payload                       |      99 |      1291609 | `82672786252000e16ca74d2c69667acb5184bc640dea01ecfb355e47a6b70a13` |
+| Outer                         |       3 |       138130 | `f8ffaa191b45a707f0649ecb92a8a302910fb706dccde112c85c8993b3b39742` |
+| Product                       |      59 |       817537 | `044d948090a5d391b93d7bfe13e30374f8738e78da39385d1eb44edce85ccb81` |
+| Changed executable/test paths |      15 |       379676 | `8919ef5caa66fce0d66ca1e24f5880a6559bf3df13f801b86abc78bb5e33e412` |
+| Integrated review union       |      22 |       564280 | `bcf358fb30b4fd04537e742cd891e50cf6471bf4d7c4ad34aa36cb40b19640c3` |
+| Ordered affected paths below  |       2 |        74401 | `3ed3b406c6797dde08dc84a9c61f5be093b274e3d1b500cb5b782a86a4f52e52` |
+
+| Affected path                                     | SHA-256                                                            |
+| ------------------------------------------------- | ------------------------------------------------------------------ |
+| `tests/support/harness-composition-retention.mjs` | `343a43edb75f7a893dffed04c0e09932f3b33306b9f6f8f64eff37c0ebb2e172` |
+| `tests/harness-request-result.test.mjs`           | `eeef5d74e0d0bb45a7351d59fef040b6411e1877534f10b27b752491ce9d0123` |
+
+Focused review plan: inspect the two-path delta against entry, verify every decoded key reaches the existing string inspector without value allowances, then review the actual maintained-consumer table and retained correlation/completeness controls. Reuse unchanged integrated wiring, six-surface exporter, five transfers, source grounding and budgets. Next owner is independent privacy review via coordination. Ready means focused recheck only, not acceptance or new runtime authority. Last landed useful outcome remains startup/skill. Next merge is the harness change to main, blocked by integrated verification and final acceptance. Worktree/branch/change remain `add-harness-approval-channel`, path `.worktree/add-harness-approval-channel`, owner test engineering, retained pending verified landing, cleanup pending with no removal.
+
 ## Static integrated correctness correction - owner acceptance
 
 Frozen executable/brief commit `1b145bbbfb7b8999e9e6c4b528257c8e8a889913`, direct child of entry `607a181a2b801020732443798cc26c00db5c2640`. Commit membership is exactly the sixteen selected paths recorded below. Post-commit tracked delta contains only the preserved README/status overlays and the index is empty. This final evidence update changes tasks only. The fifteen executable/test inputs and 99/3/59 manifests remain unchanged after verification. Ready for one consolidated independent review, not independently accepted, runtime-authorized, feature-verified or release-ready. No production gap was identified by these native checks.

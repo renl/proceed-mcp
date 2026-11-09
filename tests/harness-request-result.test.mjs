@@ -527,6 +527,67 @@ test('integrated private capture scans decoded original fields before summary an
     scenarioSuccess: true,
   });
   assert.equal(scanIntegratedPrivateCaptures(input, secrets).status, 'PASS');
+  // Exercise the maintained consumer with real framed/receipted inputs. Base64
+  // and JSON escapes must not hide authority in names, even at allowed values.
+  const unknownCap = `cap_${'0123456789abcdef'.repeat(4)}`;
+  assert.ok(secrets.every((secret) => !unknownCap.includes(secret)));
+  const knownCap = `cap_${'1'.repeat(64)}`;
+  const escapeKey = (key) =>
+    [...key].map((c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+  for (const [label, key, nested, escaped, expected] of [
+    ['unknown capability', unknownCap, false, false, /capability outside/],
+    ['escaped capability', unknownCap, false, true, /capability outside/],
+    ['listed secret', secrets[0], false, true, /private authority leak/],
+    ['nested capability', unknownCap, true, true, /capability outside/],
+    ['known capability illegal name', knownCap, false, true, /capability outside/],
+  ]) {
+    const property = escaped ? escapeKey(key) : key;
+    const json = `{\"${property}\":\"harmless\"}`;
+    const extra = nested ? `{\"ordinary\":[${json}]}` : json;
+    for (const surface of ['mcp', 'callbacks', 'other']) {
+      let candidate;
+      if (surface === 'mcp') {
+        const changed = structuredClone(events);
+        // The preparation result already has a legal capability value. Name
+        // inspection must never inherit that value's field-placement exception.
+        const event = changed.find((e) => e.direction === 'adapter-to-host');
+        const message = Buffer.from(event.base64, 'base64').toString().trim();
+        event.base64 = Buffer.from(message.slice(0, -1) + ',"extra":' + extra + '}\n').toString(
+          'base64',
+        );
+        candidate = privateInput({ ...input, mcp: encode(changed) });
+      } else if (surface === 'callbacks') {
+        candidate = privateInput({
+          ...input,
+          callbacks: Buffer.concat([input.callbacks, Buffer.from(extra + '\n')]),
+        });
+      } else candidate = { ...input, other: [Buffer.from(extra)] };
+      assert.throws(
+        () => scanIntegratedPrivateCaptures(candidate, secrets),
+        expected,
+        `${surface}: ${label}`,
+      );
+    }
+  }
+  for (const key of ['ordinary', 'cap_hint', `cap_${'A'.repeat(64)}`, 'request_capability']) {
+    const ordinary = { [key]: 'harmless', nested: [{ ordinary: 'safe' }] };
+    const changed = structuredClone(events);
+    const body = JSON.parse(Buffer.from(changed[0].base64, 'base64').toString());
+    body.params.extra = ordinary;
+    changed[0].base64 = Buffer.from(JSON.stringify(body) + '\n').toString('base64');
+    assert.equal(
+      scanIntegratedPrivateCaptures(
+        privateInput({
+          ...input,
+          mcp: encode(changed),
+          callbacks: Buffer.concat([input.callbacks, Buffer.from(JSON.stringify(ordinary) + '\n')]),
+          other: [Buffer.from(JSON.stringify(ordinary))],
+        }),
+        secrets,
+      ).status,
+      'PASS',
+    );
+  }
   for (const bad of [
     { ...input, receipts: undefined },
     { ...input, mcp: Buffer.alloc(0) },
