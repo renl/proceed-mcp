@@ -16,6 +16,7 @@ import {
   issueProductPickerExit,
   assertProductPickerDeadline,
   readProductPickerClock,
+  createProductNavigationObserver,
 } from './support/harness-navigation-observation.mjs';
 import {
   compositionCurrentFrame,
@@ -164,6 +165,472 @@ function productPair() {
   );
   return { initial, moved };
 }
+
+// Fresh synthetic admission per case. These hashes bind memory operands only.
+// They never install a live profile or relabel the historical 76490a71 capture.
+function navigationCase({
+  selected = fixtureStyles.selected,
+  inactive = fixtureStyles.inactive.ordinary,
+  factory = createProductNavigationObserver,
+} = {}) {
+  const hash = (s) => createHash('sha256').update(s).digest('hex');
+  const binding = {
+    ...structuredClone(productBinding),
+    executable: hash('synthetic executable'),
+    configBytes: '{}',
+    config: hash('{}'),
+    package: hash('synthetic package'),
+    wrapper: hash('synthetic wrapper'),
+    source: '9bbb8ce18c80f099e0e448775f59d965ead40a21',
+    rendererSource: '738067f47e940dcec3f5aab74868908574335c6c',
+    sourceBinding: 'PINNED_IMAGE_PROVENANCE_NOT_RUNTIME_ACCESSOR',
+    runtime: { version: '2.2.5', bun: '1.4.4', node: '24.22.2' },
+    environment: { TERM: 'explicit-synthetic' },
+    terminalResponsePolicy: [{ query: 'synthetic', flags: 'g', reply: 'fixed' }],
+  };
+  binding.inputs = [
+    'package.json',
+    'src/harness/tui-entry.js',
+    'bin/proceed-mcp.js',
+    'tests/fixtures/harness-composition/tui.ts',
+  ].map((path) => ({
+    path,
+    sha256:
+      path === 'package.json'
+        ? binding.package
+        : path.endsWith('tui.ts')
+          ? binding.wrapper
+          : hash(path),
+  }));
+  binding.payload = binding.inputs.map((s) => s.path);
+  const color = (v, foreground) =>
+    v === null
+      ? foreground
+        ? '39'
+        : '49'
+      : v.startsWith('index:')
+        ? `${foreground ? '38' : '48'};5;${v.slice(6)}`
+        : `${foreground ? '38' : '48'};2;${v.replaceAll(',', ';')}`;
+  const style = (s) => `\x1b[0;${color(s.fg, true)};${color(s.bg, false)}${s.bold ? ';1' : ''}m`;
+  const paint = (n) =>
+    '\x1b[?2026h\x1b[HSelect the Proceed session' +
+    [1, 2]
+      .map(
+        (r) =>
+          `\x1b[${r + 2};3H` +
+          style(r === n ? selected : inactive) +
+          `Session ${r} - duplicate preview`,
+      )
+      .join('') +
+    '\x1b[?2026l';
+  const state = {
+    raw: Buffer.from('\x1b[?1049h' + paint(1)),
+    binding,
+    snapshot: structuredClone(productSnapshot),
+    live: {
+      live: true,
+      run: binding.run,
+      generation: binding.setup,
+      geometry: structuredClone(binding.geometry),
+      snapshot: structuredClone(productSnapshot),
+    },
+  };
+  let tick = 1;
+  const writes = [];
+  let observer;
+  const io = {
+    binding,
+    snapshot: productSnapshot,
+    sample: () => state,
+    now: () => tick,
+    deadline: 10,
+    moveDown: () => {
+      writes.push('Down');
+    },
+    enter: () => writes.push('Enter'),
+  };
+  return {
+    state,
+    writes,
+    io,
+    paint,
+    setTick: (v) => {
+      tick = v;
+    },
+    create: () => (observer = factory(io)),
+    ready: () => {
+      observer ??= factory(io);
+      observer.initial();
+      observer.moveDown();
+      state.raw = Buffer.concat([state.raw, Buffer.from(paint(2))]);
+      observer.moved();
+      return observer;
+    },
+    identity: () => {
+      state.raw = Buffer.concat([
+        state.raw,
+        Buffer.from(
+          '\x1b[?2026h' +
+            [1, 2, 3, 4, 5].map((r) => `\x1b[${r};1H` + ' '.repeat(120)).join('') +
+            frame({ ...productSnapshot[1] })
+              .split('\n')
+              .map((line, n) => `\x1b[${n + 1};1H${line}`)
+              .join('') +
+            '\x1b[?2026l',
+        ),
+      ]);
+      assertCurrentIdentityFrame(
+        compositionSourceFrame(state.raw.toString()).text,
+        productSnapshot[1],
+        binding.geometry,
+      );
+    },
+  };
+}
+
+test('fresh interval permits only expected ordinal then separate full identity, via injected recorder', () => {
+  for (const styles of [
+    undefined,
+    { selected: profile.selected, inactive: profile.normal },
+    {
+      selected: { fg: null, bg: 'index:216', bold: true },
+      inactive: { fg: '0,0,0', bg: null, bold: false },
+    },
+    {
+      selected: { fg: 'index:0', bg: '0,0,0', bold: true },
+      inactive: { fg: null, bg: 'index:0', bold: false },
+    },
+  ]) {
+    const c = navigationCase(styles);
+    const observer = c.ready();
+    observer.pickerEnter(productSnapshot[1]);
+    c.identity();
+    observer.identity();
+    observer.openQuestion();
+    assert.deepEqual(c.writes, ['Down', 'Enter', 'Enter']);
+    assert.throws(() => observer.openQuestion(), /navigation admission refused/);
+    assert.equal(c.writes.length, 3);
+  }
+});
+
+test('all fixed-input/live/snapshot invalidations before picker admission write zero Enters', () => {
+  const changes = [
+    ...[
+      'executable',
+      'package',
+      'config',
+      'wrapper',
+      'source',
+      'rendererSource',
+      'sourceBinding',
+      'configBytes',
+      'run',
+      'setup',
+      'resolvedTheme',
+      'designMode',
+      'effectiveColorDepth',
+    ].map((k) => (s) => {
+      s.binding[k] = 'substituted';
+    }),
+    (s) => {
+      s.binding.environment.TERM = 'changed';
+    },
+    (s) => {
+      s.binding.runtime.node = 'foreign';
+    },
+    (s) => {
+      s.binding.inputs[0].sha256 = 'a'.repeat(64);
+    },
+    (s) => {
+      s.binding.payload.reverse();
+    },
+    (s) => {
+      s.binding.terminalResponsePolicy[0].reply = 'changed';
+    },
+    ...['run', 'generation'].map((k) => (s) => {
+      s.live[k] = 'foreign';
+    }),
+    (s) => {
+      s.live.live = false;
+    },
+    (s) => {
+      s.live.geometry.resizeSequence++;
+    },
+    (s) => {
+      s.live.geometry.width--;
+    },
+    (s) => {
+      s.live.geometry.height--;
+    },
+    (s) => {
+      s.snapshot.reverse();
+    },
+    (s) => {
+      s.snapshot[0].id = 'foreign';
+    },
+    (s) => {
+      s.snapshot[0].title = 'changed';
+    },
+    (s) => {
+      s.live.snapshot[1].ordinal = 'Session 1';
+    },
+    (s) => {
+      s.raw = s.raw.subarray(1);
+    },
+    (s) => {
+      s.raw = Buffer.from(s.raw.toString().replace('Session 2', 'Session 3'));
+    },
+    ...[
+      '\x1b[?2026h',
+      '\x1b[3m',
+      '\x1b[2J',
+      '\x1b[?1049l',
+      '\x1b[?2026h\x1b[1;1Hother\x1b[?2026l',
+    ].map((v) => (s) => {
+      s.raw = Buffer.concat([s.raw, Buffer.from(v)]);
+    }),
+  ];
+  for (const change of changes) {
+    const c = navigationCase(),
+      observer = c.ready();
+    change(c.state);
+    assert.throws(() => observer.pickerEnter(productSnapshot[1]), /navigation admission refused/);
+    assert.deepEqual(c.writes, ['Down']);
+  }
+  for (const gap of [
+    'observation gap',
+    'theme changed without repaint',
+    'capability changed',
+    'replacement',
+  ]) {
+    const c = navigationCase(),
+      observer = c.ready();
+    observer.invalidate(gap);
+    assert.throws(() => observer.pickerEnter(productSnapshot[1]));
+    assert.deepEqual(c.writes, ['Down']);
+  }
+});
+
+test('causal transfer, homogeneous complete labels and unique style roles are mandatory', () => {
+  for (const alter of [
+    (c) => c.paint(1), // no physical effect
+    (c) => c.paint(2).replace('Session 2 -', 'Session 1 -'),
+    (c) => c.paint(2).replace('Session 2 -', 'Session 3 -'),
+    (c) => c.paint(2).replace('duplicate preview', 'incomplete'),
+    (c) => c.paint(2).replace('Session 2', 'Ses\x1b[0msion 2'),
+    (c) => c.paint(2).replace(';1m', 'm'),
+    (c) => c.paint(2).replace('Session 1 -', '\u25cf Session 1 -'),
+    (c) => c.paint(2) + c.paint(1) + c.paint(2),
+    (c) => c.paint(2).replace('\x1b[H', '\x1b[2J\x1b[H'),
+  ]) {
+    const c = navigationCase(),
+      observer = c.create();
+    observer.initial();
+    observer.moveDown();
+    c.state.raw = Buffer.concat([c.state.raw, Buffer.from(alter(c))]);
+    assert.throws(() => observer.moved());
+    assert.throws(() => observer.pickerEnter(productSnapshot[1]));
+    assert.deepEqual(c.writes, ['Down']);
+  }
+  const c = navigationCase({ selected: { ...fixtureStyles.selected, bg: 'index:233' } });
+  assert.throws(() => c.ready());
+  assert.equal(c.writes.includes('Enter'), false);
+  const noMove = navigationCase(),
+    observer = noMove.create();
+  observer.initial();
+  noMove.state.raw = Buffer.concat([noMove.state.raw, Buffer.from(noMove.paint(2))]);
+  assert.throws(() => observer.moved()); // raw role exchange alone is not causality.
+  assert.equal(noMove.writes.length, 0);
+});
+
+test('fresh identity admission refuses stale, foreign, resized, incomplete or replaced confirmation', () => {
+  for (const mutate of [
+    (c) => {
+      c.state.raw = c.state.raw.subarray(0, -8);
+    },
+    (c) => {
+      c.state.raw = Buffer.from(c.state.raw.toString().replace('Exact session ID:', 'ID omitted:'));
+    },
+    (c) => {
+      c.state.raw = Buffer.from(c.state.raw.toString().replace(productSnapshot[1].id, 'foreign'));
+    },
+    (c) => {
+      c.state.live.live = false;
+    },
+    (c) => {
+      c.state.live.generation = 'replacement';
+    },
+    (c) => {
+      c.state.live.geometry.resizeSequence++;
+    },
+    (c) => {
+      c.state.binding.environment.TERM = 'changed';
+    },
+    (c) => {
+      c.state.snapshot[1].title = 'changed';
+    },
+    (c) => {
+      c.state.raw = Buffer.concat([c.state.raw, Buffer.from(c.paint(1))]);
+    },
+  ]) {
+    const c = navigationCase(),
+      observer = c.ready();
+    observer.pickerEnter(productSnapshot[1]);
+    c.identity();
+    observer.identity();
+    mutate(c);
+    assert.throws(() => observer.openQuestion());
+    assert.deepEqual(c.writes, ['Down', 'Enter']);
+  }
+  const c = navigationCase(),
+    observer = c.ready();
+  assert.throws(() => observer.openQuestion());
+  assert.deepEqual(c.writes, ['Down']);
+});
+
+test('unsafe clocks and elapsed synchronous final validation fence each input, no renewed budget', () => {
+  for (const second of [false, true])
+    for (const bad of [10, 11, Infinity, -Infinity, NaN, '2', null, undefined, {}, 0]) {
+      const c = navigationCase(),
+        observer = c.ready();
+      if (second) {
+        observer.pickerEnter(productSnapshot[1]);
+        c.identity();
+        observer.identity();
+      }
+      // The observer captured this function, whose result getter advances time
+      // during the actual final sample, not before the entry clock.
+      const saved = c.state.raw;
+      Object.defineProperty(c.state, 'raw', {
+        get() {
+          c.setTick(bad);
+          return saved;
+        },
+      });
+      assert.throws(() =>
+        second ? observer.openQuestion() : observer.pickerEnter(productSnapshot[1]),
+      );
+      assert.equal(c.writes.filter((k) => k === 'Enter').length, second ? 1 : 0);
+    }
+  for (const key of ['now', 'deadline'])
+    for (const value of [Infinity, -Infinity, NaN, '4', {}, null, undefined]) {
+      const c = navigationCase();
+      c.io[key] = key === 'now' ? () => value : value;
+      const observer = c.create();
+      assert.throws(() => observer.initial(), /navigation admission refused/);
+      assert.deepEqual(c.writes, []);
+    }
+});
+
+test('missing/throwing clocks refuse without detail, finite fractional clocks preserve the original budget', () => {
+  for (const now of [
+    undefined,
+    null,
+    1,
+    () => {
+      throw Error('synthetic-private-detail');
+    },
+  ]) {
+    const c = navigationCase();
+    c.io.now = now;
+    assert.throws(
+      () => c.create().initial(),
+      (error) => error.message === 'navigation admission refused',
+    );
+    assert.deepEqual(c.writes, []);
+  }
+  const fractional = navigationCase();
+  fractional.io.now = () => 1.25;
+  fractional.io.deadline = 1.5;
+  fractional.ready().pickerEnter(productSnapshot[1]);
+  assert.deepEqual(fractional.writes, ['Down', 'Enter']);
+});
+
+test('forged/historical/fixture observations cannot grant authority or cross an interaction', () => {
+  for (const key of [
+    'executable',
+    'package',
+    'wrapper',
+    'config',
+    'configBytes',
+    'source',
+    'rendererSource',
+    'sourceBinding',
+    'runtime',
+    'environment',
+    'terminalResponsePolicy',
+    'payload',
+    'inputs',
+    'run',
+    'setup',
+    'geometry',
+  ]) {
+    const missing = navigationCase();
+    delete missing.state.binding[key];
+    assert.throws(() => missing.ready());
+    assert.deepEqual(missing.writes, []);
+  }
+  const c = navigationCase(),
+    observer = c.create();
+  const historical = productPair();
+  assert.throws(() => observer.pickerEnter(historical.moved));
+  assert.deepEqual(c.writes, []);
+  for (const scope of ['fixture-only', 'historical', undefined]) {
+    const fresh = navigationCase();
+    fresh.state.binding.scope = scope;
+    assert.throws(() => fresh.ready());
+    assert.equal(fresh.writes.includes('Enter'), false);
+  }
+  const a = navigationCase();
+  a.ready();
+  const b = navigationCase();
+  const second = b.create();
+  assert.throws(() => second.pickerEnter(productSnapshot[1]));
+  assert.deepEqual(b.writes, []);
+  const wrong = navigationCase();
+  assert.throws(() => wrong.ready().pickerEnter(productSnapshot[0]));
+  assert.deepEqual(wrong.writes, ['Down']);
+});
+
+test('actual composition adapter drives current-cell observer with fresh independent bindings and snapshot', async () => {
+  const source = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('export function compositionNavigationObserver(');
+  const finish = source.indexOf('\nconst evidence =', start);
+  const adapter = runInNewContext(
+    '(' + source.slice(start + 'export '.length, finish).trim() + ')',
+    { createProductNavigationObserver, structuredClone },
+    { timeout: 100 },
+  );
+  const factory = (io) =>
+    adapter({
+      ...io,
+      executionBinding: io.binding,
+      runtime: io.binding.runtime,
+      run: io.binding.run,
+      setup: io.binding.setup,
+      readExecutionBinding: () => io.sample().binding,
+      readLive: () => io.sample().live,
+      readRaw: () => io.sample().raw,
+    });
+  for (const bad of [false, true]) {
+    const c = navigationCase({ factory });
+    const observer = c.ready();
+    if (bad) c.state.live.snapshot[1].title = 'independent snapshot changed';
+    if (bad) {
+      assert.throws(() => observer.pickerEnter(productSnapshot[1]));
+      assert.deepEqual(c.writes, ['Down']);
+    } else {
+      observer.pickerEnter(productSnapshot[1]);
+      c.identity();
+      observer.identity();
+      observer.openQuestion();
+      assert.deepEqual(c.writes, ['Down', 'Enter', 'Enter']);
+    }
+  }
+});
 
 test('actual product capture adapter maps zero-marker duplicate previews by immutable ordinal, never qualifies unknown semantics', () => {
   const { initial, moved } = productPair();

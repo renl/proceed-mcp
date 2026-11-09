@@ -27,6 +27,81 @@ import { assertDetailedTransportExport } from './support/harness-runtime-transpo
 
 const readyFrame = `2.2.5\nAsk anything\n┃  ${productReadyText}  ┃`;
 
+test('static composition wiring freshly projects fixed inputs and public snapshot, live navigation remains closed', async () => {
+  const source = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('export function compositionNavigationObserver(');
+  const finish = source.indexOf('\nconst evidence =', start);
+  let operands;
+  const adapter = runInNewContext(
+    '(' + source.slice(start + 'export '.length, finish).trim() + ')',
+    {
+      structuredClone,
+      createProductNavigationObserver: (value) => {
+        operands = value;
+        return value;
+      },
+    },
+    { timeout: 100 },
+  );
+  const live = {
+    live: true,
+    run: 'run',
+    generation: 'setup',
+    geometry: {
+      width: 120,
+      height: 40,
+      resizeSequence: 0,
+    },
+    snapshot: [{ ordinal: 'Session 1', id: 'id', title: 'public' }],
+  };
+  let fixed = { config: 'original', environment: { TERM: 'explicit' } },
+    reads = 0;
+  const raw = Buffer.from('not a rendered frame');
+  const io = {
+    executionBinding: fixed,
+    runtime: { version: '2.2.5', bun: '1.4.4', node: '24.22.2' },
+    run: 'run',
+    setup: 'setup',
+    readExecutionBinding: () => {
+      reads++;
+      return fixed;
+    },
+    readLive: () => live,
+    readRaw: () => raw,
+    now: () => 1,
+    deadline: 2,
+    moveDown: () => assert.fail('no physical movement'),
+    enter: () => assert.fail('no real Enter'),
+  };
+  adapter(io);
+  assert.equal(reads, 0);
+  assert.equal(operands.snapshot[0].title, 'public');
+  fixed = { ...fixed, config: 'changed' };
+  live.snapshot[0].title = 'changed independently';
+  live.geometry.resizeSequence++;
+  const sample = operands.sample();
+  assert.equal(reads, 1);
+  assert.equal(sample.binding.config, 'changed');
+  assert.equal(sample.binding.runtime.node, '24.22.2');
+  assert.equal(sample.binding.geometry.resizeSequence, 1);
+  assert.equal(sample.snapshot[0].title, 'changed independently');
+  assert.equal(operands.snapshot[0].title, 'public');
+  assert.equal(operands.binding.geometry.resizeSequence, 0);
+  assert.equal(sample.raw, raw);
+  const closed = source.slice(
+    source.indexOf('// STATIC-ONLY:'),
+    source.indexOf("await wait('rendered-product-empty-result'"),
+  );
+  assert.match(
+    closed,
+    /assert.fail\('product navigation requires separate runtime\/input authority'\)/,
+  );
+  assert.doesNotMatch(closed, /stdin\.write|confirmRenderedNavigation|highlightedOrdinal/);
+});
+
 test(
   'actual wrapper cleanup writes ENTRY before await, RETURN only after return, never equates driver marker time',
   { timeout: 1000 },
@@ -240,8 +315,9 @@ test('composition stages its maintained runner and uses the actual public produc
   );
   assert.ok(/scanFrozenComposition\(\{\s*captures/.test(inner));
   assert.match(inner, /physical-helper-absence/);
-  assert.match(inner, /confirmRenderedNavigation\(/);
-  assert.match(inner, /geometry: live.geometry/);
+  assert.match(inner, /createProductNavigationObserver\(/);
+  assert.match(inner, /geometry: structuredClone\(live.geometry\)/);
+  assert.doesNotMatch(inner, /confirmRenderedNavigation|selectionProfile: null,[\s\S]*stdin:/);
   assert.doesNotMatch(inner, /includes\(runtime.session\)/);
   assert.match(inner, /exact-product-PluginCleanup/);
   assert.match(inner, /selected session has no pending question/);
@@ -950,7 +1026,7 @@ test('capture host entry dispatch is separate, skips setup pending probe, freeze
   const inner = await source('support/harness-composition-inner.mjs');
   const branch = inner.slice(
     inner.indexOf('pickerEvidence = await captureProductPicker('),
-    inner.indexOf('const navigationEnd'),
+    inner.indexOf("assert.fail('product navigation requires separate runtime/input authority')"),
   );
   assert.match(branch, /selectionProfile: null/);
   assert.match(branch, /moveDown:[\s\S]*\\x1b\[B/);

@@ -1,7 +1,7 @@
 // TEST ONLY. Public message assertions and fail-closed current-frame observation.
 // Pinned 2.2.5 DialogSelectRow normal selection is styled, not a current dot.
-// A source-verified theme profile is mandatory. Synthetic profiles prove only
-// observer logic, never actual host rendering or active theme identity.
+// Interval roles are emitted identities, not a theme profile or pixel claim.
+// Injected IO proves only the mechanism, never host rendering or input authority.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { compositionSourceFrame } from './harness-composition-readiness.mjs';
@@ -38,7 +38,9 @@ export function productPickerObservation(raw, binding, snapshot, previous) {
     assert.ok(Array.isArray(snapshot) && snapshot.length >= 2 && snapshot.length <= 8);
     assert.equal(new Set(snapshot.map((s) => s.id)).size, snapshot.length);
     snapshot.forEach((s, n) => {
+      assert.deepEqual(Object.keys(s).sort(), ['id', 'ordinal', 'title']);
       assert.ok(typeof s.id === 'string' && s.id.length > 0);
+      assert.equal(typeof s.title, 'string');
       assert.equal(s.ordinal, `Session ${n + 1}`);
     });
     const frame = compositionSourceFrame(new TextDecoder('utf-8', { fatal: true }).decode(raw));
@@ -117,6 +119,213 @@ export function productPickerInterval(before, after) {
       selectionProfile: null,
     };
   }
+}
+
+const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+function assertNavigationBinding(binding) {
+  assert.equal(binding.scope, 'product-capture');
+  for (const key of ['executable', 'package', 'config', 'wrapper'])
+    assert.match(binding[key], /^[a-f0-9]{64}$/);
+  assert.equal(binding.source, '9bbb8ce18c80f099e0e448775f59d965ead40a21');
+  assert.equal(binding.rendererSource, '738067f47e940dcec3f5aab74868908574335c6c');
+  assert.equal(binding.sourceBinding, 'PINNED_IMAGE_PROVENANCE_NOT_RUNTIME_ACCESSOR');
+  assert.equal(typeof binding.configBytes, 'string');
+  assert.equal(hash(binding.configBytes), binding.config);
+  for (const key of ['run', 'setup']) assert.ok(typeof binding[key] === 'string' && binding[key]);
+  for (const key of ['version', 'bun', 'node'])
+    assert.ok(typeof binding.runtime[key] === 'string' && binding.runtime[key]);
+  assert.equal(binding.runtime.version, '2.2.5');
+  assert.ok(binding.environment && Object.keys(binding.environment).length > 0);
+  assert.ok(Object.values(binding.environment).every((v) => typeof v === 'string'));
+  assert.ok(Array.isArray(binding.terminalResponsePolicy) && binding.terminalResponsePolicy.length);
+  assert.ok(Array.isArray(binding.inputs) && binding.inputs.length > 0);
+  assert.deepEqual(
+    binding.inputs.map((s) => s.path),
+    binding.payload,
+  );
+  assert.equal(new Set(binding.payload).size, binding.payload.length);
+  for (const entry of binding.inputs) {
+    assert.match(entry.path, /^[a-zA-Z0-9_./-]+$/);
+    assert.ok(!entry.path.startsWith('/') && !entry.path.split('/').includes('..'));
+    assert.match(entry.sha256, /^[a-f0-9]{64}$/);
+  }
+  for (const path of [
+    'package.json',
+    'src/harness/tui-entry.js',
+    'bin/proceed-mcp.js',
+    'tests/fixtures/harness-composition/tui.ts',
+  ])
+    assert.ok(binding.payload.includes(path));
+  assert.equal(binding.inputs.find((s) => s.path === 'package.json').sha256, binding.package);
+  assert.equal(
+    binding.inputs.find((s) => s.path === 'tests/fixtures/harness-composition/tui.ts').sha256,
+    binding.wrapper,
+  );
+}
+
+// Private synchronous final-admission mechanism. The caller owns observation
+// continuity and must invalidate on any gap or observed input/theme/capability
+// change. No returned observation/profile can be imported into another instance.
+// Real composition keeps this route closed. Static callers inject recorder IO.
+export function createProductNavigationObserver({
+  binding,
+  snapshot,
+  sample,
+  now,
+  deadline,
+  moveDown,
+  enter,
+}) {
+  const admitted = structuredClone(binding);
+  const sessions = structuredClone(snapshot);
+  let stage = 'INITIAL',
+    initial,
+    moved,
+    identity,
+    selected;
+  let lastClock = -Infinity;
+  const clock = () => {
+    const tick = readProductPickerClock(now);
+    assert.ok(tick >= lastClock, 'picker clock reversed');
+    lastClock = tick;
+    assertProductPickerDeadline(() => tick, deadline);
+  };
+  const fence = (work) => {
+    try {
+      assert.notEqual(stage, 'INVALID');
+      clock();
+      return work();
+    } catch {
+      stage = 'INVALID';
+      assert.fail('navigation admission refused');
+    }
+  };
+  const read = () => {
+    assertNavigationBinding(admitted);
+    const current = sample(); // Independent public snapshot, never inferred rows.
+    assert.deepEqual(structuredClone(current.binding), admitted);
+    assert.deepEqual(current.snapshot, sessions);
+    assert.equal(current.live.live, true);
+    assert.equal(current.live.run, admitted.run);
+    assert.equal(current.live.generation, admitted.setup);
+    assert.deepEqual(current.live.geometry, admitted.geometry);
+    assert.deepEqual(current.live.snapshot, sessions);
+    assert.ok(Buffer.isBuffer(current.raw) && current.raw.length <= 1048576);
+    return current;
+  };
+  const observe = (previous) => {
+    const current = read();
+    const observation = productPickerObservation(
+      current.raw,
+      current.binding,
+      current.snapshot,
+      previous && current.raw.length !== previous.bytes ? previous : undefined,
+    );
+    assert.equal(observation.supported, true);
+    if (previous && current.raw.length === previous.bytes)
+      assert.equal(observation.sha256, previous.sha256);
+    return observation;
+  };
+  const unchangedPicker = (previous) => {
+    const fresh = observe(previous);
+    // Conservative fence: any output since the last admitted role observation
+    // needs new interval proof, even an apparently identical repaint.
+    assert.deepEqual(fresh, { ...previous, previousSha256: null });
+    return fresh;
+  };
+  const samePrefix = (raw, previous) => {
+    assert.ok(raw.length > previous.bytes);
+    assert.equal(hash(raw.subarray(0, previous.bytes)), previous.sha256);
+  };
+  return Object.freeze({
+    invalidate() {
+      stage = 'INVALID';
+    },
+    initial() {
+      return fence(() => {
+        assert.equal(stage, 'INITIAL');
+        initial = observe();
+        assert.ok(initial.rows[0].style.bold);
+        assert.ok(initial.rows.slice(1).every((r) => !r.style.bold));
+        stage = 'READY_TO_MOVE';
+        return structuredClone(initial);
+      });
+    },
+    moveDown() {
+      return fence(() => {
+        assert.equal(stage, 'READY_TO_MOVE');
+        unchangedPicker(initial);
+        stage = 'AWAIT_MOVED';
+        clock();
+        moveDown(); // One causally bracketed physical movement, not a callback result.
+      });
+    },
+    moved() {
+      return fence(() => {
+        assert.equal(stage, 'AWAIT_MOVED');
+        moved = observe(initial);
+        assert.equal(moved.frames, initial.frames + 1);
+        assert.equal(productPickerInterval(initial, moved).emittedTransfer, true);
+        stage = 'PICKER';
+        return structuredClone(moved); // Still UNQUALIFIED and null profile.
+      });
+    },
+    pickerEnter(session) {
+      return fence(() => {
+        assert.equal(stage, 'PICKER');
+        assert.deepEqual(session, sessions[1]);
+        unchangedPicker(moved);
+        selected = structuredClone(session);
+        stage = 'AWAIT_IDENTITY';
+        clock(); // Last operation before the bounded input callback.
+        enter();
+      });
+    },
+    identity() {
+      return fence(() => {
+        assert.equal(stage, 'AWAIT_IDENTITY');
+        const current = read();
+        samePrefix(current.raw, moved);
+        const frame = compositionSourceFrame(
+          new TextDecoder('utf-8', { fatal: true }).decode(current.raw),
+        );
+        assert.ok(
+          frame.supported && frame.generation === moved.screen && frame.frames > moved.frames,
+        );
+        assertCurrentIdentityFrame(frame.text, selected, admitted.geometry);
+        identity = {
+          bytes: current.raw.length,
+          sha256: hash(current.raw),
+          frames: frame.frames,
+          screen: frame.generation,
+          text: frame.text,
+        };
+        stage = 'IDENTITY';
+        return structuredClone(identity);
+      });
+    },
+    openQuestion() {
+      return fence(() => {
+        assert.equal(stage, 'IDENTITY');
+        const current = read();
+        assert.equal(current.raw.length, identity.bytes);
+        assert.equal(hash(current.raw), identity.sha256);
+        const frame = compositionSourceFrame(
+          new TextDecoder('utf-8', { fatal: true }).decode(current.raw),
+        );
+        assert.ok(
+          frame.supported &&
+            frame.generation === identity.screen &&
+            frame.frames === identity.frames,
+        );
+        assert.equal(frame.text, identity.text);
+        assertCurrentIdentityFrame(frame.text, selected, admitted.geometry);
+        stage = 'DONE';
+        clock();
+        enter(); // Navigation only. No pending/decision or callback authority here.
+      });
+    },
+  });
 }
 
 // A positive host-frame predicate, not absence in arbitrary terminal bytes.

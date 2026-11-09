@@ -50,21 +50,76 @@ import {
 } from './harness-composition-readiness.mjs';
 import { assertPluginInventory } from './harness-plugin-inventory.mjs';
 import {
-  confirmRenderedNavigation,
-  highlightedOrdinal,
-  assertCurrentIdentityFrame,
   captureProductPicker,
   productPickerObservation,
   productPickerDismissal,
   issueProductPickerExit,
   assertProductPickerDeadline,
   readProductPickerClock,
+  createProductNavigationObserver,
 } from './harness-navigation-observation.mjs';
 import {
   stageQualification,
   isolatedLinuxEnvironment,
   linuxScriptArguments,
 } from './harness-linux-plan.mjs';
+
+// Pure private wiring seam. No file, process or input is acquired here. The
+// runtime caller must supply freshly admitted fixed inputs and independent live
+// observations. This does not enable the closed real navigation branch below.
+export function compositionNavigationObserver({
+  executionBinding,
+  runtime,
+  run,
+  setup,
+  readExecutionBinding,
+  readLive,
+  readRaw,
+  now,
+  deadline,
+  moveDown,
+  enter,
+}) {
+  const live = readLive();
+  const binding = {
+    ...executionBinding,
+    runtime: {
+      version: runtime.version,
+      bun: runtime.bun,
+      node: runtime.node,
+    },
+    run,
+    setup,
+    geometry: structuredClone(live.geometry),
+  };
+  return createProductNavigationObserver({
+    binding,
+    snapshot: structuredClone(live.snapshot),
+    now,
+    deadline,
+    moveDown,
+    enter,
+    sample: () => {
+      const current = readLive();
+      return {
+        raw: readRaw(),
+        binding: {
+          ...readExecutionBinding(),
+          runtime: {
+            version: runtime.version,
+            bun: runtime.bun,
+            node: runtime.node,
+          },
+          run,
+          setup,
+          geometry: structuredClone(current.geometry),
+        },
+        snapshot: structuredClone(current.snapshot),
+        live: current,
+      };
+    },
+  });
+}
 
 const evidence = '/run/proceed/evidence';
 assert.ok(
@@ -549,59 +604,10 @@ try {
           );
           await h.noWork();
         } else {
-          const navigationEnd = Math.min(end, Date.now() + 15000);
-          const navigationFrame = () => {
-            const live = readObservation('composition-live.json');
-            assert.equal(live?.live, true);
-            assert.equal(live?.generation, binding.generation);
-            assert.ok(!exited && !overflow && Date.now() < navigationEnd);
-            return {
-              frame: compositionCurrentFrame(transcript.toString()),
-              styledFrame: compositionCurrentFrame(transcript.toString(), { styled: true }),
-              token: transcript.length,
-              geometry: live.geometry,
-            };
-          };
-          const waitNavigation = async (label, check) => {
-            let observed;
-            await wait(
-              label,
-              () => {
-                observed = navigationFrame();
-                try {
-                  check(observed);
-                  return true;
-                } catch {
-                  return false;
-                }
-              },
-              Math.max(0, navigationEnd - Date.now()),
-            );
-            return observed;
-          };
-          await confirmRenderedNavigation(
-            {
-              // BLOCKED: exact pinned normal-theme RGB/style evidence is not yet
-              // supplied. Never infer it from the brightest/boldest captured row.
-              selectionProfile: null,
-              stdin: {
-                write(key) {
-                  keys.enter++;
-                  child.stdin.write(key);
-                },
-              },
-              currentNavigationFrame: navigationFrame,
-              waitHighlightedSession: () =>
-                waitNavigation('rendered-product-session-picker', (s) =>
-                  highlightedOrdinal(s.styledFrame, null),
-                ),
-              waitIdentityConfirmation: (session) =>
-                waitNavigation('rendered-product-session-picker', (s) =>
-                  assertCurrentIdentityFrame(s.frame, session, s.geometry),
-                ),
-            },
-            { id: runtime.session, title: 'Composition empty exchange' },
-          );
+          // STATIC-ONLY: no historical capture/profile or injected-IO PASS can
+          // authorize real navigation. Fresh runtime/input authority and review
+          // of the compositionNavigationObserver bindings are separate gates.
+          assert.fail('product navigation requires separate runtime/input authority');
           await wait('rendered-product-empty-result', () =>
             compositionCurrentFrame(transcript.toString()).includes(
               'selected session has no pending question',
