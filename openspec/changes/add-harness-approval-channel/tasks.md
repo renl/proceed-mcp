@@ -1,5 +1,81 @@
 # Tasks
 
+## INTEGRATED-FIXTURE-CLOSE-SETTLEMENT - correction 1, static candidate
+
+Entry `5653d4135214da8ed70e8f04326a5466c8ba4e41`. Existing executable `e86b794218fa59a1ef962639e9a1f32258cc2edf`, runtime tasks freeze `3ec316083134e79aa8e26ed3ff76ccf3919e3097` and failed outcome below remain historical evidence. Empty index and the two README/status overlays were checked once at entry. Preserve those overlays and unknown work. This correction changes only four existing test/support paths and this live tasks file. It is necessary for truthful collection on the agreed harness outcome, not new product scope.
+
+Source audit: the old transport fixture registered accepted TCP and secure TLS sockets, removed identities on close, destroyed the current set and awaited only listener callbacks. It did not explicitly await each socket close event, retained no callback errors, had no local bound and did not share an idempotent result. Composition's final unguarded second close could overwrite its earlier collection refusal. These are demonstrated source defects. They do not identify the failed run's actual offending socket or error. `LISTENER_CLOSE` is the first observed collection category. Unsupported scalar at raw offset 8059 remains UNKNOWN, with no glyph allowance or telemetry added.
+
+### Criteria and implementation mapping
+
+- `tests/support/harness-transport-fixtures.mjs`: the real fixture and native controls use the same test-only owner and close implementation. Fence new activity synchronously, keep accepted TCP and secure TLS identities separately, deduplicate by object identity and retain close-event completion. Already aborted sockets still require close completion. Destroy once when needed, await pending listen startup, every server callback and all accepted async setup/callback work. Clear delayed work, fence continuations and automatically initiate cleanup at the original lifetime deadline. Missing callbacks, ignored destroy or unsettled tasks refuse quiescence within the original remaining deadline. Runtime handles remain owned after refusal and eventual events can still settle without turning refusal into success.
+- Both actual consumers supply their existing `end` deadline. No duration, reserve, collection, work, stream or transfer budget changes. `controls.close()` remains no-argument. It is not the capture producer's separate `close(finish)` API. A shared pending or committed close promise retains the first fixed failure category, never raw exception text. Node's not-running callback is allowed only with source-observed never-listening/already-closed state after pending startup settlement. Other callback failures refuse.
+- `tests/support/harness-composition-inner.mjs`: close still precedes `finalizeCapture()`, receipts, complete six-surface scan and five bounded exports. The final retry observes the same close result inside a guard and preserves the existing first collection refusal. Existing closed `LISTENER_CLOSE` metadata is sufficient. No new diagnostic field, error text, path, identifier or bytes are exported.
+- `tests/support/harness-transport-inner.mjs`: minimally adapt the standalone consumer to the same original deadline. No transport or server public API changes.
+- `tests/harness-transport-controls.test.mjs`: maintained close implementation with controlled event IO covers delayed socket close after server callback, TCP plus TLS identities, duplicate registration, held/aborted/already-closed sockets, pending startup, never-listening/source-closed/not-running distinctions, callback and task errors, exact deadline, ignored destroy, missing/late callbacks, shared success/failure, fencing, no premature seals and actual composition collection/finally fragments preserving first refusal. No native listener or genuine mixed-TLS exchange is executed.
+
+Founder-visible success remains the exact paired human choice returning to its original waiting call without cross-session authority. These assertions are PROXY proof of fixture ownership/refusal, not useful workflow or real resource-closure proof. All original correlation, generated-authority, six PRODUCT surface and five bounded transfer requirements remain unchanged.
+
+### Review and checks
+
+Review the complete four-path executable delta against the entry, then pending-start/accepted TCP/secure TLS ownership and task settlement, original deadline propagation to both consumers, callback error classification, repeated-close identity, actual close-before-finalize ordering and guarded final retry. Reuse the unchanged closed diagnostic sanitizer and producer/receipt/privacy controls by their recorded scope. Combined ownership/privacy review through coordination is required before any separately authorized integrated run. No production TLS/auth contract or design change is proposed. Existing real-boundary proof remains required, not supplied by fake events.
+
+| Gate                                                   | Status, owner and trigger                                                                                                                                                                                                                    |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pre-merge static correction                            | PASS native controls 37/37, syntax, scoped format, whitespace and strict structural validation below. Test engineering owns the frozen candidate.                                                                                            |
+| Pre-merge independent review / actual resource closure | PENDING combined review. Real mixed-TLS/socket/listener closure and integrated workflow are UNRUN on this candidate. Test engineering owns proof only after separate runtime authorization. Previous integrated FAIL/privacy REFUSED remain. |
+| Pre-exposure                                           | Genuine-human first use UNRUN/not waived, maintainer-owned at final acceptance.                                                                                                                                                              |
+| Post-deploy / deferred                                 | Existing installed first use, Windows/live Telegram and broader compatibility checks retain their owners and triggers below. No deployment or waiver.                                                                                        |
+
+Authorized validation is finite pure native/static only, with 30000 ms outer command bounds. No preflight, host, container, listener, broker/helper, service, credentials, network/provider/model/Telegram, raw recovery, external filesystem access, dependency/image changes or budget/logging relaxation. No push, PR, archive, merge, deployment, publication, cleanup or nested dispatch. Last landed useful outcome remains startup/skill. Next useful merge remains this harness change, blocked on integrated proof and final acceptance. Worktree `.worktree/add-harness-approval-channel`, branch/change `add-harness-approval-channel`, owner test engineering, retained/cleanup pending. Correction 1 returns the candidate to coordination for independent review, not self-acceptance.
+
+### Static execution and frozen inputs
+
+PowerShell/Windows, Node 26.13.0. Scoped five-path Prettier check PASS. All four changed JavaScript files pass `node --check`. Selected `git diff --check` and telemetry-disabled `openspec validate add-harness-approval-channel --strict` PASS. Each command had a 30000 ms outer bound. No service or native network listener was started.
+
+`node --test tests/harness-request-result.test.mjs tests/harness-transport-controls.test.mjs`: final PASS 37/37, zero failures/skips/cancellations, exit 0, 7585.3243 ms. Ten new maintained close/source controls supplement the existing 27 producer, original-result, receipts, correlation, full-secret/privacy and transfer controls. The original-result control executes maintained fixture code with memory IO, not a live host/helper or real wire. Earlier progressive runs passed 6/6, 8/8 and 36/36 before the remaining accepted-abort/signature/fencing controls were finalized. No assertion failure occurred in this correction. Syntax/format for unchanged consumers is reused from the preceding successful check, and changed fixture/control files were rechecked after their last edit. No runtime is authorized by these native results.
+
+Freeze algorithm remains SHA-256 over UTF-8 `JSON.stringify` of ordered `{path,sha256}` records, hashing complete actual repository bytes. Payload order is maintained `qualificationPayload(git ls-files -- src bin)`. Outer order is host entry, Linux runner and renderer calibration test. Product order is `git ls-files -- package.json src bin`. Affected/cumulative orders are git name-only test diff order against entry `5653d4135214da8ed70e8f04326a5466c8ba4e41` / `607a181`. Review order is the prior 24-path union followed by the newly affected standalone consumer. All 19 cumulative test paths are covered. This freeze supersedes prior input hashes, not their failure history. Tasks is pinned by commit rather than self-hashed.
+
+| Set              | Members |   Bytes | SHA-256                                                            |
+| ---------------- | ------: | ------: | ------------------------------------------------------------------ |
+| Payload          |      99 | 1305785 | `f6af54197bef2d08b6bece2832c62adda0f4c0773dc48976d7441a0e33518f91` |
+| Outer            |       3 |  139193 | `9ad48be516fbc7c21be3f378d9b396c9b0777330973f8b805cb8ca2fa98d8f8a` |
+| Product          |      59 |  817537 | `044d948090a5d391b93d7bfe13e30374f8738e78da39385d1eb44edce85ccb81` |
+| Affected tests   |       4 |  126685 | `bba52da37188ecb4af190fb1ead2b9a029c8890fd3d7e4b797084c27671446d0` |
+| Cumulative tests |      19 |  519693 | `5c4046d7b696a399ec56f2fa714e0bd11587b8337310ca2c48629eda28077a0b` |
+| Review union     |      25 |  696637 | `a1f13cf58d36aed583027ad45ac841fa0c1450d703abb54ba58bdc6898d86c89` |
+
+Complete ordered review records:
+
+| Path                                               | SHA-256                                                            |
+| -------------------------------------------------- | ------------------------------------------------------------------ |
+| `tests/fixtures/harness-composition/tui.ts`        | `40d44fff1d9646a7a28271dcd7cff9af1c37a011ea61021b53d4ceaa5c14958a` |
+| `tests/harness-navigation-observation.test.mjs`    | `82098978b406119d97bfa7d401fbc09fd5440fd77383ebf69f75e9a0d4113793` |
+| `tests/harness-qualification-controls.test.mjs`    | `f4bfcc589be84a8bcec397570c3f0f23f1028352e891c2d63300dc371dc7e6fe` |
+| `tests/harness-request-result.test.mjs`            | `415c1751ad58f4e5818fdcb1c64f2b7932d81566b0b8bd0fd7d7dff64b39d3d5` |
+| `tests/support/harness-composition-inner.mjs`      | `b97f3ec19c71dadafd448d715c2511fd426c2d20ddc822708ff8cd809e3d762f` |
+| `tests/support/harness-composition-retention.mjs`  | `8d5b36f2b008993a00561b2ae782b891a878bbf31399731cfc1f19d62e773a04` |
+| `tests/support/harness-linux-plan.mjs`             | `aab1b3e0ca68a53a31650960a4c4c6f4564108fc077327ec36ffc875ee3708b1` |
+| `tests/support/harness-linux-runner.mjs`           | `1497da4141dff79bba3f0dbc2047d0b61ed778c277e437e0c911619c1e27f994` |
+| `tests/support/harness-navigation-observation.mjs` | `ff83c8d6082216e7f7a31c8256b21502015b180e21644bcd2275c92a5f41fd18` |
+| `tests/support/harness-rendered-product.mjs`       | `a2b52e9db742dde11cf55f5dbf03a9d2cefeac8d7ad91ec73c4605dba4a8af93` |
+| `tests/support/harness-request-result.mjs`         | `befde326c48bacc56033a3a2c8f9c554dcc807975bd0537192e846eb129583df` |
+| `tests/support/harness-wrapper-invocation.mjs`     | `fbc8d16066d5c3f5b410e38371c330c0c265a46f9275649a458976d2ec2f7d12` |
+| `tests/fixtures/harness-composition/mcp.mjs`       | `90d13c7b40ad242433ae93230f55bd3457bcc1c644a5edeee2cb95af78fe5307` |
+| `tests/fixtures/harness-transport/tui.ts`          | `b11a9d0e5cbfeafac795eb08eb28b3cc7f043675da951783e4b9fdd25218c4eb` |
+| `tests/fixtures/harness-wrapper/server.mjs`        | `6b236c0e44a651959aba828815c676d868dfe3d79641fdcbd337a8839dac940d` |
+| `tests/harness-renderer-calibration.test.mjs`      | `0c4cabc723ceadb11ba7698d83aa2a6a72bd4b5db2fd401b1d36bcaed5e09b85` |
+| `tests/harness-transport-controls.test.mjs`        | `f598705d98cb3889e8ce3eb23ff17195db06cd2f1dc88c0bbf9fb38635f4f440` |
+| `tests/support/harness-qualification-setup.mjs`    | `b2a21d27eccedfb200b4be5da218e8c17c1fbf213f81f582692ec09e9f3cb1b6` |
+| `tests/support/harness-runtime-transport.mjs`      | `ee09f0ed6fc5f190c50a46f672057fb14878084d5d646ed35868f25e903bc452` |
+| `tests/support/harness-transparent-capture.mjs`    | `5621fb2a241e604bfae76bb86279c0dd439cdfd3611d0de593ba3c0700a32e2d` |
+| `tests/support/harness-transport-fixtures.mjs`     | `3a192af129f418a15101dbad2289234e6fb0de2d5edf0855c3320b88332af9e4` |
+| `tests/support/portable-waiting.mjs`               | `7ddf7b88e6135dbf17b0c8485eb52aad064638747bcaf0783ce1f0757e9a9881` |
+| `tests/harness-composition-preparation.test.mjs`   | `f3dc48482a60a27c4950194014a09a0425cef2ced91d65e792df3f00205e2a0d` |
+| `tests/support/harness-composition-readiness.mjs`  | `44d8469fe53361d61fe1cf81f3316bee1b6f140058fecc1e4594f46fcece49ab` |
+| `tests/support/harness-transport-inner.mjs`        | `eab9e24e8f0477b647dcb697cf3aa72e854e4b7095be73d3c1a833f484acbbdd` |
+
 ## Diagnostic-corrected integrated runtime outcome - FAIL, closed metadata only
 
 Exactly one user-authorized `node tests/run-harness-host.mjs --composition-run` invocation ran on tasks freeze `3ec316083134e79aa8e26ed3ff76ccf3919e3097`, direct child of reviewed executable `e86b794218fa59a1ef962639e9a1f32258cc2edf`. Exit 1. Maintained elapsed including teardown is 79332 ms, matching final outer progress. Closed inner diagnostic elapsed is 75632 ms. The 310000 ms outer timeout, 250 s container, 210000 ms inner, original phase deadlines and 45 s teardown/scan reserve remained unchanged. Authority is consumed. No preceding preflight, calibration, navigation run, runtime retry or follow-on occurred. Previous exact causes remain UNKNOWN and are not retrospectively fixed by this observation.

@@ -736,7 +736,7 @@ try {
             ]),
             close: async () => {},
           }
-        : await transportFixtures(h);
+        : await transportFixtures(h, { deadline: end });
       let requiredSecrets;
       let controlsClosed = false;
       try {
@@ -1779,7 +1779,17 @@ try {
           }
         }
         if (child) for (const s of [child.stdin, child.stdout, child.stderr]) s.destroy();
-        if (!controlsClosed) await controls.close();
+        if (!controlsClosed) {
+          try {
+            await controls.close();
+            controlsClosed = true;
+          } catch (error) {
+            if (scanStatus !== 'REFUSED') {
+              scanStatus = 'REFUSED';
+              scanReason = compositionScanReason(error, 'LISTENER_CLOSE');
+            }
+          }
+        }
         if (scanStatus !== 'PASS')
           throw Object.assign(Error('scan refused'), { code: 'CAPTURE_SCAN_REFUSED' });
       }

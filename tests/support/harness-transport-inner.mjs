@@ -108,7 +108,7 @@ try {
         ],
       }),
     );
-    const fixture = await transportFixtures(h);
+    const fixture = await transportFixtures(h, { deadline: end });
     let child,
       exited = false,
       transcript = Buffer.alloc(0),

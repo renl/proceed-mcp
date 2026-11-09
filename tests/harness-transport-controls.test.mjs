@@ -3,9 +3,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
+import { EventEmitter } from 'node:events';
 import { dirname } from 'node:path';
 import { exchangeProblem } from '../src/harness/helper-operations.js';
-import { scanRequiredCaptures } from './support/harness-transport-fixtures.mjs';
+import {
+  scanRequiredCaptures,
+  transportFixtureOwner,
+} from './support/harness-transport-fixtures.mjs';
 import {
   transportDiagnostic,
   assertTransportDiagnostic,
@@ -21,6 +25,315 @@ import {
   admitIntegratedPrivateInventory,
 } from './support/harness-composition-retention.mjs';
 import { privateCaptureWriter } from './support/harness-transparent-capture.mjs';
+
+// Event IO only: execute the maintained real-fixture owner without a listener,
+// socket, filesystem fixture, service or wall-clock wait.
+function closeControl() {
+  let clock = 0;
+  const timers = new Map();
+  const owner = transportFixtureOwner({
+    deadline: 100,
+    now: () => clock,
+    schedule: (fn, ms) => {
+      const key = {};
+      timers.set(key, { fn, at: clock + ms });
+      return key;
+    },
+    cancel: (key) => timers.delete(key),
+  });
+  return {
+    owner,
+    at(value) {
+      clock = value;
+      for (const [key, timer] of [...timers])
+        if (timer.at <= clock && timers.delete(key)) timer.fn();
+    },
+    socket(closed = false) {
+      const socket = new EventEmitter();
+      socket.closed = closed;
+      socket.destroys = 0;
+      socket.destroy = () => {
+        socket.destroys++;
+      };
+      owner.own(socket);
+      return socket;
+    },
+    server(listening = true) {
+      const server = new EventEmitter();
+      server.listening = listening;
+      server.calls = 0;
+      server.close = (done) => {
+        server.calls++;
+        server.done = done;
+      };
+      owner.server(server);
+      return server;
+    },
+  };
+}
+const flushClose = async () => {
+  for (let n = 0; n < 12; n++) await Promise.resolve();
+};
+
+test('fixture close waits for accepted TCP and secure TLS close events after listener callbacks', async () => {
+  const c = closeControl(),
+    tcp = c.socket(),
+    secure = c.socket(),
+    server = c.server();
+  c.owner.own(tcp); // Same identity is neither waited nor destroyed twice.
+  let settled = false,
+    seals = 0;
+  const closing = c.owner.close();
+  closing.then(() => {
+    settled = true;
+    seals++;
+  });
+  assert.strictEqual(c.owner.close(), closing);
+  assert.equal(c.owner.active, false);
+  server.done();
+  await flushClose();
+  assert.equal(settled, false);
+  tcp.emit('close');
+  await flushClose();
+  assert.equal(seals, 0);
+  secure.emit('close');
+  await closing;
+  assert.equal(seals, 1);
+  assert.equal(tcp.destroys, 1);
+  assert.equal(secure.destroys, 1);
+  assert.equal(server.calls, 1);
+  assert.strictEqual(c.owner.close(), closing);
+});
+
+test('fixture close fences callbacks and waits for accepted async work before allowing seals', async () => {
+  const c = closeControl(),
+    socket = c.socket();
+  let release,
+    calls = 0,
+    seals = 0;
+  const task = c.owner.task(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  await flushClose();
+  c.owner.later(() => {
+    calls++;
+  }, 1);
+  const closing = c.owner.close();
+  closing.then(() => {
+    seals++;
+  });
+  socket.emit('close');
+  await flushClose();
+  assert.equal(seals, 0);
+  await c.owner.task(() => {
+    calls++;
+  });
+  c.at(1);
+  assert.equal(calls, 0);
+  release();
+  await task;
+  await closing;
+  assert.equal(seals, 1);
+});
+
+test('fixture close preserves callback first failure across retries, deadline and late callbacks', async () => {
+  const c = closeControl(),
+    socket = c.socket(),
+    server = c.server();
+  const closing = c.owner.close();
+  server.done(Object.assign(Error('/private/raw-secret'), { code: 'RAW_SECRET' }));
+  await flushClose();
+  c.at(100);
+  const error = await closing.catch((error) => error);
+  assert.equal(error.code, 'FIXTURE_LISTENER_CLOSE');
+  assert.equal(error.message, 'FIXTURE_LISTENER_CLOSE');
+  assert.strictEqual(c.owner.close(), closing);
+  assert.strictEqual(await c.owner.close().catch((error) => error), error);
+  socket.emit('close');
+  server.done();
+  await flushClose();
+  assert.strictEqual(await closing.catch((error) => error), error);
+  assert.equal(socket.destroys, 1);
+});
+
+test('fixture close refuses ignoring destroy, missing callback and exact deadline without renewal', async () => {
+  for (const kind of ['socket', 'callback', 'task', 'edge']) {
+    const c = closeControl();
+    if (kind === 'socket') c.socket();
+    if (kind === 'callback') c.server();
+    if (kind === 'task') {
+      c.owner.task(() => new Promise(() => {}));
+      await flushClose();
+    }
+    if (kind === 'edge') c.at(100);
+    const closing = c.owner.close();
+    c.at(100);
+    await assert.rejects(closing, { code: 'FIXTURE_CLOSE_DEADLINE' });
+    c.at(1000);
+    assert.strictEqual(c.owner.close(), closing);
+  }
+});
+
+test('fixture close handles source-observed already closed and never-listening cases only', async () => {
+  for (const kind of ['never', 'closed', 'live']) {
+    const c = closeControl(),
+      socket = c.socket(true),
+      server = c.server(kind !== 'never');
+    if (kind === 'closed') server.emit('close');
+    const closing = c.owner.close();
+    server.done(Object.assign(Error('not exported'), { code: 'ERR_SERVER_NOT_RUNNING' }));
+    if (kind === 'live') await assert.rejects(closing, { code: 'FIXTURE_LISTENER_CLOSE' });
+    else await closing;
+    assert.equal(socket.destroys, 0);
+  }
+});
+
+test('fixture close owns aborted and late accepted identities without permitting activity', async () => {
+  const c = closeControl(),
+    socket = c.socket();
+  socket.emit('close');
+  const server = c.server();
+  const closing = c.owner.close();
+  const late = c.socket();
+  assert.equal(c.owner.own(late), false);
+  assert.equal(late.destroys, 1);
+  server.done();
+  let settled = false;
+  closing.then(() => {
+    settled = true;
+  });
+  await flushClose();
+  assert.equal(settled, false);
+  late.emit('close');
+  await closing;
+  assert.equal(socket.destroys, 0);
+});
+
+test('fixture close settles pending listener startup before its close callback without a new budget', async () => {
+  const c = closeControl(),
+    server = new EventEmitter();
+  let started;
+  server.listen = (_port, _host, done) => {
+    started = done;
+  };
+  server.address = () => ({ port: 1 });
+  server.close = (done) => {
+    server.done = done;
+  };
+  const starting = c.owner.listen(server);
+  await flushClose();
+  const closing = c.owner.close();
+  assert.equal(server.done, undefined);
+  server.emit('listening');
+  started();
+  await starting;
+  await flushClose();
+  assert.equal(typeof server.done, 'function');
+  server.done();
+  await closing;
+});
+
+test('fixture close waits for already aborted in-flight sockets and retains task or sync callback failures', async () => {
+  const c = closeControl(),
+    socket = c.socket();
+  socket.destroyed = true;
+  const closing = c.owner.close();
+  let settled = false;
+  closing.then(() => {
+    settled = true;
+  });
+  await flushClose();
+  assert.equal(settled, false);
+  assert.equal(socket.destroys, 0);
+  socket.emit('close');
+  await closing;
+  for (const kind of ['task', 'sync']) {
+    const c = closeControl();
+    if (kind === 'task') {
+      await c.owner
+        .task(() => {
+          throw Error('private');
+        })
+        .catch(() => {});
+    } else {
+      const server = c.server();
+      server.close = () => {
+        throw Error('private');
+      };
+    }
+    const closing = c.owner.close();
+    await assert.rejects(closing, {
+      code: kind === 'task' ? 'FIXTURE_TASK_CLOSE' : 'FIXTURE_LISTENER_CLOSE',
+    });
+    assert.strictEqual(c.owner.close(), closing);
+  }
+});
+
+test('fixture close actual composition collection and finally preserve first refusal and block producer seals', async () => {
+  const source = await readFile(
+    new URL('./support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const collection = source.slice(
+    source.indexOf("collectionStage('LISTENER_CLOSE');"),
+    source.indexOf("collectionStage('PROCESS_ABSENCE');"),
+  );
+  const finalizer = source.slice(
+    source.indexOf('if (!controlsClosed) {'),
+    source.indexOf('\n      }\n    },', source.indexOf('if (!controlsClosed) {')),
+  );
+  assert.ok(collection.includes('await controls.close()'));
+  assert.ok(finalizer.includes('CAPTURE_SCAN_REFUSED'));
+  for (const first of ['LISTENER_CLOSE', 'PRODUCER_CLOSE', 'SEAL_RECEIPT']) {
+    const c = closeControl(),
+      server = c.server();
+    const closing = c.owner.close();
+    server.done(Error('raw secret and private path'));
+    await closing.catch(() => {});
+    let seals = 0;
+    const context = {
+      controls: { close: c.owner.close },
+      controlsClosed: false,
+      integratedScenario: true,
+      h: {
+        finalizeCapture: () => {
+          seals++;
+        },
+      },
+      collectionStage: () => {},
+      scanStatus: 'REFUSED',
+      scanReason: first,
+      compositionScanReason: (_error, stage) => stage,
+    };
+    await assert.rejects(runInNewContext(`(async () => { ${collection} })()`, context), {
+      code: 'FIXTURE_LISTENER_CLOSE',
+    });
+    assert.equal(seals, 0);
+    await assert.rejects(runInNewContext(`(async () => { ${finalizer} })()`, context), {
+      code: 'CAPTURE_SCAN_REFUSED',
+    });
+    assert.equal(context.scanReason, first);
+    const safe = safeCompositionDiagnostic({
+      rawScan: context.scanStatus,
+      scanReason: context.scanReason,
+    });
+    assert.equal(safe.scanReason, first);
+    assert.equal(JSON.stringify(safe).includes('raw secret'), false);
+    assert.equal(server.calls, 1);
+  }
+});
+
+test('fixture close actual consumers reuse their existing lifetime without changing close signatures', async () => {
+  for (const name of ['harness-composition-inner.mjs', 'harness-transport-inner.mjs']) {
+    const source = await readFile(new URL(`./support/${name}`, import.meta.url), 'utf8');
+    assert.match(source, /transportFixtures\(h, \{ deadline: end \}\)/);
+    assert.match(source, /(?:controls|fixture)\.close\(\)/);
+    assert.doesNotMatch(source, /(?:controls|fixture)\.close\(\s*\{/);
+  }
+});
 
 test('W3 enrolled failure retains typed cause before the assertion and export refusal', () => {
   const secret = 'hop_' + 'c'.repeat(64);
