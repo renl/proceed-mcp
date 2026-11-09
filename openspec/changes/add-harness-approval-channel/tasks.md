@@ -10,8 +10,8 @@ Authority: user-approved bounded CI replacement and PR preparation, recorded in 
 
 Goal: make the existing pull-request check execute only the maintained permitted unit selection. This removes the known CI/test-policy conflict without pretending to qualify the release artifact or the real harness outcome. Last landed useful outcome remains startup/skill. Next merge remains the single harness change to `main`, not this checkpoint alone. Nearest draft-PR blocker is the workflow replacement and affected independent review. Merge/archive and exposure decisions remain separate.
 
-- [ ] Implement only the bounded workflow replacement below, preserving coordination overlays and all unrelated work.
-- [ ] Complete scoped static checks and the two explicit permitted unit commands, then return an immutable candidate and exact results for affected independent review.
+- [x] Implement only the bounded workflow replacement below, preserving coordination overlays and all unrelated work.
+- [x] Complete scoped static checks and the two explicit permitted unit commands, then return an immutable candidate and exact results for affected independent review.
 - [ ] After independent review and required unit-only checks, prepare or update only the same single draft PR to exercise the revised `pull_request` CI. Keep the change active and PR unmerged. This task does not itself execute PR mechanics.
 
 #### Workflow allowlist and invariants
@@ -44,6 +44,18 @@ Named stale assertion: `tests/release-preview-ci.test.mjs` encodes the replaced 
 This brief supersedes the earlier CI-decision blocker and old blanket CI/install prohibition only for the explicit operations above. It does not waive pre-merge or exposure evidence. The compact checks/lifecycle block below retains those separate gates. Cleanup remains pending verified landing with the current worktree retained.
 
 Handoff-only checks: direct workflow/maintained-command review and selected `git diff --check` PASS. No test, CI or formatter execution is claimed. Existing code review is reused at its original scope, not extended to the unimplemented workflow.
+
+#### Bounded CI replacement evidence - implementation run
+
+Entry HEAD `ea858d71f7abfd8faf186d215c0ae9c3ae8fb4b2`, branch `add-harness-approval-channel`, empty index and only the preserved `AGENTS.md`, `README.md`, `docs/status_log.md` overlays confirmed once before editing. Workflow candidate `0ace4cd5c51b2b1e69c6630db5b10d9019433fc6` (parent `ea858d71`) changes `.github/workflows/ci.yml` only, replacing the release-suite, build and npm-CLI-discovery/release-pack steps with the two permitted unit selections at `timeout-minutes: 1` each, and keeps `name: ci`, job `validate`, unfiltered `pull_request`, `ubuntu-24.04`, Node `24.22.2`, the 15-minute job timeout, `contents: read`, both pinned action revisions with `persist-credentials: false`, the Node-version display, `npm ci --ignore-scripts` and the workflow Prettier check ahead of unit execution. Manifest, lockfile, dependency, action pin, production, test, spec and design files are unchanged. Static review found no indirect non-unit command, hidden script, skip, `continue-on-error`, path filter or failure suppression, and confirmed finite job/step timeouts.
+
+Executed with the maintained commands on the Windows host, 30000 ms outer bound each, existing installed dependencies reused with no new installation:
+
+1. `node node_modules/prettier/bin/prettier.cjs --check .github/workflows/ci.yml` PASS, no files rewritten. Workspace `git diff --check` PASS.
+2. Harness units (`node --test --test-reporter=tap` over `harness-question-lifetime`, `harness-revocation-unit`, `harness-channel-unit`, `harness-context-unit`, `harness-preparation-unit`, `harness-admission-unit`): exit 0, 117 tests, 117 PASS, zero fail/cancelled/skipped/todo, 256.4 ms.
+3. Cancellation/wait units (`node --test --test-reporter=tap` over `portable-execution-cancel`, `portable-wait-unit`): exit 0, 87 tests, 87 PASS, zero fail/cancelled/skipped/todo, 145.6 ms.
+
+These are host unit results for the workflow candidate. The revised `pull_request` workflow is UNRUN: no Ubuntu 24.04/Node 24.22.2 execution has occurred, so this evidence is not Ubuntu CI qualification. Remote required-check and protection policy remains UNKNOWN and unqueried. No build, pack, install, integration, renderer, e2e, calibration, preflight, server, socket or filesystem-lifecycle test ran. `tests/release-preview-ci.test.mjs` stays unchanged and UNRUN with its recorded owner and trigger. PR preparation, archive, merge, installation, deployment and publication remain separately unauthorized.
 
 ### Current bounded implementation brief - durable context and common status
 
