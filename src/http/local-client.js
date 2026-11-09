@@ -38,6 +38,11 @@ export const LOCAL_CHANNEL_CIPHER = 'PSK-AES256-GCM-SHA384';
 export const LOCAL_HANDSHAKE_TIMEOUT_MS = 1000;
 export const LOCAL_LIFECYCLE_BYTES = 16384;
 
+// The operator channel's design response ceiling is 64 KiB for one exchange. The
+// general client keeps its larger allowance for the existing portable surfaces; a
+// caller must not treat that allowance as the operator contract.
+export const LOCAL_PRODUCT_RESPONSE_BYTES = 65_536;
+
 export const LOCAL_REQUEST_TIMEOUT_MS = 10_000;
 
 // A waiting exchange outlives the broker's bounded poll turnover, so it has its own deadline.
@@ -467,6 +472,7 @@ export function createSecureLocalClient({
   lockFile,
   token,
   timeoutMs = LOCAL_REQUEST_TIMEOUT_MS,
+  maxResponseBytes = LOCAL_LIFECYCLE_BYTES * 64,
 }) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new LocalRequestError('BROKER_UNAVAILABLE', 'the configured broker port is not usable');
@@ -520,8 +526,22 @@ export function createSecureLocalClient({
         body,
         headers: extraHeaders,
         timeoutMs: remainingTime(),
+        maxBytes: maxResponseBytes,
         signal,
       });
     },
   };
+}
+
+// The product operator transport: the same protected TLS-PSK admission, fixed
+// 10000 ms exchange budget and the design's 64 KiB response ceiling. Operator
+// routes never inherit the general client's larger response allowance.
+export function createOperatorLocalClient({ port, lockFile, token }) {
+  return createSecureLocalClient({
+    port,
+    lockFile,
+    token,
+    timeoutMs: LOCAL_REQUEST_TIMEOUT_MS,
+    maxResponseBytes: LOCAL_PRODUCT_RESPONSE_BYTES,
+  });
 }

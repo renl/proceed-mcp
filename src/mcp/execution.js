@@ -8,6 +8,7 @@
 // replays its request once per invocation and then keeps that one invocation waiting
 // on the broker's bounded poll, claiming neither human presentation nor a returned write.
 import { LocalRequestError } from '../http/local-client.js';
+import { sessionProblem } from '../harness/identifiers.js';
 import { REGISTRATION_HEADER, RegistrationError } from './registration.js';
 import {
   CLIENT_REQUEST_ID_PATTERN,
@@ -35,6 +36,11 @@ const MAX_EXPIRY_SECONDS = 86400;
 // seconds, with no attempt cutoff while the invocation lives and no re-creation.
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const WAIT_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
+// Only the documented transport metadata key is a route candidate.
+const HARNESS_META_KEY = 'ai.opencode/sessionID';
+// Prepared routes are remembered per handle; the bound keeps a long-lived adapter
+// from retaining every handle it ever prepared.
+const MAX_PREPARED_ROUTES = 512;
 
 // An overlapping invocation of one prepared handle is this adapter's own conflict.
 const CONFLICT = envelope(
@@ -84,6 +90,7 @@ const TOOL_CODES = new Set([
   'FORBIDDEN',
   'OWNER_IN_USE',
   'WAIT_ALREADY_ACTIVE',
+  'SESSION_BUSY',
   'IDEMPOTENCY_CONFLICT',
   'DECISION_MISMATCH',
   'NOT_FOUND',
@@ -213,6 +220,15 @@ const DELIVERY_STATES = new Set([
   'blocked',
 ]);
 const EVENT_STATES = new Set(['unverified', 'unsupported', 'verified']);
+// Design section 2: harness eligibility is the broker's own observation. It has
+// exactly two fields, three states and three unavailable reasons, and a value that
+// disagrees with the resolution it accompanies is not repaired into a status.
+const HARNESS_CHANNEL_FIELDS = ['reason', 'state'];
+const HARNESS_CHANNEL_REASONS = new Set([
+  'HOST_NOT_CONFIGURED',
+  'SESSION_ROUTE_UNAVAILABLE',
+  'OPERATOR_NOT_ENROLLED',
+]);
 // Design section 3 "Response fields and authority privacy": a representation exposes
 // only these fields, and the two nested objects expose only their documented members.
 // Additional broker metadata is additive detail, so it is omitted rather than rejected
@@ -236,6 +252,7 @@ const COMMON_FIELDS = [
   'delivery_state',
   'delivery_error',
   'event_capability',
+  'harness_channel',
 ];
 const DIAGNOSTIC_FIELDS = ['code', 'message', 'retryable'];
 const EVENT_FIELDS = ['status', 'revision', 'reason'];
@@ -255,6 +272,9 @@ function projection(body) {
   value.delivery_error =
     body.delivery_error === null ? null : admitted(body.delivery_error, DIAGNOSTIC_FIELDS);
   value.event_capability = admitted(body.event_capability, EVENT_FIELDS);
+  // The admitted status is copied unchanged, as a fresh object, so neither
+  // projection can be edited back into a different eligibility.
+  value.harness_channel = admitted(body.harness_channel, HARNESS_CHANNEL_FIELDS);
   return value;
 }
 
@@ -288,6 +308,21 @@ function events(value) {
   return pinned('revision') && pinned('reason');
 }
 
+// A pending request carries one declared eligibility observation, and a terminal
+// one carries only its closure. A missing, additional, malformed or
+// resolution-contradicting object proves no status, so it is never promoted and
+// never replaced with an invented one.
+function harnessChannel(value, resolution) {
+  if (!isPlainObject(value)) return false;
+  if (Object.keys(value).length !== 2) return false;
+  if (!Object.hasOwn(value, 'state') || !Object.hasOwn(value, 'reason')) return false;
+  if (resolution === 'pending') {
+    if (value.state === 'eligible') return value.reason === null;
+    return value.state === 'unavailable' && HARNESS_CHANNEL_REASONS.has(value.reason);
+  }
+  return value.state === 'closed' && value.reason === null;
+}
+
 // A request representation is this outcome only when it names the prepared handle,
 // the committed request and its complete common view; a pending or invented shape is
 // never promoted, and a terminal one names exactly one decision. What survives is the
@@ -297,7 +332,9 @@ function requestView(body, handle, requestId) {
   // A disclosed authority field makes the whole representation unusable, before any
   // of it is promoted or reported, and nothing from it is echoed.
   if (AUTHORITY_FIELDS.some((field) => Object.hasOwn(body, field))) return null;
-  if (body.request_handle !== handle) return null;
+  if (typeof body.request_handle !== 'string' || !REQUEST_HANDLE_PATTERN.test(body.request_handle))
+    return null;
+  if (handle !== null && body.request_handle !== handle) return null;
   if (typeof body.request_id !== 'string' || !REQUEST_ID_PATTERN.test(body.request_id)) return null;
   if (requestId !== null && body.request_id !== requestId) return null;
   if (
@@ -317,6 +354,9 @@ function requestView(body, handle, requestId) {
   ) {
     return null;
   }
+  // The derived status travels with the representation it describes, so a
+  // resolution and an eligibility that cannot both be true are unusable.
+  if (!harnessChannel(body.harness_channel, body.resolution)) return null;
   // A live request carries no outcome and no delivery standing yet, and its nullable
   // outcome fields are present.
   if (body.resolution === 'pending') {
@@ -424,7 +464,7 @@ function hold(ms, signals) {
   });
 }
 
-export function createToolExecutor({ client, waitClient, registration }) {
+export function createToolExecutor({ client, waitClient, registration, harnessId = null }) {
   // Ordinary broker exchanges are cancelled as one unit when the adapter closes;
   // the registration binding cancels its own lifecycle traffic, and both stay
   // inside the single shutdown budget.
@@ -437,6 +477,31 @@ export function createToolExecutor({ client, waitClient, registration }) {
   // which denies it without disclosing, creating or disturbing the live invocation.
   const waiting = new Set();
   const reserved = (args) => `${args.request_handle}\u0000${args.request_capability}`;
+
+  // A successful preparation records exactly what it forwarded: a bounded session
+  // route, or `null` when no harness route was forwarded. A later call can only
+  // repeat a route for a handle prepared with one; it can never add one to a
+  // route-less handle or choose a different session silently.
+  const preparedRoutes = new Map();
+  const rememberRoute = (handle, sessionId) => {
+    preparedRoutes.delete(handle);
+    preparedRoutes.set(handle, sessionId);
+    while (preparedRoutes.size > MAX_PREPARED_ROUTES) {
+      const oldest = preparedRoutes.keys().next().value;
+      preparedRoutes.delete(oldest);
+    }
+  };
+  // The only route candidate is the documented host metadata value. Model
+  // arguments, the foreground session and recent activity are never consulted.
+  const routedSession = (context) => {
+    if (harnessId === null) return null;
+    const meta = context?.meta;
+    if (!isPlainObject(meta)) return null;
+    const value = meta[HARNESS_META_KEY];
+    return sessionProblem(value) === null ? value : null;
+  };
+  const routeBody = (sessionId) =>
+    sessionId === null ? null : { harness_id: harnessId, session_id: sessionId };
 
   // Each exchange is its own transport, so one invocation's cancel never aborts another's.
   const transmit = async (which, method, path, body, headers, signal) => {
@@ -475,9 +540,23 @@ export function createToolExecutor({ client, waitClient, registration }) {
     return outcomeOf(sent.response);
   };
 
+  // A management success is the same complete common representation, bound to the
+  // exact request the caller named, so a value that cannot be that representation
+  // is unusable rather than a generic object result.
+  const manage = async (method, path, body, headers, requestId, signal) => {
+    const sent = await transmit(client, method, path, body, headers, signal);
+    if (sent.error !== undefined) return localFailure(sent);
+    const { status } = sent.response;
+    if (status >= 200 && status < 300) {
+      const view = requestView(sent.response.body, null, requestId);
+      return view === null ? unusable() : complete(view, false);
+    }
+    return outcomeOf(sent.response);
+  };
+
   // One creation per invocation, then that same invocation waits on the broker's bounded
   // poll; a pending receipt is not its result and no returned write is reported.
-  async function requestApproval(args, signal) {
+  async function requestApproval(args, signal, context) {
     const reservation = reserved(args);
     if (waiting.has(reservation)) return complete(CONFLICT, true);
     if (signal?.aborted === true) return abandoned();
@@ -485,14 +564,16 @@ export function createToolExecutor({ client, waitClient, registration }) {
     try {
       const authority = await untilCancelled(registration.ensure(), signal);
       const capability = { [CAPABILITY_HEADER]: args.request_capability };
-      const created = await transmit(
-        client,
-        'POST',
-        '/v1/requests',
-        creationBody(args),
-        capability,
-        signal,
-      );
+      // The creation call may repeat the route its preparation forwarded. A
+      // metadata loss omits the optional route and retains the stored association,
+      // and a conflicting current route is left for the broker to refuse.
+      const prepared = preparedRoutes.get(args.request_handle);
+      const body = creationBody(args);
+      if (typeof prepared === 'string') {
+        const route = routeBody(routedSession(context));
+        if (route !== null) body.harness_route = route;
+      }
+      const created = await transmit(client, 'POST', '/v1/requests', body, capability, signal);
       if (created.error !== undefined) return localFailure(created);
       // Only the documented creation statuses carry a request, and only its complete
       // common view may be waited on. Any other success is unusable, never a generic
@@ -615,7 +696,7 @@ export function createToolExecutor({ client, waitClient, registration }) {
     const signal = context?.signal ?? null;
     if (signal?.aborted === true) return abandoned();
 
-    if (name === 'request_approval') return requestApproval(args, signal);
+    if (name === 'request_approval') return requestApproval(args, signal, context);
 
     try {
       await untilCancelled(registration.ensure(), signal);
@@ -631,16 +712,47 @@ export function createToolExecutor({ client, waitClient, registration }) {
     // routes keep their owner-plus-capability authority exactly as before.
     if (name === 'prepare_approval') {
       const body = args.session_label === undefined ? {} : { session_label: args.session_label };
-      return send('POST', '/v1/handles', body, undefined, signal);
+      // Design section 3: this adapter's own CLI-validated startup configuration is
+      // the only preparation context, and it is always supplied so a configured but
+      // unroutable preparation is distinguishable from an unconfigured one. Model
+      // arguments and the foreground session never supply it.
+      body.host_configured = harnessId !== null;
+      const sessionId = routedSession(context);
+      const route = routeBody(sessionId);
+      if (route !== null) body.harness_route = route;
+      const result = await send('POST', '/v1/handles', body, undefined, signal);
+      // Record exactly what this successful preparation forwarded, keyed by the
+      // broker-issued handle. A failed, unusable or unrelated reply establishes
+      // no route for any handle.
+      const issued = isPlainObject(result.structuredContent)
+        ? result.structuredContent.request_handle
+        : undefined;
+      if (
+        result.isError === false &&
+        typeof issued === 'string' &&
+        REQUEST_HANDLE_PATTERN.test(issued)
+      ) {
+        rememberRoute(issued, route === null ? null : sessionId);
+      }
+      return result;
     }
 
     // The request ID was matched against its format above, so the path cannot
     // carry an unexpected segment.
     const path = `/v1/requests/${encodeURIComponent(args.request_id)}`;
     const headers = { [CAPABILITY_HEADER]: args.request_capability };
-    if (name === 'get_approval') return send('GET', path, undefined, headers, signal);
-    if (name === 'cancel_approval') return send('POST', `${path}/cancel`, {}, headers, signal);
-    return send('POST', `${path}/acknowledge`, { decision_id: args.decision_id }, headers, signal);
+    if (name === 'get_approval')
+      return manage('GET', path, undefined, headers, args.request_id, signal);
+    if (name === 'cancel_approval')
+      return manage('POST', `${path}/cancel`, {}, headers, args.request_id, signal);
+    return manage(
+      'POST',
+      `${path}/acknowledge`,
+      { decision_id: args.decision_id },
+      headers,
+      args.request_id,
+      signal,
+    );
   }
 
   return {

@@ -40,9 +40,11 @@ const INSTRUCTIONS = [
   'Never echo, print or otherwise expose the request capability in an assistant message or a Telegram message.',
   'Sharing the request capability with another caller under the same transport principal grants request authority for that one request alone, and that sharing does not transfer or redirect the original waiting call.',
   'The transport principal and the request capability cannot by themselves establish an event route or any automatic agent activity.',
-  'When a request is created, this build sends its approval question to the paired private chat over Telegram with Approve, Reject and Respond controls and durably maps the message it validated, so the human can see the exact action while the call keeps waiting; that paired human resolves this request alone, with an explicit Approve or Reject, or with Respond instructions that are never approval.',
+  'When a request is created, this build sends its approval question to the paired private chat over Telegram with Approve, Reject and Respond controls and durably maps the message it validated, so the human can see the exact action while the call keeps waiting; either that paired human or a local operator enrolled under that same paired authorization resolves this one request, only through a trusted request-bound interaction, with an explicit Approve or Reject, or with Respond instructions that are never approval, and the first valid choice accepted while the request is pending stays the single durable winner.',
   'Only an explicit Approve grants approval. Reject records rejection. Respond records request-specific instructions only after valid correlated text. Approval-like words in Respond text never grant approval.',
   'Call get_approval with the retained request_id and request_capability to observe that exact request: an authorized read returns the committed representation of a pending request, applies expiry first and reports an expired request as expired, and NOT_FOUND covers an unused reservation, an unknown request or denied authority alike.',
+  'Every authorized request representation also carries harness_channel, an object of exactly state and reason that the broker derives from the request preparation context and current durable routing and enrollment, never from this adapter configuration. unavailable with reason HOST_NOT_CONFIGURED means the adapter that prepared the request had no configured harness host, so configuring a trusted harness adapter applies to requests prepared afterwards and never routes this existing request retroactively. unavailable with reason SESSION_ROUTE_UNAVAILABLE means no enabled safe session route is established for the request, so repair supported session routing for future requests. unavailable with reason OPERATOR_NOT_ENROLLED means an enabled route has no active enrolled operator, so complete paired-chat operator enrollment. eligible with a null reason means only that the broker finds this request eligible, not that a harness displayed it, that a human received it or that the originating call received the outcome, and closed with a null reason means the request is terminal and no new decision is invited.',
+  'These harness setup actions approve no work by themselves: completing paired-chat operator enrollment delegates scoped decision authority to that enrolled local operator key for later requests, while the reported eligibility only describes channel routing and enrollment and never grants authority. Neither setup nor eligibility ever lets the agent approve its own request, and neither replaces Telegram: the paired private chat and an explicit authorized get_approval with the retained capability remain available for every request.',
   'A lost waiting call does not cancel the durable request, so the retained request_id and request_capability keep the recorded outcome available through capability-authorized retrieval.',
   'Call cancel_approval with the retained request_id and request_capability to close only that pending request before its deadline: an authorized cancellation returns the committed cancelled representation, repeating it on an already resolved request returns the same outcome unchanged, expiry wins at the deadline, and NOT_FOUND covers an unused reservation, an unknown request or denied authority alike.',
   'acknowledge_approval records receipt of a terminal decision you already retrieved: call it with the retained request_id, request_capability and that exact decision_id, and it returns the same request marked confirmed.',
@@ -90,7 +92,7 @@ const TOOLS = [
   {
     name: 'request_approval',
     description:
-      'Create or reuse the request of an authorized prepared handle exactly once and keep this call waiting for its resolution, expiry or cancellation; this call returns the recorded terminal representation as its own result, and after an error-free write of that result it reports that single successful write to the delivery ledger without waiting for the report reply. This build displays that request as an approval question in the paired private chat, validates the returned message before mapping it, and correlates the paired human Approve, Reject or Respond to that one request.',
+      'Create or reuse the request of an authorized prepared handle exactly once and keep this call waiting for its resolution, expiry or cancellation; this call returns the recorded terminal representation as its own result, and after an error-free write of that result it reports that single successful write to the delivery ledger without waiting for the report reply. This build displays that request as an approval question in the paired private chat, validates the returned message before mapping it, and correlates the paired human Approve, Reject or Respond, or the equivalent choice from a local operator enrolled under that same paired authorization through a trusted request-bound interaction, to that one request, and the first valid choice accepted while the request is pending stays the single durable winner.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -249,7 +251,12 @@ export async function runMcpServer({
       return {
         jsonrpc: '2.0',
         id: message.id,
-        result: await execute(name, message.params?.arguments, { signal }),
+        result: await execute(name, message.params?.arguments, {
+          signal,
+          // Transport metadata is an input to the adapter's routing decision, never
+          // a model argument or a substitute for request authority.
+          meta: message.params?._meta,
+        }),
       };
     }
     if (typeof message.id === 'undefined') return null;

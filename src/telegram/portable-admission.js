@@ -12,7 +12,10 @@ const MAX_SAFE = Number.MAX_SAFE_INTEGER;
 const MAX_TEXT_SCALARS = 4096;
 // Exact allocated callback data and the one typed command grammar. Neither is a
 // prefix parser, and neither accepts trailing data, alternate case or padding.
+// Enrollment Confirm/Deny controls are a separate callback vocabulary and can
+// never enter the request-resolution parser.
 const CALLBACK_DATA = /^([art]):([a-f0-9]{32})$/;
+const ENROLLMENT_CALLBACK_DATA = /^(he|hx):([a-f0-9]{32})$/;
 const COMMAND_WORD = '/respond';
 const COMMAND = /^\/respond (req_[a-f0-9]{32}) ([\s\S]+)$/;
 const INTENT_SEPARATORS = ' \t\n\r@';
@@ -81,7 +84,23 @@ export function admitCallbackUpdate(update) {
   }
   if (!isPrivateChat(message.chat)) return callbackRefused('invalid_chat', queryId);
   const data = typeof query.data === 'string' ? CALLBACK_DATA.exec(query.data) : null;
-  if (!data) return callbackRefused('invalid_data', queryId);
+  if (!data) {
+    const enrollment =
+      typeof query.data === 'string' ? ENROLLMENT_CALLBACK_DATA.exec(query.data) : null;
+    if (!enrollment) return callbackRefused('invalid_data', queryId);
+    // Enrollment controls are inert correlation until the current paired private
+    // sender is rechecked atomically by the broker.
+    return {
+      status: 'enrollment',
+      kind: enrollment[1] === 'he' ? 'confirm' : 'deny',
+      token: enrollment[2],
+      updateId: update.update_id,
+      callbackQueryId: queryId,
+      userId: String(sender.id),
+      chatId: String(message.chat.id),
+      messageId: message.message_id,
+    };
+  }
   return {
     status: 'callback',
     kind: CALLBACK_KINDS[data[1]],

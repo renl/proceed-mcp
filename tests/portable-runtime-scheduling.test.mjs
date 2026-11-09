@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createServer } from 'node:net';
+import { createServer, Server } from 'node:net';
 import { Journal } from '../src/journal/journal.js';
 import { readJournal } from '../src/journal/framing.js';
 import { createPortableBroker } from '../src/broker/portable.js';

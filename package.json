@@ -16,6 +16,9 @@
   "bin": {
     "proceed-mcp": "bin/proceed-mcp.js"
   },
+  "exports": {
+    "./tui": "./src/harness/tui-entry.js"
+  },
   "files": [
     "bin",
     "src",
@@ -29,6 +32,8 @@
     "test:setup": "node --test tests/cli-setup.test.mjs"
   },
   "devDependencies": {
+    "@opencode/client": "2.2.5",
+    "@opencode/plugin": "2.2.5",
     "prettier": "3.9.10"
   }
 }

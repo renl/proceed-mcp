@@ -35,6 +35,8 @@ import { LOCAL_WAIT_TIMEOUT_MS, LOCAL_REQUEST_TIMEOUT_MS } from '../http/local-c
 import { createToolExecutor } from '../mcp/execution.js';
 import { createRegistrationBinding } from '../mcp/registration.js';
 import { runMcpServer } from '../mcp/server.js';
+import { createOperatorKeyFile, validateOperatorKeyFileOption } from '../harness/operator-key.js';
+import { harnessIdProblem } from '../harness/identifiers.js';
 import { startPortableRuntime } from '../broker/portable-runtime.js';
 import {
   defaultCredentialFile,
@@ -64,9 +66,10 @@ const USAGE = [
   '  proceed-mcp init [--state-dir <directory>]',
   '  proceed-mcp owner add <owner_id> --label <label> [--state-dir <directory>]',
   '  proceed-mcp telegram provision --token-stdin [--telegram-token-file <absolute-file>] [--state-dir <directory>]',
+  '  proceed-mcp harness keygen --operator-key-file <absolute-file> [--state-dir <directory>]',
   '  proceed-mcp serve [--state-dir <directory>] [--secure-local] [--telegram-token-file <absolute-file>]',
   '  proceed-mcp pair [--state-dir <directory>] [--telegram-token-file <absolute-file>]',
-  '  proceed-mcp mcp --owner <owner_id> [--state-dir <directory>] [--telegram-token-file <absolute-file>]',
+  '  proceed-mcp mcp --owner <owner_id> [--harness-id <harness_id>] [--state-dir <directory>] [--telegram-token-file <absolute-file>]',
   '  proceed-mcp stop [--state-dir <directory>]',
   '  proceed-mcp status [--request <request_id>] [--json] [--state-dir <directory>]',
   '  proceed-mcp retry <request_id> [--state-dir <directory>]',
@@ -81,6 +84,9 @@ const USAGE = [
   'For automatic startup, "telegram provision --token-stdin" writes the token once to a separate',
   'owner-only credential file outside this repository and the state directory; only the broker reads it.',
   'That file is not encrypted and other processes running as the same account can read it.',
+  'For the trusted harness, "harness keygen" writes one create-only, owner-only operator credential',
+  'outside this repository, the state directory and MCP configuration. It enrolls nothing and approves',
+  'no work; the paired human confirms the matching public fingerprint in the private chat.',
   '`mcp`, `pair`, `status` and `stop` require the secure local channel; a legacy HTTP broker must be',
   'stopped through its own interface and restarted with `serve --secure-local` or provisioned automatic startup.',
   'This checkpoint runs portable schema 2 setup: init, owner add, pair, serve, mcp and status.',
@@ -481,6 +487,41 @@ async function runTelegramCommand(argv, context) {
   return runProvision(rest, context);
 }
 
+// Create-only operator credential (design section 1). The command takes a path,
+// never a secret; it refuses an existing destination, reports only the nonsecret
+// destination and public fingerprint, and neither enrolls the key nor approves
+// work.
+async function runHarnessKeygen(argv, { stdout, env }) {
+  const { positionals, options } = parseArguments(argv, {
+    valueOptions: ['state-dir', 'operator-key-file'],
+  });
+  noPositionals(positionals, 'harness keygen');
+  requireOptions(options, ['operator-key-file']);
+  const file = validateOperatorKeyFileOption(options.get('operator-key-file'));
+  const paths = commandStatePaths(options, env);
+  const result = await createOperatorKeyFile({ file, stateDir: paths.stateDir });
+  stdout.write(
+    [
+      `Operator credential written to ${result.file} (value not shown).`,
+      `Operator key fingerprint (key_id): ${result.keyId}`,
+      'This file is owner-only and not encrypted; other processes using the same account can read it.',
+      'Keep it outside repositories and MCP configuration, and load it only in the trusted local TUI.',
+      'The key is not enrolled yet and approves no work. In the paired private chat, send',
+      '"/harness <enrollment_id>" from the TUI setup and confirm only the matching fingerprint.',
+      '',
+    ].join('\n'),
+  );
+  return EXIT_CODE.OK;
+}
+
+async function runHarnessCommand(argv, context) {
+  const [subcommand, ...rest] = argv;
+  if (subcommand !== 'keygen') {
+    throw invalidArgument('harness supports only "keygen"');
+  }
+  return runHarnessKeygen(rest, context);
+}
+
 // Launch the installed broker entry point from this same package using the
 // current runtime executable and the selected nonsecret credential path. The
 // child is the only process that reads that file; automatic startup never selects
@@ -562,10 +603,19 @@ async function runPair(argv, { stdout, env }) {
 // broker child; it never opens that file.
 async function runMcp(argv, { env }) {
   const { positionals, options } = parseArguments(argv, {
-    valueOptions: ['state-dir', 'owner', TOKEN_FILE_OPTION],
+    valueOptions: ['state-dir', 'owner', 'harness-id', TOKEN_FILE_OPTION],
   });
   noPositionals(positionals, 'mcp');
   requireOptions(options, ['owner']);
+
+  // Opting this adapter into the configured host namespace is explicit: the
+  // harness identity is validated here and only transport metadata may name the
+  // session route. Omission keeps Telegram-only behavior.
+  const harnessId = options.get('harness-id');
+  if (harnessId !== undefined) {
+    const problem = harnessIdProblem(harnessId);
+    if (problem !== null) throw invalidArgument(problem);
+  }
 
   // The one availability attempt starts at adapter launch: prerequisites, launch
   // and adoption all share this original budget.
@@ -632,6 +682,7 @@ async function runMcp(argv, { env }) {
     client,
     waitClient,
     registration: createRegistrationBinding({ client }),
+    harnessId: harnessId ?? null,
   });
   try {
     await runMcpServer({
@@ -946,6 +997,7 @@ async function dispatch(argv, context) {
   if (command === 'owner') return runOwnerCommand(rest, context);
   if (command === 'origin') return runOriginCommand(rest, context);
   if (command === 'telegram') return runTelegramCommand(rest, context);
+  if (command === 'harness') return runHarnessCommand(rest, context);
   if (command === 'serve') return runServe(rest, context);
   if (command === 'pair') return runPair(rest, context);
   if (command === 'mcp') return runMcp(rest, context);

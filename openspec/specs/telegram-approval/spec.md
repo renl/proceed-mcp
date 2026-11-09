@@ -43,7 +43,7 @@ Each request MUST have a stable identity, capability-and-transport-principal own
 - **THEN** the human can distinguish their sessions and requested actions, and each choice applies only to its identified request.
 
 ### Requirement: Explicit approval and rejection
-Only an explicit Approve choice from the paired human for an actionable request MUST produce an approval. An explicit Reject choice MUST produce a rejection for that request, not authorization to perform the requested action.
+Only an explicit Approve choice from the paired human or the additional local operator authorized under [trusted harness interaction](../opencode-session-continuation/spec.md) for an actionable request MUST produce an approval. An explicit Reject choice MUST produce a rejection for that request, not authorization to perform the requested action.
 
 #### Scenario: Approve a pending request
 - **GIVEN** an unexpired pending request
@@ -55,11 +55,17 @@ Only an explicit Approve choice from the paired human for an actionable request 
 - **WHEN** the paired human explicitly selects Reject for it
 - **THEN** the product records rejection and confirms it without recording approval.
 
+#### Scenario: Additional trusted operator decides
+- **GIVEN** an unexpired pending request mirrored through the configured trusted harness
+- **WHEN** its authorized local operator explicitly selects Approve or Reject through the genuine request-bound human interaction
+- **THEN** the matching choice can resolve that request under the same durable single-resolution rules as Telegram
+- **AND** proof that the operator is the paired Telegram person is not required.
+
 ### Requirement: Responses are instructions only
-Respond MUST allow the paired human to supply text associated with one identified pending request. Accepting that response MUST resolve the request as an instruction response, not as approval or rejection. Performing an action that still requires approval MUST require a separate explicit approval; response text MUST NOT satisfy it.
+Respond MUST allow the paired human or authorized local harness operator to supply text associated with one identified pending request. Accepting that response MUST resolve the request as an instruction response, not as approval or rejection. Performing an action that still requires approval MUST require a separate explicit approval. Response text MUST NOT satisfy it.
 
 #### Scenario: Respond with approval-like text
-- **GIVEN** the human selects Respond for a pending request
+- **GIVEN** the human selects Respond for a pending request on either authorized surface
 - **WHEN** the human submits text, including text such as "yes" or "approved"
 - **THEN** the text is recorded as instructions for that request and no approval is recorded.
 
