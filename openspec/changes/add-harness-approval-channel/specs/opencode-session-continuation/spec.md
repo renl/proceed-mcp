@@ -99,6 +99,12 @@ After resolution or closure, the product MUST make best-effort updates to close 
 
 A clean installation MUST have no requests, decisions, pairing or configured harness decision authority. Supported setup MUST establish protected state, the local transport principal, operator-authorized Telegram pairing and explicit trusted-harness configuration without manual stored-data editing. Setup MUST NOT create an approval or waive native permission rules.
 
+Harness-channel status MUST reflect the broker-owned established request context and current eligibility, never the observing adapter's configuration. Terminal requests MUST report `closed` with reason `null` first. Pending requests MUST report, in priority order, `unavailable/HOST_NOT_CONFIGURED` when preparation had no configured host, `unavailable/SESSION_ROUTE_UNAVAILABLE` when a configured host lacks safe request routing or routing is not enabled, `unavailable/OPERATOR_NOT_ENROLLED` when an enabled route lacks active matching operator enrollment, otherwise `eligible` with reason `null`. Authorized observers MUST receive identical status for an unchanged request context and eligibility, including after broker restart. Actual enrollment, revocation, enablement or closure MAY change status. Observation MUST NOT retarget an unrouted handle or grant human authority. Eligibility MUST NOT imply display, human receipt or outcome delivery.
+
+For a legacy pending request without a retained safe route and with unknown preparation-time host configuration, status MUST report `unavailable/SESSION_ROUTE_UNAVAILABLE`. This is a bounded exception to the normal new-preparation priority above. The reason means no safe route was established, not that a host was known to be configured at preparation. Terminal status MUST still take precedence as `closed` with reason `null`. A legacy request with a retained valid route MUST be evaluated using normal route enablement and active matching operator enrollment. Missing newer metadata alone MUST neither grant eligibility nor invalidate that retained route.
+
+Observation, broker restart, current adapter configuration and operator enrollment MUST NOT repair an unrouted legacy request or target it to a new route. Handling legacy requests MUST NOT require migration writes, guessed backfills, deletion or retargeting. Existing authorized retrieval, Telegram access, expiry and recorded outcomes MUST remain unchanged. Guidance about future configuration MUST apply to future requests, not claim to repair an existing unrouted request retroactively.
+
 #### Scenario: Resolve the first request from an empty installation
 
 - **GIVEN** a clean installation and operator access to the documented prerequisites
@@ -112,6 +118,24 @@ A clean installation MUST have no requests, decisions, pairing or configured har
 - **WHEN** it requests a Proceed approval through the portable baseline
 - **THEN** no unsupported host interaction is attempted and Telegram waiting-call operation remains available
 - **AND** the missing host path and supported next step are reported without granting substitute authority.
+
+#### Scenario: Absent-route reasons remain consistent across adapters and restart
+
+- **GIVEN** one pending request prepared without a configured host and another prepared with a configured host but without safe session routing
+- **AND** authorized observers use adapters with different host configurations
+- **WHEN** those observers retrieve both requests before and after broker restart with request context and eligibility unchanged
+- **THEN** every observation of the first request reports `unavailable/HOST_NOT_CONFIGURED` and every observation of the second reports `unavailable/SESSION_ROUTE_UNAVAILABLE`
+- **AND** neither observer configuration nor restart retargets either handle, grants human authority or changes the reported reason.
+
+#### Scenario: Legacy unknown preparation context remains stable and retrievable
+
+- **GIVEN** a legacy pending request has no retained safe route and its preparation-time host configuration is unknown
+- **AND** authorized observers use adapters with different current host configurations and operator enrollment
+- **WHEN** those observers retrieve the request before and after broker restart with request context and eligibility unchanged
+- **THEN** every observation reports `unavailable/SESSION_ROUTE_UNAVAILABLE` without assuming a host was configured at preparation
+- **AND** observation, restart, adapter configuration and enrollment do not establish or retarget a route, grant human authority, trigger migration writes or guessed backfills, or delete the request
+- **AND** existing authorized retrieval, Telegram access, expiry and recorded outcomes remain unchanged, with any subsequent terminal status reported first as `closed` with reason `null`
+- **AND** configuration guidance concerns future requests only, not retroactive repair of this request.
 
 ### Requirement: Document the dual-channel operating boundary
 
