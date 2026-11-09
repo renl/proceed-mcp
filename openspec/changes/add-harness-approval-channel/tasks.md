@@ -2,6 +2,8 @@
 
 ## Whole early-failure retention package - static review candidate
 
+Frozen executable `3430a28ab5ee5f66fdc1895dfe90012e3abfe2a1`, direct child of entry below, contains exactly the eight tested source/test paths and this tasks file. Post-commit index is empty, no untracked files remain and only the preserved README/status overlays are dirty. No hook was bypassed. This finalization changes tasks only. Native 60/60 evidence and all six ordered manifests above the historical sections apply to identical committed execution inputs. Final scoped tasks format/whitespace and strict validation pass. No implementation, test, dependency, configuration or baseline delta follows that verified executable. Combined independent review is requested, not accepted, and no runtime proposal is made.
+
 Entry `566e1fe0b3a6819e82be57ac4d1dbbb7ad2110cc`, following executable `8cd9b0ee3e827fa9a9e5b2ae567e6d8e87562735`. Scope is the existing approved test-owned producer, quiescence, receipt, classification and export correction. This is one coherent static package, not a new runtime proposal. Entry index was empty with only the preserved README/status overlays dirty. No production, spec, design, dependency, image, archived content or overlay was edited.
 
 The historical run still identifies only `SEAL_RECEIPT`. Its exact failed producer/check remains UNKNOWN. No refused receipt, transcript, callback, journal or private API capture was read. The accepted closed diagnostic does not contain that distinction. Unsupported glyph at offset 8059 remains UNKNOWN, with no scalar recovery, allowance or inferred request counts. Old FAIL, REFUSED and five-not-admitted outcomes are unchanged.
