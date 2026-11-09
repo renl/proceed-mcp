@@ -2,7 +2,7 @@
 
 ## Static diagnostic and producer-settlement package - combined review candidate
 
-Initial checkpoint `f9b0c2f1d5b76b179a733d7fc5f0db52dfe39b48` is superseded by the fixture deadline-anchor correction below. Final executable identity is recorded in tasks-only finalization. All actual-path and 99/3/59 manifests below bind the corrected executable, not a new runtime approval. Combined review is requested, not accepted. No feature/release or human proof is claimed.
+Frozen executable/brief `e86b794218fa59a1ef962639e9a1f32258cc2edf`, child of initial checkpoint `f9b0c2f1d5b76b179a733d7fc5f0db52dfe39b48`. Package baseline is `a706a57c14315af2dda2c1514731c569a9b11cbf`. Its complete selected delta is exactly the ten affected executable/test paths plus this tasks file. The second checkpoint retains the original fixture deadline anchors and refuses unready seals. Scoped eleven-path Prettier check, selected whitespace and telemetry-disabled `openspec validate add-harness-approval-channel --strict` PASS, exit 0 within 30000 ms. Finalization changes tasks evidence only. All actual-path and 99/3/59 manifests below bind this corrected executable, not a new runtime approval. Combined review is requested, not accepted. No feature/release or human proof is claimed.
 
 Entry `a706a57c14315af2dda2c1514731c569a9b11cbf`. Empty index and README/status overlays verified once and preserved. Minimal file plan: composition readiness, inner and retention helpers, transparent capture and wrapper invocation helpers, composition TUI and wrapper server fixtures, and affected existing native tests. This tasks file records criteria/evidence. No production, design, spec, dependency, image, budget or overlay edits.
 
