@@ -15,7 +15,7 @@ export default Plugin.define({
     // A separate private capture, never the publishable evidence/diagnostic log.
     // It contains synthetic request capabilities, but no operator-key access.
     const file = await open('/run/proceed/qualification-private/wrapper.jsonl', 'wx', 0o600);
-    const producers = captureProducerLifetime(Date.now() + 150000);
+    let producers;
     const writer = privateCaptureWriter();
     let writes = Promise.resolve();
     const record = (event) => {
@@ -37,23 +37,17 @@ export default Plugin.define({
           name: wrapperCommand,
           description: 'Test-only registered Proceed invocation. No decision argument.',
           async execute(invocation) {
+            if (!producers) throw Error('capture producer not ready');
             await producers.run((signal) =>
               invokeRegisteredProceed(context, invocation, signal, record),
             );
           },
         }),
       );
+      producers = captureProducerLifetime(Date.now() + 150000);
     } catch (error) {
-      await producers.close(async () => {
-        await writes;
-        await file.close();
-        producers.writable();
-        await writeFile(
-          '/run/proceed/qualification-private/wrapper-seal.json',
-          JSON.stringify(writer.seal()),
-          { flag: 'wx', mode: 0o600 },
-        );
-      });
+      await file.close();
+      // No ready command producer exists. Do not synthesize a success receipt.
       throw error;
     }
     return async () => {

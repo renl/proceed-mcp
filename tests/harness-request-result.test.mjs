@@ -197,6 +197,58 @@ test('actual registered wrapper cancels settled work and refuses uncooperative w
   assert.throws(() => writer.seal());
 });
 
+test('actual registered wrapper never seals an unreached command producer', async () => {
+  const source = await readFile(
+    new URL('./fixtures/harness-wrapper/server.mjs', import.meta.url),
+    'utf8',
+  );
+  let closes = 0,
+    seals = 0,
+    owners = 0;
+  const fixture = runInNewContext(
+    source.replace(/^import[\s\S]*?from '[^']+';\s*/gm, '').replace('export default ', ''),
+    {
+      Plugin: { define: (v) => v },
+      Buffer,
+      captureProducerLifetime: () => {
+        owners++;
+        throw Error('unreached');
+      },
+      privateCaptureWriter,
+      invokeRegisteredProceed,
+      wrapperCommand,
+      open: async () => ({
+        close: async () => {
+          closes++;
+        },
+      }),
+      writeFile: async () => {
+        seals++;
+      },
+    },
+  );
+  await assert.rejects(
+    fixture.setup({
+      app: { version: '2.2.5' },
+      command: {
+        transform: async (edit) => {
+          let command;
+          edit({
+            add: (v) => {
+              command = v;
+            },
+          });
+          await command.execute({ sessionID: 'memory', prompt: { text: '' } });
+        },
+      },
+    }),
+    /capture producer not ready/,
+  );
+  assert.equal(owners, 0);
+  assert.equal(closes, 1);
+  assert.equal(seals, 0);
+});
+
 test('actual registered wrapper refuses an unsettled private write without closing or sealing over it', async () => {
   const source = await readFile(
     new URL('./fixtures/harness-wrapper/server.mjs', import.meta.url),

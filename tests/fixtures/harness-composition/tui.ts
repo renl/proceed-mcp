@@ -31,8 +31,7 @@ export default Plugin.define({
       navigationOnly = false,
       integratedScenario = false,
     } = JSON.parse(readFileSync(root + 'composition-binding.json', 'utf8'));
-    const producerDeadline = Date.now() + (integratedScenario ? 150000 : 60000);
-    const producers = captureProducerLifetime(producerDeadline);
+    let producers;
     const snapshot = () =>
       context.data.session.list().map((s, n) => ({
         id: s.id,
@@ -126,10 +125,8 @@ export default Plugin.define({
       // decision, or product hook. Requests are written after a completed frame.
       phase = 'public-command-eligibility';
       let last;
-      const deadline = Math.min(
-        producerDeadline,
-        Date.now() + (integratedScenario ? 150000 : 60000),
-      );
+      const deadline = Date.now() + (integratedScenario ? 150000 : 60000);
+      producers = captureProducerLifetime(deadline);
       timer = setInterval(() => {
         if (!live || Date.now() >= deadline) {
           clearInterval(timer);
@@ -299,9 +296,10 @@ export default Plugin.define({
       context.renderer?.off('resize', resized);
       clearInterval(timer);
       for (const c of actions) c.abort();
-      await producers.close().catch(() => {
-        apiWriter.failed();
-      });
+      if (producers)
+        await producers.close().catch(() => {
+          apiWriter.failed();
+        });
       publish();
       await writeFile(
         '/run/proceed/evidence/composition-fixture-failure.json',
