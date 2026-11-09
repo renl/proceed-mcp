@@ -109,14 +109,15 @@ async function producers(mode, target = 'MCP') {
     },
   });
   child.stdin.resume();
-  const fakeProcess = {
+  const fakeProcess = Object.assign(new EventEmitter(), {
     platform: 'linux',
     version: 'v24.22.2',
     env: { PROCEED_TEST_ISOLATED_PID_NAMESPACE: '1' },
     argv: ['node', 'fixture', '/run/proceed/managed-fixtures/memory'],
     stdin: hostInput,
     stdout: hostOutput,
-  };
+    exit: () => {},
+  });
   const open = async (path) => {
     m.put(path, '', { flag: 'wx' });
     let closed = false;
@@ -140,7 +141,17 @@ async function producers(mode, target = 'MCP') {
   };
   let mcp;
   if (!(mode === 'unreached' && target === 'MCP')) {
-    mcp = runInNewContext(
+    let rejectExit;
+    const exited = new Promise((_, reject) => {
+      rejectExit = reject;
+    });
+    fakeProcess.exit = (code) => {
+      if (code)
+        rejectExit(
+          Object.assign(Error('controlled producer exit'), { code: 'PRODUCER_UNSETTLED' }),
+        );
+    };
+    const body = runInNewContext(
       `(async () => { ${strip(await source('./fixtures/harness-composition/mcp.mjs'))} })()`,
       {
         assert,
@@ -151,12 +162,13 @@ async function producers(mode, target = 'MCP') {
         open,
         writeFile: async (...args) => m.put(...args),
         rm: async (path) => m.files.delete(path),
-        setTimeout,
+        setTimeout: (fn, delay) => setTimeout(fn, Math.min(delay, 250)),
         clearTimeout,
         ...C,
         captureProducerLifetime: shortLifetime,
       },
     );
+    mcp = Promise.race([body, exited]);
     mcp.catch(() => {});
     await flush();
   }

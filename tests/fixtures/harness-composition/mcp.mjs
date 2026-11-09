@@ -7,8 +7,8 @@ import {
   bridgeCapturedMcp,
   privateCaptureWriter,
 } from '/payload/tests/support/harness-transparent-capture.mjs';
-import { captureProducerLifetime } from '/payload/tests/support/harness-wrapper-invocation.mjs';
 
+const deadline = Date.now() + 150000;
 assert.equal(process.platform, 'linux');
 assert.equal(process.version, 'v24.22.2');
 assert.equal(process.env.PROCEED_TEST_ISOLATED_PID_NAMESPACE, '1');
@@ -16,19 +16,56 @@ assert.equal(process.argv.length, 3);
 const state = process.argv[2];
 assert.match(state, /^\/run\/proceed\/managed-fixtures\/[a-zA-Z0-9_/-]+$/);
 assert.ok(!state.split('/').includes('..'));
-const file = await open('/run/proceed/qualification-private/mcp.jsonl', 'wx', 0o600);
 const controller = new AbortController();
+const stopInput = new AbortController();
 const writer = privateCaptureWriter(4 * 1048576);
-const capture = captureProducerLifetime(Date.now() + 150000);
+let file, child, bridge, close, timer, closing;
 let writes = Promise.resolve();
-let child,
-  bridge,
-  bytes = 0,
+let bytes = 0,
   stderrBytes = 0,
-  closed = false;
-const lifetime = setTimeout(() => controller.abort(), 150000);
+  settled = false,
+  fenced = false,
+  failed = false;
+let closeDeadline = deadline;
+let wake;
+const stopping = new Promise((resolve) => {
+  wake = resolve;
+});
+const writable = () => {
+  if (fenced || Date.now() >= closeDeadline) throw Error('capture producer unsettled');
+};
+const finish = () => {
+  if (closing) return closing;
+  closeDeadline = Math.min(deadline, Date.now() + 1900);
+  clearTimeout(timer);
+  timer = setTimeout(expire, Math.max(0, closeDeadline - Date.now()));
+  wake();
+  closing = stopping;
+  return closing;
+};
+const terminate = () => {
+  finish();
+  stopInput.abort();
+};
+const expire = () => {
+  failed = true;
+  fenced = true;
+  writer.failed();
+  controller.abort();
+  stopInput.abort();
+  if (child && !settled) child.kill('SIGKILL');
+  process.stdin.removeListener('end', finish);
+  process.removeListener('SIGTERM', terminate);
+  // An ignored abort or stuck IO must not keep this producer alive. No receipt.
+  process.exit(1);
+};
+process.stdin.once('end', finish);
+process.on('SIGTERM', terminate);
+timer = setTimeout(expire, Math.max(0, deadline - Date.now()));
 try {
-  // No owner/control/operator authority in arguments, environment or diagnostics.
+  file = await open('/run/proceed/qualification-private/mcp.jsonl', 'wx', 0o600);
+  writable();
+  assert.ok(!closing, 'producer stopped before adapter setup');
   child = spawn(
     '/usr/local/bin/node',
     [
@@ -41,24 +78,26 @@ try {
       '--state-dir',
       state,
     ],
-    {
-      env: { PATH: '/usr/local/bin:/usr/bin:/bin' },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    },
+    { env: { PATH: '/usr/local/bin:/usr/bin:/bin' }, stdio: ['pipe', 'pipe', 'pipe'] },
   );
-  const close = new Promise((resolve, reject) => {
+  close = new Promise((resolve, reject) => {
     child.once('error', reject);
-    child.once('close', (code) => {
-      closed = true;
-      resolve(code);
+    child.once('close', (code, signal) => {
+      settled = true;
+      finish();
+      resolve({ code, signal });
     });
   });
-  // Attach rejection handling immediately. The private raw stderr is bounded and
-  // never forwarded into MCP stdout or a diagnostic. Nonempty stderr fails closed.
-  close.catch(() => controller.abort());
+  close.catch(() => {
+    failed = true;
+    terminate();
+    controller.abort();
+  });
   child.stderr.on('data', (chunk) => {
     stderrBytes += chunk.length;
+    failed = true;
     writer.failed();
+    terminate();
     controller.abort();
   });
   bridge = bridgeCapturedMcp({
@@ -68,7 +107,9 @@ try {
     adapterOutput: child.stdout,
     connection: 'composition-shared-owner',
     signal: controller.signal,
+    stopInput: stopInput.signal,
     persist: async (event) => {
+      writable();
       const line = JSON.stringify(event) + '\n';
       bytes += Buffer.byteLength(line);
       if (bytes > 4 * 1048576) {
@@ -76,75 +117,62 @@ try {
         throw Error('private capture envelope ceiling');
       }
       const pending = writes.then(async () => {
-        capture.writable();
+        writable();
         await file.writeFile(line);
-        capture.writable();
+        writable();
         writer.written(Buffer.from(line));
       });
-      writes = pending.catch(() => writer.failed());
+      writes = pending;
       await pending;
     },
   });
   bridge.catch(() => {
+    failed = true;
     writer.failed();
+    terminate();
     controller.abort();
   });
   await writeFile(
     '/run/proceed/qualification-private/mcp-armed.json',
-    JSON.stringify({
-      connection: 'composition-shared-owner',
-      capture: 'ATTACHED',
-    }),
+    JSON.stringify({ connection: 'composition-shared-owner', capture: 'ATTACHED' }),
     { flag: 'wx', mode: 0o600 },
   );
-  controller.signal.throwIfAborted();
-  const aborted = new Promise((_, reject) =>
-    controller.signal.addEventListener(
-      'abort',
-      () => reject(new Error('composition adapter lifetime ended')),
-      { once: true },
-    ),
-  );
-  const code = await Promise.race([close, aborted]);
-  assert.equal(code, 0);
+  await stopping;
+  const [outcome] = await Promise.all([close, bridge, writes]);
+  // Bridge settlement precedes the final write snapshot. A signalled adapter is
+  // incomplete even if termination was requested by this producer's owner.
+  await writes;
+  writable();
+  assert.equal(outcome.code, 0);
+  assert.ok(!outcome.signal);
   assert.equal(stderrBytes, 0);
+  assert.equal(failed, false);
+  await file.close();
+  file = undefined;
+  writable();
+  await writeFile(
+    '/run/proceed/qualification-private/mcp-seal.json',
+    JSON.stringify(writer.seal()),
+    { flag: 'wx', mode: 0o600 },
+  );
+  writable();
+} catch {
+  failed = true;
+  writer.failed();
 } finally {
-  clearTimeout(lifetime);
+  // One owner remains bounded even on setup, adapter or bridge failure.
+  finish();
+  stopInput.abort();
   controller.abort();
-  if (child && !closed) {
-    child.kill('SIGTERM');
-    await new Promise((resolve) => {
-      const timer = setTimeout(resolve, 500);
-      child.once('close', () => {
-        clearTimeout(timer);
-        resolve();
-      });
-    });
-    if (!closed) child.kill('SIGKILL');
-    await new Promise((resolve) => {
-      if (closed) return resolve();
-      const timer = setTimeout(resolve, 500);
-      child.once('close', () => {
-        clearTimeout(timer);
-        resolve();
-      });
-    });
-  }
-  try {
-    await capture.close(async () => {
-      await Promise.allSettled([bridge]);
-      await writes;
-      await file.close();
-      capture.writable();
-      if (closed && stderrBytes === 0)
-        await writeFile(
-          '/run/proceed/qualification-private/mcp-seal.json',
-          JSON.stringify(writer.seal()),
-          { flag: 'wx', mode: 0o600 },
-        );
-    });
-  } finally {
-    await rm('/run/proceed/qualification-private/mcp-armed.json', { force: true });
-  }
-  assert.ok(!child || closed, 'adapter cleanup unconfirmed');
+  if (child && !settled) child.kill('SIGTERM');
+  if (close) await close.catch(() => {});
+  if (bridge) await bridge.catch(() => {});
+  await writes.catch(() => {});
+  if (file) await file.close().catch(() => {});
+  await rm('/run/proceed/qualification-private/mcp-armed.json', { force: true });
+  fenced = true;
+  clearTimeout(timer);
+  process.stdin.removeListener('end', finish);
+  process.removeListener('SIGTERM', terminate);
+  process.exit(failed ? 1 : 0);
 }

@@ -1,5 +1,61 @@
 # Tasks
 
+## Static MCP EOF/SIGTERM lifecycle correction - brief before edits
+
+Entry `a61dfebda17b9233923c68a2d3b551d8c81cce69`. Index empty, only README/status overlays dirty. Preserve both and unknown work. Scope is test-owned MCP producer, transparent bridge stop control and actual-body memory-IO tests. No production, spec, design, archive, dependencies, image or budget changes. Historical MCP/READ operation and glyph8059 remain UNKNOWN. No raw recovery or runtime is authorized.
+
+Pinned source supplied by the coordination brief, not runtime attestation:
+
+- [standalone.ts](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/cli/src/services/standalone.ts): compiled `serve --stdio`, TUI cwd/extended environment, SIGTERM with 3 s force kill. This is not the MCP grace.
+- [server-process.ts](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/cli/src/services/server-process.ts): `OPENCODE_CONFIG_DIR`, `opencode.json`, global context and stdin lease.
+- [mcp/index.ts](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/core/src/mcp/index.ts): non-disabled local MCP eager start at Location boot, not tool listing or Session scope.
+- [mcp/stdio.ts](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/core/src/mcp/stdio.ts): outgoing close sends stdin EOF, 2 s close grace, then SIGTERM and another 2 s before SIGKILL. Detached Linux process groups are owned by cross-spawn-spawner. No MCP SIGINT route is assumed. SDK 2.3.1 `Client.close` delegation remains unverified, so explicit SIGTERM must independently enter cleanup.
+
+Criteria: one idempotent owner fences new ingress on EOF/SIGTERM, drains already accepted capture writes and adapter output, closes the byte writer before sealing, and awaits actual adapter/bridge/write settlement. Cleanup deadline is min(original startup + 150000 ms, first close event + 1900 ms), never renewed by duplicates. Incomplete/error/signalled adapter outcomes, stderr, ignored abort, stalled/late writes, lifetime expiry and unhandleable SIGKILL refuse complete receipt. Only actual adapter exit code 0 with no signal and successful bridge/write/file settlement preserves the existing receipt floor. SIGTERM to the producer is not by itself evidence of an incomplete adapter. No new receipt definition or consumer relaxation.
+
+Proof is static proxy: actual maintained producer body with controlled events, memory IO and deterministic clocks. Not compiled-host, OS-signal or real-window proof. Test EOF, SIGTERM waiting/queued writes, duplicate events, adapter error/ignored close, late writes, SIGKILL simulation, original expiry, removed handlers and bounded exit owner. Keep six surfaces, complete authority/correlation/full scans, five transfers and close-before-seal unchanged. Run scoped format/syntax/whitespace/strict checks and selected pure native controls only, never preflight or runtime. One combined ownership/privacy/decomposition review must inspect complete selected code, bridge stop semantics, receipt floor and frozen manifests. Pre-merge review PENDING. Pre-exposure real-resource proof UNRUN, owner verification, trigger separate authorization. Post-deploy not applicable to this static correction. Historical cause diagnosis deferred, owner coordination, trigger admitted evidence only.
+
+### Static lifecycle candidate evidence and combined review plan
+
+The user-visible question remains whether a real pending approval can be answered through the host and return to its original call. This correction only enables truthful capture completion during host teardown. Its native evidence is proxy, not useful-flow proof. The last landed useful outcome remains startup/skill. Next useful merge remains this single harness change, blocked on useful integrated proof and final acceptance. Existing worktree/branch/change `add-harness-approval-channel` is retained, owner test engineering, cleanup pending verified landing. No new worktree or lifecycle disposition.
+
+The actual maintained producer now owns EOF and SIGTERM through one first-close deadline and a terminal exit owner. SIGTERM detaches new ingress while allowing already accepted transform/write work and adapter output to drain. EOF closes adapter stdin through the same bridge. Original startup expiry and first-close grace are not renewed. Only natural adapter code 0, no signal/stderr, successful bridge and writes, and closed file permit a receipt. Abort/error/force kill never become successful settlement. Expiry fences callbacks, requests owned child SIGKILL and exits without a receipt. This proves no real kill settlement or group cleanup. A host signal delivered to the adapter too may cause refusal, which preserves the existing receipt floor rather than reinterpreting it. No SIGINT handler, extra server, diagnostic field or receipt-consumer relaxation was introduced.
+
+`tests/harness-mcp-lifecycle.test.mjs` evaluates the actual producer body with controlled process events, deterministic clocks, real in-memory streams and memory file IO. EOF, SIGTERM, waiting/queued writes, duplicate close events, adapter error/signal/stderr, ignored closure, late IO and original startup expiry exercise that body. SIGKILL simulation only establishes absence of a handler/receipt before controlled disposal, not actual OS kill semantics. The maintained early-failure composition adapter now supplies process event/exit controls and caps its own fake timers. Its existing producer-to-six-surface-scan/five-transfer chain still executes, with no replacement receipt.
+
+Final native selection: `node --test tests/harness-mcp-lifecycle.test.mjs tests/harness-early-failure-chain.test.mjs tests/harness-request-result.test.mjs tests/harness-transport-controls.test.mjs tests/harness-failure-retention.test.mjs`. PASS 70/70, no skips/cancellations, exit 0, 10511.9382 ms, command bound 30000 ms. Earlier 22-control run failed four assertions: the first graceful-stop bridge still required the detached source to end, the old adapter expected the former refusal code, and fake process exit allowed an additional controlled kill callback. The bridge now owns ingress separately and the controlled process adapter reports its exit refusal. Those failures are not hidden or runtime evidence. The second 22-control run passed before the final formatted 70-control selection.
+
+Scoped Prettier must use `--ignore-path .gitignore` inside this worktree. Initial invocations without that option silently skipped these ignored worktree paths and are NOT format proof. Final scoped formatting ran with the correct option. Syntax, scoped format check, whitespace and telemetry-disabled strict structural validation are recorded at finalization. No actual host, container, network, listener, broker, service, credentials, historical raw capture or external filesystem/config recovery ran.
+
+Decomposition checklist: 1 YES (producer receipt consumed by collection), 2 NO (no changed clean baseline), 3 NO (no new receiver), 4 YES (EOF/signal -> drain -> adapter outcome -> file close -> receipt -> scan -> transfers), 5 YES (controlled fixture versus actual host proof). One combined Architect ownership/privacy/test-only/boundary/decomposition review is required via coordination, not self-accepted. Boundary Verification: this changes a test-only stop control at an existing real host/adapter boundary. Wire names/auth/payload and normative product contracts are unchanged. Review complete code for all four affected test paths against entry, then all frozen 28 context paths. Verify startup/close deadline ownership, signal detachment versus abort, queued writes, actual adapter outcome floor, setup failure, removed handlers and bounded terminal exit. Reuse unchanged full-authority/correlation and scan-before-five-transfer evidence only by its identical inputs. Real compiled-host close delegation/window/process cleanup remains UNRUN, not waived and not a reason to skip the explicit SIGTERM route.
+
+### Static lifecycle freeze
+
+This new static candidate does not repair/refreeze a consumed runtime authorization. Hash algorithm is SHA-256 over UTF-8 `JSON.stringify` of ordered `{path,sha256}` records, each hashing complete actual bytes. Payload is maintained `qualificationPayload(git ls-files -- src bin)`. Outer and product orders remain as below. Affected and cumulative test paths use sorted git name-only diffs against entry / `607a181`, including the new test explicitly. Review order is the previous 27-path union plus the new lifecycle test. All 22 cumulative test paths are covered by the 28-path review union. Tasks is pinned by commit, never self-hashed. No production input changed.
+
+| Set              | Members |   Bytes | SHA-256                                                            |
+| ---------------- | ------: | ------: | ------------------------------------------------------------------ |
+| Payload          |      99 | 1312641 | `6ec9d3726e2335364d769916a9372eb3458f585f78c16d3e59dd360457c16f18` |
+| Outer            |       3 |  139193 | `9ad48be516fbc7c21be3f378d9b396c9b0777330973f8b805cb8ca2fa98d8f8a` |
+| Product          |      59 |  817537 | `044d948090a5d391b93d7bfe13e30374f8738e78da39385d1eb44edce85ccb81` |
+| Affected tests   |       4 |   51073 | `da1f3ae726ba6cab1ad39d6de1843c9f717459913dfe4da90fd1c57585544446` |
+| Cumulative tests |      22 |  578299 | `49219ad5d5a26be86db09220fe6fce475a41c2b0df99c0de6726fc799befeee3` |
+| Review union     |      28 |  755243 | `200dfefb0f724131a9f434ccf903b0129eaff758e7f6affbb33043795a033586` |
+
+Complete selected review code is pinned by the existing ordered 25-path table under "Complete ordered review records" below, followed by `tests/harness-early-failure-chain.test.mjs`, `tests/harness-failure-retention.test.mjs`, then `tests/harness-mcp-lifecycle.test.mjs`. All table hashes remain unchanged except these current replacements/additions, including changes already present at entry:
+
+| Path                                              | Current SHA-256                                                    |
+| ------------------------------------------------- | ------------------------------------------------------------------ |
+| `tests/fixtures/harness-composition/tui.ts`       | `30d572d987ae577cb2fecc7a92e8c1568e7f8c6cbe482adf267b184814b41dc3` |
+| `tests/harness-request-result.test.mjs`           | `7d70cf9b2b98bf72370cde662f727eda506079eb5a3d70e7b05e611bed9b775d` |
+| `tests/support/harness-composition-inner.mjs`     | `a7bf73b7cd6f12fbd19061e3913fa96033ede9247739f4faee6edaf3b845d3c6` |
+| `tests/support/harness-composition-retention.mjs` | `9c84671a9b95d8fbeb81d76bfd35a7dbe163483b0efaf2a541f3a6626d6210ce` |
+| `tests/fixtures/harness-composition/mcp.mjs`      | `78c18b064110ff5e4cbb2a8fb54a063cbfeb75b8d747f414e7fbe9588b81b987` |
+| `tests/support/harness-transparent-capture.mjs`   | `5a7d48b558baa518ff4d23587a520d804d997761da531b7e2f80e9e2e04604e3` |
+| `tests/harness-early-failure-chain.test.mjs`      | `cb3418ba4c921f00f1dc92a3728fa728b874e87127f4a4a49f6ef447c09fc96b` |
+| `tests/harness-failure-retention.test.mjs`        | `4ae0b53b2bca4b424a7ff76625e9ca23abb5417957c3f20789fe7ca336968aad` |
+| `tests/harness-mcp-lifecycle.test.mjs`            | `146805e5f375f53b86a826d8499d7310e1d21d4da7f745055e237bc33fb6fe9e` |
+
 ## Whole-chain-corrected integrated runtime outcome - FAIL, closed receipt diagnosis
 
 Exactly one user-authorized `node tests/run-harness-host.mjs --composition-run` invocation ran on tasks freeze `30ac39d08d0df816bb9aba84958aec35bc8ac284`, direct child of reviewed executable `3430a28ab5ee5f66fdc1895dfe90012e3abfe2a1`. Exit 1. Maintained elapsed including teardown was 78905 ms, final outer progress 78906 ms and closed inner diagnostic 75588 ms. The 310000 ms outer bound, 250 s container, 210000 ms inner, original readiness deadline and 45 s teardown/scan reserve were unchanged. No preceding preflight, calibration, navigation run, retry or follow-on occurred. Authority is consumed.

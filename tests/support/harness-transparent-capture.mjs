@@ -86,8 +86,17 @@ export async function bridgeCapturedMcp({
   persist,
   connection,
   signal,
+  stopInput,
 }) {
   const taps = transparentMcpCapture(connection, persist);
+  // Producer-owned graceful stop: retain accepted transform/write work and drain
+  // adapter output. Abort remains a failure, never successful settlement proof.
+  const stop = () => {
+    hostInput.unpipe(taps.ingress);
+    hostInput.pause();
+    taps.ingress.end();
+  };
+  stopInput?.addEventListener('abort', stop, { once: true });
   const controller = new AbortController();
   const combined = AbortSignal.any([signal, controller.signal]);
   const run = async (source, tap, destination) => {
@@ -98,11 +107,28 @@ export async function bridgeCapturedMcp({
       throw error;
     }
   };
+  const ingress = async () => {
+    const failed = (error) => taps.ingress.destroy(error);
+    const abort = () => hostInput.destroy();
+    hostInput.on('error', failed);
+    combined.addEventListener('abort', abort, { once: true });
+    hostInput.pipe(taps.ingress);
+    try {
+      await pipeline(taps.ingress, adapterInput, { signal: combined });
+    } catch (error) {
+      controller.abort(error);
+      throw error;
+    } finally {
+      hostInput.unpipe(taps.ingress);
+      hostInput.removeListener('error', failed);
+      combined.removeEventListener('abort', abort);
+    }
+  };
   // Attach BOTH directions before returning control to the invocation driver.
-  const outcomes = await Promise.allSettled([
-    run(hostInput, taps.ingress, adapterInput),
-    run(adapterOutput, taps.egress, hostOutput),
-  ]);
+  const pending = Promise.allSettled([ingress(), run(adapterOutput, taps.egress, hostOutput)]);
+  if (stopInput?.aborted) stop();
+  const outcomes = await pending;
+  stopInput?.removeEventListener('abort', stop);
   const failure = outcomes.find((r) => r.status === 'rejected');
   if (failure) throw failure.reason;
 }
