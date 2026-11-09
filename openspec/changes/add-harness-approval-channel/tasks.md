@@ -1,5 +1,70 @@
 # Tasks
 
+## Authorized dismissal-corrected single capture - consumed, capture PASS
+
+Exactly one `node tests/run-harness-host.mjs --product-picker-capture-run` executed under the original 310000 ms outer bound including teardown. Maintained command exit 0, container exit 0, verdict PASS at 7790 ms, completion journal 7791 ms, inner diagnostic 4827 ms. No retry or follow-on qualification occurred. Evidence root: `.scratch/harness-host/run-linux-PnfSqH/`. This is a capture-only PASS, not approval-workflow, feature or release verification. Profile null, output UNQUALIFIED. Earlier failed outcomes remain failed.
+
+Entry candidate `b0486e4101aee3a2dd2f980b88aacd77c2a813b5`, reviewed executable `fef234f88604f887159ee3c62ecbcaddc695dd45`, tasks freeze `99a6314cb36b4f13a901aa3c1a50f55dbe9d991b`. Entry inspection confirmed branch `add-harness-approval-channel`, empty index, both ancestors and tasks-only committed delta from the executable. Only README/status overlays were dirty, untouched and unselected. Restart reconciliation before launch confirmed the same HEAD/index/overlays, no matching active runner or harness container and no new run directory. The newest prior run was the historical `run-linux-U2kSEx`, predating admission correction. This task's recorded tool calls had performed only reads and static admission, establishing zero invocation before the original attempt. Unknown containers/artifacts were not touched.
+
+The exact existing `node .scratch/harness-host/admission-correction/verify.mjs` passed within 30000 ms: 17/17 canonical unique path bindings, exact membership and content, plus every ordered manifest member against reviewed bytes. No invented 20-path expectation, repair or refreeze. Frozen manifests:
+
+| Input   | Members | SHA-256                                                            |
+| ------- | ------: | ------------------------------------------------------------------ |
+| Payload |      95 | `26b753c433911b0592d7b83f18da5331abf6da3ea962a730313935a7b9a4a25f` |
+| Outer   |       3 | `52a34079f1a0ebc2636dc1df4af5f39f6462aeddee5db5eb84c2c95d305e06c0` |
+| Product |      59 | `ecf3bf969a09ecd10fd387625a444e6733d004c0ab9c8828a4ec03a841d33bfc` |
+
+Maintained metadata admission checked installed plugin/client 2.2.5 and the existing Linux amd64 image `sha256:a8302764b5f4896690dcba9cdbe27755f6c0f4f88db92974a029f8499f3700cb`. No pull/build or guessed preflight alias. Actual isolation admission preceded release: network none, private PID namespace, init true, exactly one read-only payload mount. Retained 95-member staged and three-member outer manifests independently match the frozen digests. Runtime binding: host 2.2.5, Bun 1.4.4, Node 26.3.0. Executable SHA-256 `8d060e1d2fbb9bb44cf09ae6ed1f3f6a7cff070b5227e2f90970132b23a92050`, package `98e699328a024a1b983194aaf984ffe3350d11ae22135d3c0d5f342de3bb5b82`, config `9a48f1a558fd61c6a4968c3de076119153c1c5ddbfb2c4eb61089b9532a385ef`, wrapper `97c69810b01294ca3c43ba36e4599f29518125ae47eedab609510dc461052247`. Source pins are image provenance, not runtime source accessors.
+
+### Complete privacy and transfer admission
+
+Maintained scan PASS covers all six PRODUCT surfaces: tui, telegram, journal, diagnostics, evidence and api. All distinct generated synthetic authorities participate through the unchanged reviewed producer. Its eleven role/base entries normalize to five distinct authorities. This count is source/control evidence, not a separate exported runtime counter. API is empty, hash `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+All five separately bounded TAR transfers passed before detailed retention. Before interpretation, fresh local `verifyRetainedProductCapture` admission passed the complete set with bounded regular-file/no-link descriptor reads. Total 146882 bytes, below 262144. No raw fallback, extraction, TAR extension, truncation, exclusion, extra transfer or budget/logging/policy change occurred. The outer mutable journal is lifecycle metadata only, never exported inner evidence.
+
+| Export                          | Retained basename               | Bytes | SHA-256                                                            |
+| ------------------------------- | ------------------------------- | ----: | ------------------------------------------------------------------ |
+| `scan-pass.json`                | `scan-pass.json`                |  1027 | `42c9633cd0145fe644b8d4f8d1e23b97fac29803ccee4818646950b26c73e9e8` |
+| `composition-observations.json` | `composition-observations.json` | 70305 | `d9fc79ebc02a3f2bacb06bc683f1ae44d9ddfe415c6c2e8bf49aecf3852e091d` |
+| `transcript.ansi`               | `transcript.ansi`               | 45049 | `64244ffc80a0f3e26c89d995ca471a00ebd5827459eca0edb8371c585705759b` |
+| `plugin-diagnostics.log`        | `plugin-diagnostics.log`        | 29958 | `3cf5d7350ef0666e1f96c1ac07dba8a418e3c1a04531cd736b34f16264d4c1ef` |
+| `progress.jsonl`                | `inner-progress.jsonl`          |   543 | `16c5295768356288ad0478c1e0110a675e881efb8aadbe3b3e8eb5707b97c36e` |
+
+### Bound rendered observations
+
+Command eligibility is `FRESH_SAME_GENERATION`. Successful final-guard admission is enforced by the maintained path, not a separately exported final-guard journal. Freshness is the command-time observation, not a claim that a current host screen survives exit. Closed diagnostic `currentScreen` is UNPROVEN after exit.
+
+The public snapshot actually has two equal-title sessions, both titled `Composition empty exchange`. Initial and moved snapshots/bindings are independently equal. Source-layout observations are supported, reason NONE, screen generation 1, geometry 120x40, resize sequence 0. Zero-based positions remain (16,34) and (17,34), with ordinal-plus-truncated-preview labels. Previews are not identity. Frame updates 12 -> 13 transfer selected styling from Session 1 to Session 2 after one maintained Down. Selected foreground `index:232`, background `index:216`, bold true. Inactive foreground `index:255`, background `index:233`, bold false. This is emitted-style transfer, not RGB, contrast, theme semantics or qualified navigation. Interval `emittedTransfer: true`, reason `MISSING_SEMANTIC_BINDING`, profile null.
+
+| Bound prefix                | Bytes | SHA-256                                                            |
+| --------------------------- | ----: | ------------------------------------------------------------------ |
+| Initial                     | 34530 | `f4358955f7648193075f5584247f17429562ec348fbe15ab93b721a6818ce083` |
+| Moved / pre-Escape baseline | 34890 | `a1e3b27154502bb89e8380de8eed2827b5cb01bded92247fdc37357c7dbe4c8d` |
+| Completed dismissal         | 44926 | `1b32c7c94aa102a3550727d3167d131a14e70b18c61ea4feabd8ae1f2b240ae1` |
+
+Every prefix hash was independently compared with the admitted complete transcript. Moved links the initial hash. Completed dismissal is supported, reason NONE, screen 1, frame update 14, host-frame hash `88b65e92cf8670b6408a3bf0c76a5afe339e43cb9eebe548d5adb2d5782f549e`. The maintained dismissal path requires the fresh completed bound host view before the sole exit key, with strict finite original-deadline final admission. No extra Escape or exit key occurred. Recorded counters: Ctrl+G 1, Enter 0, Ctrl+C 1. Down/Escape have no separately exported physical-receipt counters. Maintained control flow performed one of each. Physical key receipt is not independently counted.
+
+Disposable synthetic broker/temporary keys/pairing/enrollment/listeners and those two public sessions were confined to this run. No identity acceptance, approval request, pending/decision exchange, model/provider, real Telegram, external network or existing user credentials. No profile installation.
+
+### Separate cleanup and remaining gates
+
+| Check                                     | Actual outcome                                                                                                                                                                                                  |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Timely exact ProductCleanup               | PASS for this run, productCleanup OBSERVED and timely marker true. Historical deadline failures unchanged.                                                                                                      |
+| Wrapper ENTRY / RETURN                    | Both 816 ms in WRAPPER_MONOTONIC_MS, floored retention brackets around awaited cleanup. Equal integers do not imply zero duration.                                                                              |
+| Driver exit / marker                      | EXIT_KEY 4294 ms, MARKER_OBSERVED 4335 ms, fixed deadline 19275 ms in DRIVER_MONOTONIC_MS. No cross-origin subtraction. Exact/late remains FAIL by unchanged controls.                                          |
+| Owned host / stream closure               | PASS, exitObserved true, closeObserved true, termination NOT_REQUESTED. No SIGTERM/SIGKILL event retained.                                                                                                      |
+| Owned container containment               | PASS, exact container absent and private PID namespace destroyed. Container identity retained in outer progress: `proceed-harness-host-72b60e1f-36ed-4309-845e-79834eb87607`. Not host-wide helper enumeration. |
+| Separate graceful broker/helper cleanup   | UNKNOWN, no direct per-component completion proof.                                                                                                                                                              |
+| Display qualification                     | UNQUALIFIED, null profile. Resolved theme/design mode/effective depth remain null/UNKNOWN.                                                                                                                      |
+| Approval decision / original waiting call | UNRUN. Picker-only capture does not prove the founder-visible outcome.                                                                                                                                          |
+
+Founder-visible success remains a genuine paired human decision returned to its exact original waiting call. This rendered picker capture is a proxy for that outcome. Pre-exposure capture controls pass only for this bounded run. Historical failures and unknown product cause are not rewritten. Post-deploy/deferred useful decision proof remains UNRUN, owned by maintainers/coordination for separately authorized work. No deployment or release proof follows.
+
+Estimated 100% of this bounded single-capture reporting package is complete, not feature acceptance. Authorization consumed. Stop at report with no follow-on runtime. Worktree `.worktree/add-harness-approval-channel`, branch/change `add-harness-approval-channel`, test engineering owner, retained/cleanup pending verified landing. Ignored admitted evidence preserved, no worktree or unrelated cleanup. Next disposition belongs to coordination. Finalization changes tasks only and leaves executable inputs and README/status overlays untouched/unselected. Tasks-only format/whitespace/strict structural checks are recorded after execution below.
+
+Tasks-only finalization checks: scoped repository Prettier write/check, selected whitespace and telemetry-disabled strict OpenSpec structural validation PASS, exit 0 within 30000 ms. These document checks are not another capture or qualification run.
+
 ## Static admission-script correction - frozen file inputs PASS, zero runtime
 
 Coordination authorized only correction of the prior local count expectation and verification against the existing freeze. Entry HEAD was `515e07b108752c40f49f4efb343c70332e170836`, branch `add-harness-approval-channel`. One entry inspection confirmed an empty index, only README/status overlays dirty, reviewed executable `fef234f88604f887159ee3c62ecbcaddc695dd45` and tasks freeze `99a6314cb36b4f13a901aa3c1a50f55dbe9d991b` as ancestors, and a tasks-only committed delta from the executable. Both overlays remain untouched and unselected.
