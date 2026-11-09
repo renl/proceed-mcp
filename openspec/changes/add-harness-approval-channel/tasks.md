@@ -2,6 +2,8 @@
 
 ## Native on-disk receipt diagnosis and closed read refusal - static candidate
 
+Frozen executable `a990ac9697d8c1e8dfbd52f7ca87f1289be4cb6a`, direct child of entry, contains exactly the five selected test/support paths plus this tasks record. Finalization after that revision is tasks-only. Selected five syntax checks, scoped Prettier check over all six paths with `--ignore-path .gitignore`, selected/staged whitespace and telemetry-disabled `openspec validate add-harness-approval-channel --strict` PASS, exit 0 within 30000 ms. Native 80/80 and focused 8/8 apply to identical frozen executable bytes. Full calibration remains RED 61/64, not waived. Independent static review is pending. No historical root cause, new runtime authority, useful-flow or release qualification is claimed. README/status overlays remain unselected and untouched.
+
 Entry `2ac00e3de9c623e65e072b58c140fe7349524d7a`, executable baseline `512fac29091112391917e1a858efc94884e23eec`, preceding tasks freeze `20cfcada63e844b08cc751b093ba0c7ce36240df`. Entry HEAD matched, index empty, only README/status overlays dirty. Both overlays remain untouched and unselected. Scope is five selected test/support paths below plus this tasks file. No source, normative spec/design, archive, dependency, image, budget or timeout changes. No runtime, network, broker, listener, container, provider, credentials, historical capture or external filesystem/config recovery. This is a new static review freeze, not renewed runtime authority.
 
 ### Exact source-owned read context
