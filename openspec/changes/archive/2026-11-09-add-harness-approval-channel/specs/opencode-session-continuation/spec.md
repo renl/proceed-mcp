@@ -20,7 +20,7 @@ Harness decisions MUST require an operator-configured trusted harness interactio
 
 ### Requirement: Harness interaction preserves merged delivery safeguards
 
-The merged [delivery baseline](../../../../specs/opencode-session-continuation/spec.md) requirements for protected storage, authenticated confidential admission on every connection, private capability and principal boundaries, truthful readiness and shared-broker lifecycle MUST remain effective.
+The existing delivery requirements in `openspec/specs/opencode-session-continuation/spec.md` for protected storage, authenticated confidential admission on every connection, private capability and principal boundaries, truthful readiness and shared-broker lifecycle MUST remain effective. This is a repository-relative path.
 
 #### Scenario: Preserve safeguards with the harness channel enabled
 

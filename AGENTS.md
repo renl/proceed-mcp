@@ -6,7 +6,8 @@ Stable project instructions and navigation. Current work and history live in the
 
 - Mode: CLI-managed OpenSpec v1.15.0 (`core`, `spec-driven`). Target branch: `main`.
 - Portable Telegram approval MCP. OpenCode V2 is the first validation harness, not a core dependency. Current capability contracts and historical proposal are linked below.
-- Canonical workflows: `workflow-routing`, `openspec-workflow`, `git-workflow`, `worktree-slicing`, `command-hygiene`. No approved local workflow deviations.
+- Canonical workflows: `workflow-routing`, `openspec-workflow`, `git-workflow`, `worktree-slicing`, `command-hygiene`. The scoped testing deviation below applies.
+- User-approved testing deviation (2026-11-09): only unit tests are permitted until deployment to the user's OpenCode installation and public distribution. Reason: stop the repeated integration-harness loop and prioritize development completion. Do not execute integration, renderer, e2e, calibration or preflight tests during this scope. Independent review remains required. Unrun checks remain unverified, with candidate-specific landing/exposure risk decisions recorded in the status log rather than counted as passed. This does not authorize security changes, branch-protection bypass, merge or publication mechanics.
 - Use temporary worktrees for feature development. Deliver verified features promptly through PRs into `main`, then return to the root checkout and complete safe worktree cleanup. Deployment and publishing use clean, merged `main`, never an unfinished feature worktree.
 - Application sources, tests and OpenSpec use repository-relative paths. Consult the status log for live branch, revision and lifecycle state before operating.
 - Primary CI uses Ubuntu 24.04 with Node 24.22.2. Verification records distinguish CI coverage, Windows evidence and package admission requirements without implying all-platform compatibility.
