@@ -64,6 +64,176 @@ import {
   linuxScriptArguments,
 } from './harness-linux-plan.mjs';
 
+// STATIC ONLY. Prepared file-observation/PTY bridge, never installed below.
+// The wrapper owns public session reads. IO supplies current PTY bytes, not
+// expected identities. One lifetime, original deadline and no recovery/rebuild.
+export async function compositionPublicNavigationBridge({
+  executionBinding,
+  runtime,
+  run,
+  setup,
+  readExecutionBinding,
+  readObservation,
+  writeObservation,
+  readRaw,
+  now,
+  deadline,
+  pause,
+  moveDown,
+  pickerEnter,
+}) {
+  const fixed = structuredClone(executionBinding);
+  let invalid = false,
+    busy = false,
+    selection,
+    response,
+    raw,
+    sequence = 0;
+  let intended,
+    geometry,
+    lastClock = -Infinity;
+  const invalidate = () => {
+    invalid = true;
+    selection?.invalidate();
+  };
+  const active = () => assert.equal(invalid, false);
+  const clock = () => {
+    active();
+    const tick = readProductPickerClock(now);
+    assert.ok(tick >= lastClock);
+    lastClock = tick;
+    assertProductPickerDeadline(() => tick, deadline);
+    active();
+  };
+  const lifetime = () => {
+    active();
+    const live = readObservation('composition-live.json');
+    assert.equal(live.live, true);
+    assert.equal(live.run, run);
+    assert.equal(live.generation, setup);
+    assert.ok(typeof setup === 'string' && setup.length > 0);
+    if (geometry) assert.deepEqual(live.geometry, geometry);
+    active();
+    return live;
+  };
+  const current = () => {
+    clock();
+    const live = lifetime();
+    assert.deepEqual(readObservation('composition-selector-response.json'), response);
+    assert.deepEqual(readRaw(), raw);
+    assert.deepEqual(readExecutionBinding(), fixed);
+    assert.deepEqual(lifetime(), live);
+    assert.deepEqual(readRaw(), raw);
+    active();
+    return { ...live, snapshot: structuredClone(response.snapshot) };
+  };
+  const refresh = async () => {
+    clock();
+    const live = lifetime();
+    geometry ??= structuredClone(live.geometry);
+    raw = Buffer.from(readRaw());
+    assert.ok(raw.length > 0 && raw.length <= 1048576);
+    const request = {
+      kind: 'navigation-observation',
+      run,
+      generation: setup,
+      request: ++sequence,
+      id: intended?.id ?? null,
+      bytes: raw.length,
+      sha256: digest(raw),
+    };
+    const previousResponse = readObservation('composition-selector-response.json');
+    writeObservation('composition-selector-request.json', request);
+    // One request only. Missing response may wait inside the original deadline.
+    // A mismatched response is not retried or accepted as last-good evidence.
+    for (;;) {
+      clock();
+      lifetime();
+      const next = readObservation('composition-selector-response.json');
+      if (next !== null && JSON.stringify(next) !== JSON.stringify(previousResponse)) {
+        for (const key of Object.keys(request)) assert.deepEqual(next[key], request[key]);
+        assert.equal(next.live, true);
+        assert.deepEqual(next.geometry, geometry);
+        response = structuredClone(next);
+        break;
+      }
+      await pause();
+    }
+    current();
+    intended ??= Object.freeze(structuredClone(response.snapshot[1]));
+    assert.deepEqual(response.snapshot[1], intended);
+    assert.deepEqual(response.exact, structuredClone({ id: intended.id, title: intended.title }));
+    clock();
+  };
+  const stage = async (name) => {
+    try {
+      active();
+      assert.equal(busy, false);
+      busy = true;
+      await refresh();
+      active();
+      const result = selection[name]();
+      active();
+      return result;
+    } catch {
+      invalidate();
+      assert.fail('navigation admission refused');
+    } finally {
+      busy = false;
+    }
+  };
+  try {
+    await refresh();
+    selection = compositionNavigationSelection({
+      intendedSession: intended,
+      executionBinding: fixed,
+      runtime,
+      run,
+      setup,
+      readExecutionBinding,
+      readLive: current,
+      readRaw: () => {
+        current();
+        return Buffer.from(raw);
+      },
+      readSession: (id) => {
+        current();
+        assert.equal(id, intended.id);
+        return structuredClone(response.exact);
+      },
+      now: () => {
+        current();
+        clock();
+        return lastClock;
+      },
+      deadline,
+      moveDown,
+      pickerEnter,
+      // No second Enter capability exists in this navigation-only bridge.
+      openQuestion: () => {
+        invalidate();
+        assert.fail('navigation admission refused');
+      },
+    });
+    active();
+    return Object.freeze({
+      initial: () => stage('initial'),
+      moveDown: () => stage('moveDown'),
+      moved: () => stage('moved'),
+      pickerEnter: () => stage('pickerEnter'),
+      identity: () => stage('identity'),
+      openQuestion: () => {
+        invalidate();
+        assert.fail('navigation admission refused');
+      },
+      invalidate,
+    });
+  } catch {
+    invalidate();
+    assert.fail('navigation admission refused');
+  }
+}
+
 // STATIC ONLY. Public readers and stage-specific recorder inputs are injected.
 // This function is deliberately not installed in the real runtime branch.
 export function compositionNavigationSelection({
@@ -472,6 +642,20 @@ try {
           } catch {
             return null;
           }
+        };
+        // Prepared, but NOT dispatched. These exact private IO closures bind
+        // the bridge to the maintained current stream and public wrapper files.
+        // No historical capture, profile, expected identity or input is accepted.
+        const navigationBridgeIO = {
+          readObservation,
+          writeObservation: (name, request) => {
+            assert.equal(name, 'composition-selector-request.json');
+            writeFileSync(join(evidence, name), JSON.stringify(request));
+          },
+          readRaw: () => {
+            assert.ok(!exited && !closed && !overflow);
+            return Buffer.from(transcript);
+          },
         };
         let request,
           requestWrittenAt,

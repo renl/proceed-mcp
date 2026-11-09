@@ -4,6 +4,7 @@ import test from 'node:test';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
+import { identityPreview } from '../src/harness/session-identity.js';
 import {
   assertIdentityMessage,
   highlightedOrdinal,
@@ -21,6 +22,8 @@ import {
 import {
   compositionCurrentFrame,
   compositionSourceFrame,
+  createCompositionSessionReader,
+  observeCompositionSelectors,
 } from './support/harness-composition-readiness.mjs';
 
 // Synthetic RGB operands, NOT evidence of the pinned host's actual theme.
@@ -623,6 +626,388 @@ async function compositionSelectionAdapter() {
     { timeout: 100 },
   );
 }
+
+async function publicBridgeCase() {
+  const c = navigationCase();
+  const files = new Map();
+  const records = [{ id: 'synthetic-id-1', title: 'Composition empty exchange' }];
+  const hooks = {};
+  let tick,
+    reads = 0,
+    requests = 0;
+  const file = (path) => path.split('/').at(-1);
+  const save = (path, value) => files.set(file(path), JSON.parse(value));
+  files.set('composition-binding.json', { run: c.io.binding.run, captureOnly: false });
+  const context = {
+    renderer: { ...c.io.binding.geometry, on() {}, off() {} },
+    app: { version: 'static-wrapper-control' },
+    data: {
+      session: {
+        list: () => {
+          reads++;
+          hooks.list?.();
+          return records;
+        },
+        get: (id) => {
+          reads++;
+          hooks.get?.();
+          return records.find((r) => r.id === id);
+        },
+        sync: async () => {},
+      },
+    },
+    client: {
+      session: {
+        create: async ({ title }) => {
+          const record = { id: 'synthetic-id-2', title };
+          records.push(record);
+          return record;
+        },
+      },
+    },
+  };
+  context.renderer.width = c.io.binding.geometry.width;
+  context.renderer.height = c.io.binding.geometry.height;
+  const wrapperSource = await readFile(
+    new URL('fixtures/harness-composition/tui.ts', import.meta.url),
+    'utf8',
+  );
+  const wrapper = runInNewContext(
+    wrapperSource.slice(wrapperSource.indexOf('export default')).replace('export default', ''),
+    {
+      Plugin: { define: (p) => p },
+      product: { id: 'static-product', setup: async () => async () => {} },
+      performance,
+      process: { versions: { bun: 'static', node: 'static' } },
+      randomUUID: () => c.io.binding.setup,
+      structuredClone,
+      readFileSync: (path) => JSON.stringify(files.get(file(path))),
+      writeFileSync: save,
+      writeFile: async (path, value) => save(path, value),
+      setInterval: (fn) => {
+        tick = fn;
+        return 1;
+      },
+      clearInterval() {},
+      createCompositionSessionReader,
+      observeCompositionSelectors,
+    },
+    { timeout: 100 },
+  );
+  const dispose = await wrapper.setup(context);
+  // Paint operands are synthetic, not a selected-state setter or live proof.
+  const paint = (n) =>
+    c.paint(n).replaceAll('duplicate preview', identityPreview(records[0].title));
+  c.state.raw = Buffer.from('\x1b[?1049h' + paint(1));
+  const source = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('export async function compositionPublicNavigationBridge(');
+  const finish = source.indexOf('// STATIC ONLY. Public readers', start);
+  const create = runInNewContext(
+    '(' + source.slice(start + 7, finish).trim() + ')',
+    {
+      assert,
+      Buffer,
+      structuredClone,
+      digest: (raw) => createHash('sha256').update(raw).digest('hex'),
+      readProductPickerClock,
+      assertProductPickerDeadline,
+      compositionNavigationSelection: await compositionSelectionAdapter(),
+    },
+    { timeout: 100 },
+  );
+  const ioStart = source.indexOf('const navigationBridgeIO = {');
+  const ioFinish = source.indexOf('\n        let request,', ioStart);
+  const host = { exited: false, closed: false, overflow: false };
+  const actualIO = runInNewContext(
+    source.slice(ioStart, ioFinish) + '\nnavigationBridgeIO;',
+    {
+      assert,
+      Buffer,
+      evidence: '/memory',
+      join: (...parts) => parts.join('/'),
+      readObservation: (name) => {
+        hooks.read?.(name);
+        return structuredClone(files.get(name) ?? null);
+      },
+      writeFileSync: (path, value) => {
+        requests++;
+        save(path, value);
+        hooks.request?.(JSON.parse(value));
+      },
+      get transcript() {
+        hooks.raw?.();
+        return c.state.raw;
+      },
+      get exited() {
+        return host.exited;
+      },
+      get closed() {
+        return host.closed;
+      },
+      get overflow() {
+        return host.overflow;
+      },
+    },
+    { timeout: 100 },
+  );
+  const io = {
+    ...actualIO,
+    executionBinding: c.io.binding,
+    runtime: c.io.binding.runtime,
+    run: c.io.binding.run,
+    setup: c.io.binding.setup,
+    readExecutionBinding: () => {
+      hooks.fixed?.();
+      return structuredClone(c.state.binding);
+    },
+    now: c.io.now,
+    deadline: c.io.deadline,
+    pause: async () => {
+      c.setTick(c.io.now() + 0.1);
+      tick(); // Execute the actual wrapper's public request/response route.
+      hooks.response?.(files.get('composition-selector-response.json'));
+    },
+    moveDown: () => {
+      c.writes.push('Down');
+      c.state.raw = Buffer.concat([c.state.raw, Buffer.from(paint(2))]);
+    },
+    pickerEnter: () => {
+      c.writes.push('first Enter');
+      const identity = frame({ ordinal: 'Session 2', ...records[1] });
+      c.state.raw = Buffer.concat([
+        c.state.raw,
+        Buffer.from(
+          '\x1b[?2026h' +
+            [1, 2, 3, 4, 5].map((r) => `\x1b[${r};1H` + ' '.repeat(120)).join('') +
+            identity
+              .split('\n')
+              .map((line, n) => `\x1b[${n + 1};1H${line}`)
+              .join('') +
+            '\x1b[?2026l',
+        ),
+      ]);
+    },
+  };
+  return {
+    c,
+    io,
+    hooks,
+    files,
+    records,
+    context,
+    host,
+    dispose,
+    counts: () => ({ reads, requests }),
+    create: () => create(io),
+    ready: async () => {
+      const bridge = await create(io);
+      await bridge.initial();
+      await bridge.moveDown();
+      await bridge.moved();
+      return bridge;
+    },
+  };
+}
+
+test('prepared bridge executes actual wrapper ordered and exact public reads, first Enter only, then closes second Enter', async () => {
+  const c = await publicBridgeCase();
+  c.hooks.request = () => {
+    const request = c.files.get('composition-selector-request.json');
+    request.snapshot = [{ id: 'driver-fed answer', title: 'not public data' }];
+    request.exact = { id: 'driver-fed answer', title: 'not public data' };
+  };
+  const bridge = await c.ready();
+  const before = c.counts();
+  await bridge.pickerEnter();
+  assert.ok(c.counts().reads >= before.reads + 2);
+  assert.equal(c.counts().requests, before.requests + 1);
+  const identity = await bridge.identity();
+  assert.equal(c.files.get('composition-selector-response.json').exact.id, c.records[1].id);
+  assert.ok(identity.text.includes(c.records[1].id));
+  assert.ok(identity.text.includes(c.records[1].title));
+  assert.deepEqual(c.c.writes, ['Down', 'first Enter']);
+  assert.throws(() => bridge.openQuestion(), /navigation admission refused/);
+  const closed = c.counts();
+  await assert.rejects(bridge.pickerEnter(), /navigation admission refused/);
+  assert.deepEqual(c.counts(), closed);
+  assert.deepEqual(c.c.writes, ['Down', 'first Enter']);
+  await c.dispose();
+});
+
+test('public bridge refuses divergent, stale, forged and invalidated observations irreversibly without Enter', async () => {
+  for (const failure of [
+    'list-order',
+    'get-id',
+    'get-title',
+    'get-missing',
+    'get-error',
+    'list-error',
+    'stale',
+    'stale-previous',
+    'out-of-order',
+    'forged-run',
+    'forged-setup',
+    'forged-prefix',
+    'forged-id',
+    'forged-bytes',
+    'forged-live',
+    'forged-geometry',
+    'missing-generation',
+    'dispose',
+    'replace',
+    'resize',
+    'gap',
+    'cancel',
+    'reader-invalidation',
+    'in-reader-dispose',
+    'prefix',
+    'deadline',
+    'fixed',
+    'read-error',
+    'raw-error',
+    'host-exit',
+    'stream-close',
+    'overflow',
+    'final-fence-invalidation',
+    'final-fence-prefix-change',
+  ]) {
+    const c = await publicBridgeCase();
+    const bridge = await c.ready();
+    const previous = structuredClone(c.files.get('composition-selector-response.json'));
+    if (failure === 'list-order') c.records.reverse();
+    if (failure === 'get-id')
+      c.hooks.get = () => {
+        c.records[1].id = 'foreign-id';
+      };
+    if (failure === 'get-title')
+      c.hooks.get = () => {
+        c.records[1].title = 'changed';
+      };
+    if (failure === 'get-missing')
+      c.hooks.get = () => {
+        c.records.splice(1);
+      };
+    if (failure === 'get-error')
+      c.hooks.get = () => {
+        throw Error('private');
+      };
+    if (failure === 'list-error')
+      c.hooks.list = () => {
+        throw Error('private');
+      };
+    if (failure === 'stale')
+      c.hooks.response = () => {
+        c.files.set('composition-selector-response.json', null);
+      };
+    if (failure === 'stale-previous')
+      c.hooks.response = () => {
+        c.files.set('composition-selector-response.json', previous);
+      };
+    const forgery = {
+      'out-of-order': ['request', 999],
+      'forged-run': ['run', 'other'],
+      'forged-setup': ['generation', 'other'],
+      'forged-prefix': ['sha256', 'f'.repeat(64)],
+      'forged-id': ['id', 'foreign-id'],
+      'forged-bytes': ['bytes', 1],
+      'forged-live': ['live', false],
+      'forged-geometry': ['geometry', { width: 120, height: 40, resizeSequence: 1 }],
+    }[failure];
+    if (forgery)
+      c.hooks.response = (response) => {
+        response[forgery[0]] = forgery[1];
+      };
+    if (failure === 'missing-generation') delete c.files.get('composition-live.json').generation;
+    if (failure === 'dispose') await c.dispose();
+    if (failure === 'replace') c.files.get('composition-live.json').generation = 'replacement';
+    if (failure === 'resize') c.files.get('composition-live.json').geometry.resizeSequence++;
+    if (['gap', 'cancel'].includes(failure)) bridge.invalidate();
+    if (failure === 'reader-invalidation') c.hooks.get = () => bridge.invalidate();
+    if (failure === 'in-reader-dispose')
+      c.hooks.get = () => {
+        void c.dispose();
+      };
+    if (failure === 'prefix')
+      c.hooks.response = () => {
+        c.c.state.raw = c.c.state.raw.subarray(1);
+      };
+    if (failure === 'deadline') c.hooks.response = () => c.c.setTick(10);
+    if (failure === 'fixed')
+      c.hooks.response = () => {
+        c.c.state.binding.config = 'changed';
+      };
+    if (failure === 'read-error')
+      c.hooks.read = () => {
+        throw Error('private');
+      };
+    if (failure === 'raw-error')
+      c.hooks.raw = () => {
+        throw Error('private');
+      };
+    if (failure === 'host-exit') c.host.exited = true;
+    if (failure === 'stream-close') c.host.closed = true;
+    if (failure === 'overflow') c.host.overflow = true;
+    if (['final-fence-invalidation', 'final-fence-prefix-change'].includes(failure)) {
+      // current() rereads fixed inputs in the final observer clock before input.
+      // Trigger only once refresh has completed and the actual seam is sampling.
+      let reads = 0;
+      c.hooks.fixed = () => {
+        if (++reads === 7) {
+          if (failure === 'final-fence-invalidation') bridge.invalidate();
+          else c.c.state.raw = c.c.state.raw.subarray(1);
+        }
+      };
+    }
+    await assert.rejects(bridge.pickerEnter(), /navigation admission refused/, failure);
+    const counts = c.counts();
+    for (const key of Object.keys(c.hooks)) delete c.hooks[key];
+    c.c.setTick(1);
+    await assert.rejects(bridge.pickerEnter(), /navigation admission refused/, failure);
+    assert.deepEqual(c.counts(), counts, failure);
+    assert.deepEqual(c.c.writes, ['Down'], failure);
+    await c.dispose();
+  }
+});
+
+test('bridge identity reads remain fresh after first Enter, and runtime has no bridge dispatch or second-input authority', async () => {
+  for (const failure of ['title', 'id', 'resize', 'gap', 'dispose']) {
+    const c = await publicBridgeCase();
+    const bridge = await c.ready();
+    await bridge.pickerEnter();
+    if (failure === 'title') c.records[1].title = 'changed after selection';
+    if (failure === 'id') c.records[1].id = 'replaced after selection';
+    if (failure === 'resize') c.files.get('composition-live.json').geometry.resizeSequence++;
+    if (failure === 'gap') bridge.invalidate();
+    if (failure === 'dispose') await c.dispose();
+    await assert.rejects(bridge.identity(), /navigation admission refused/, failure);
+    assert.throws(() => bridge.openQuestion(), /navigation admission refused/);
+    const closed = c.counts();
+    await assert.rejects(bridge.identity(), /navigation admission refused/);
+    assert.deepEqual(c.counts(), closed);
+    assert.deepEqual(c.c.writes, ['Down', 'first Enter']);
+    await c.dispose();
+  }
+  const source = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.equal(source.match(/compositionPublicNavigationBridge\(/g).length, 1);
+  assert.ok(
+    source.includes("assert.fail('product navigation requires separate runtime/input authority')"),
+  );
+  const c = await publicBridgeCase();
+  let second = 0;
+  c.io.openQuestion = () => second++;
+  const bridge = await c.ready();
+  await bridge.pickerEnter();
+  await bridge.identity();
+  assert.throws(() => bridge.openQuestion(), /navigation admission refused/);
+  assert.equal(second, 0);
+  await c.dispose();
+});
 
 test('actual selection wiring separates provisional picker and exact identity inputs with fresh public reads', async () => {
   const select = await compositionSelectionAdapter();

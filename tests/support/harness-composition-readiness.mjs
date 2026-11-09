@@ -392,6 +392,64 @@ export function compositionRenderEvidence(text) {
 }
 
 export const openTitle = 'Proceed harness: open the pending question for a session';
+// Fixed-purpose test wrapper observation. Neither request nor rendered preview
+// supplies the public list or exact record. No input or product hook is exposed.
+export function createCompositionSessionReader(context, readLifetime) {
+  let last = 0,
+    invalid = false;
+  return (request) => {
+    try {
+      if (invalid) throw Error();
+      const before = structuredClone(readLifetime());
+      if (
+        before.live !== true ||
+        typeof before.run !== 'string' ||
+        !before.run ||
+        typeof before.generation !== 'string' ||
+        !before.generation ||
+        request.kind !== 'navigation-observation' ||
+        request.run !== before.run ||
+        request.generation !== before.generation ||
+        !Number.isSafeInteger(request.request) ||
+        request.request <= last ||
+        !Number.isSafeInteger(request.bytes) ||
+        request.bytes <= 0 ||
+        request.bytes > 1048576 ||
+        !/^[a-f0-9]{64}$/.test(request.sha256)
+      )
+        throw Error();
+      last = request.request;
+      const snapshot = context.data.session.list().map((s, n) => ({
+        ordinal: `Session ${n + 1}`,
+        id: s.id,
+        title: typeof s.title === 'string' ? s.title : null,
+      }));
+      const id = request.id === null ? snapshot[1]?.id : request.id;
+      if (typeof id !== 'string' || !id) throw Error();
+      const record = context.data.session.get(id);
+      const exact = record ? { id: record.id, title: record.title } : null;
+      const after = structuredClone(readLifetime());
+      if (JSON.stringify(before) !== JSON.stringify(after) || after.live !== true) throw Error();
+      return {
+        kind: request.kind,
+        run: before.run,
+        generation: before.generation,
+        request: request.request,
+        bytes: request.bytes,
+        sha256: request.sha256,
+        id: request.id,
+        live: true,
+        geometry: before.geometry,
+        snapshot,
+        exact,
+      };
+    } catch {
+      invalid = true;
+      throw Error('navigation admission refused');
+    }
+  };
+}
+
 export function observeCompositionSelectors(context, session) {
   const command = context.keymap.commands().find((item) => item.id === 'proceed.harness.open');
   const resolved = context.data.session.get(session);

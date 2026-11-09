@@ -5,7 +5,10 @@ import product from '@meshimize/proceed-mcp/tui';
 import { writeFile } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { observeCompositionSelectors } from '/payload/tests/support/harness-composition-readiness.mjs';
+import {
+  observeCompositionSelectors,
+  createCompositionSessionReader,
+} from '/payload/tests/support/harness-composition-readiness.mjs';
 
 export default Plugin.define({
   id: product.id,
@@ -26,6 +29,17 @@ export default Plugin.define({
     let resizeSequence = 0;
     let live = true,
       timer;
+    const lifetime = () => ({
+      run,
+      generation,
+      live,
+      geometry: {
+        width: context.renderer?.width,
+        height: context.renderer?.height,
+        resizeSequence,
+      },
+    });
+    const readNavigation = createCompositionSessionReader(context, lifetime);
     const publish = () =>
       writeFileSync(
         root + 'composition-live.json',
@@ -79,9 +93,17 @@ export default Plugin.define({
           const request = JSON.parse(
             readFileSync(root + 'composition-selector-request.json', 'utf8'),
           );
-          if (request.run !== run || request.generation !== generation || request.request === last)
+          const token = `${request.kind ?? 'selector'}:${request.request}`;
+          if (request.run !== run || request.generation !== generation || token === last) return;
+          last = token;
+          // Read-only static bridge route. Capture retains its original zero-
+          // Enter observer. No navigation mode or input is enabled here.
+          if (!captureOnly && request.kind === 'navigation-observation') {
+            const observation = readNavigation(request);
+            if (!live) return;
+            writeFileSync(root + 'composition-selector-response.json', JSON.stringify(observation));
             return;
-          last = request.request;
+          }
           const observation = observeCompositionSelectors(context, session.id);
           if (!live) return;
           writeFileSync(
