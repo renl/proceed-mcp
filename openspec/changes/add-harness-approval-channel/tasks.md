@@ -2,6 +2,8 @@
 
 ## Integrated continuation - wired review candidate
 
+Frozen executable candidate `c76b5ea8d0f10ee9c7ea9840d89e28968c474276` contains exactly the 12 owned executable/test paths below and this tasks file. Final scoped Prettier check, selected whitespace and telemetry-disabled `openspec validate add-harness-approval-channel --strict` PASS, exit 0 within 30000 ms. This evidence finalization changes tasks only. Executable, production, dependency, configuration and baseline inputs remain unchanged after the final native checks. No runtime admission follows.
+
 **Static W1-W5/I1-I5 wiring is implemented for one consolidated review. Actual qualification remains UNRUN.** This supersedes the earlier unwired-driver next action and obsolete input freezes below. It is the same unfinished delivery task, not a new calibration/checkpoint mode. Entry `059490d8f2ec9471f3dff78e451d80f3edb2942f` includes criterion correction `ed16cbbe1b1c6b2ab158587d124803105ba09616`. Production stays read-only at `5c101bc2d68fdd3f61cd6863fbfa92e2a02f947a`. The entry own-path diff/index inspection was empty. README/status overlays remain untouched and unselected.
 
 Founder-visible success remains an authorized human reading the complete current question and returning that exact decision to its originating call, without another session gaining authority. The automated PTY route and synthetic enrollment are proxies, not genuine-human proof. Native memory controls are narrower proxies still. Neither native PASS nor archive/merge would establish human first use or release readiness.
