@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertIdentityMessage } from './support/harness-navigation-observation.mjs';
 
-test('current interaction submits its captured Reject while replaced and cleaned continuations are inert', async () => {
+test('current interaction submits its captured Reject while replaced, resized and cleaned continuations are inert', async () => {
   const calls = [];
   const presentation = {
     presentation_id: `hpr_${'a'.repeat(32)}`,
@@ -137,7 +137,6 @@ test('current interaction submits its captured Reject while replaced and cleaned
       confirmation.resolve(true);
       await flush();
       assert.deepEqual(queries.slice(beforeReads), ['current-session', 'current-session']);
-      assert.equal(renderer.listenerCount('resize'), 0);
       assert.match(dialogs.at(-1).options.title, /Synthetic action/);
       assert.equal(dialogs.at(-1).options.current, 'reject');
       return dialogs.at(-1);
@@ -178,6 +177,17 @@ test('current interaction submits its captured Reject while replaced and cleaned
     dialogs.at(-1).resolve(undefined);
     await Promise.all(pending);
     assert.equal(calls.filter((c) => c.operation === 'decisions').length, 1);
+    const resized = await start();
+    const decisionsBeforeResize = calls.filter((c) => c.operation === 'decisions').length;
+    renderer.width -= 1;
+    renderer.emit('resize');
+    resized.resolve('reject');
+    await Promise.all(pending);
+    assert.equal(
+      calls.filter((c) => c.operation === 'decisions').length,
+      decisionsBeforeResize,
+      'a late answer to the resized question must not submit a decision',
+    );
     const disposed = await start();
     cleanup();
     disposed.resolve('reject');
