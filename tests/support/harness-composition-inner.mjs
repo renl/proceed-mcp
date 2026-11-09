@@ -47,6 +47,7 @@ import {
   compositionSnapshot,
   compositionCanRequestFresh,
   compositionGuardJournal,
+  compositionSourceFrame,
 } from './harness-composition-readiness.mjs';
 import { assertPluginInventory } from './harness-plugin-inventory.mjs';
 import {
@@ -64,7 +65,7 @@ import {
   linuxScriptArguments,
 } from './harness-linux-plan.mjs';
 
-// STATIC ONLY. Prepared file-observation/PTY bridge, never installed below.
+// TEST ONLY. File-observation/PTY bridge for the separate navigation-only mode.
 // The wrapper owns public session reads. IO supplies current PTY bytes, not
 // expected identities. One lifetime, original deadline and no recovery/rebuild.
 export async function compositionPublicNavigationBridge({
@@ -81,6 +82,8 @@ export async function compositionPublicNavigationBridge({
   pause,
   moveDown,
   pickerEnter,
+  openPicker,
+  cancel,
 }) {
   const fixed = structuredClone(executionBinding);
   let invalid = false,
@@ -88,7 +91,9 @@ export async function compositionPublicNavigationBridge({
     selection,
     response,
     raw,
-    sequence = 0;
+    sequence = 0,
+    opened = false,
+    confirmed = false;
   let intended,
     geometry,
     lastClock = -Infinity;
@@ -174,6 +179,7 @@ export async function compositionPublicNavigationBridge({
       active();
       const result = selection[name]();
       active();
+      if (name === 'identity') confirmed = true;
       return result;
     } catch {
       invalidate();
@@ -217,11 +223,48 @@ export async function compositionPublicNavigationBridge({
     });
     active();
     return Object.freeze({
+      openPicker: () => {
+        try {
+          active();
+          assert.equal(opened, false);
+          const live = lifetime();
+          assert.deepEqual(live.snapshot, response.snapshot);
+          assert.deepEqual(readExecutionBinding(), fixed);
+          const prefix = Buffer.from(readRaw());
+          assert.ok(prefix.length >= raw.length);
+          assert.deepEqual(prefix.subarray(0, raw.length), raw);
+          assert.deepEqual(lifetime(), live);
+          assert.deepEqual(readRaw(), prefix);
+          assert.equal(typeof openPicker, 'function');
+          clock();
+          active();
+          opened = true;
+          openPicker();
+        } catch {
+          invalidate();
+          assert.fail('navigation admission refused');
+        }
+      },
       initial: () => stage('initial'),
       moveDown: () => stage('moveDown'),
       moved: () => stage('moved'),
       pickerEnter: () => stage('pickerEnter'),
       identity: () => stage('identity'),
+      cancel: () => {
+        try {
+          active();
+          assert.equal(confirmed, true);
+          current();
+          assert.equal(typeof cancel, 'function');
+          clock();
+          active();
+          invalidate(); // Fence the only bridge before cancelling, never recover it.
+          cancel();
+        } catch {
+          invalidate();
+          assert.fail('navigation admission refused');
+        }
+      },
       openQuestion: () => {
         invalidate();
         assert.fail('navigation admission refused');
@@ -234,8 +277,91 @@ export async function compositionPublicNavigationBridge({
   }
 }
 
-// STATIC ONLY. Public readers and stage-specific recorder inputs are injected.
-// This function is deliberately not installed in the real runtime branch.
+// One closed key alphabet and one bridge. No question/pending/second-Enter API.
+export async function compositionNavigationDispatch({
+  bridgeIO,
+  ready,
+  awaitUpdate,
+  awaitDismissal,
+  exitSnapshot,
+  send,
+  now,
+  deadline,
+  progress,
+}) {
+  const keys = { ctrlG: 0, down: 0, enter: 0, escape: 0, exit: 0 };
+  const order = ['ctrlG', 'down', 'enter', 'escape', 'exit'];
+  const bytes = { ctrlG: '\x07', down: '\x1b[B', enter: '\r', escape: '\x1b', exit: '\x03' };
+  let position = 0,
+    last = -Infinity,
+    bridge;
+  const clock = () => {
+    const tick = readProductPickerClock(now);
+    assert.ok(tick >= last);
+    last = tick;
+    assertProductPickerDeadline(() => tick, deadline);
+    return tick;
+  };
+  const key = (name) => {
+    assert.equal(name, order[position]);
+    assert.equal(keys[name], 0);
+    position++;
+    keys[name]++;
+    send(bytes[name], name);
+  };
+  try {
+    bridge = await compositionPublicNavigationBridge({
+      ...bridgeIO,
+      now: clock,
+      deadline,
+      openPicker: () => key('ctrlG'),
+      moveDown: () => key('down'),
+      pickerEnter: () => key('enter'),
+      cancel: () => key('escape'),
+    });
+    await progress('navigation-readiness');
+    await ready(() => bridge.openPicker());
+    assert.equal(keys.ctrlG, 1);
+    await progress('navigation-initial');
+    await awaitUpdate(0);
+    const initial = await bridge.initial();
+    await bridge.moveDown();
+    await progress('navigation-moved');
+    await awaitUpdate(initial.frames);
+    const moved = await bridge.moved();
+    await bridge.pickerEnter();
+    await progress('navigation-identity');
+    await awaitUpdate(moved.frames);
+    const identity = await bridge.identity();
+    bridge.cancel();
+    const dismissalBaseline = { supported: true, binding: initial.binding, ...identity };
+    await progress('navigation-dismissal');
+    await awaitDismissal(dismissalBaseline);
+    await progress('navigation-exit');
+    const dismissal = issueProductPickerExit({
+      snapshot: () => ({ ...exitSnapshot(dismissalBaseline), now: clock, deadline }),
+      exit: () => key('exit'),
+      exitCount: () => keys.exit,
+    });
+    return {
+      mode: 'PRODUCT_NAVIGATION_ONLY',
+      qualification: 'UNQUALIFIED',
+      selectionProfile: null,
+      initial,
+      moved,
+      identity,
+      dismissalBaseline,
+      dismissal,
+      keys,
+    };
+  } catch {
+    bridge?.invalidate();
+    assert.fail('navigation admission refused');
+  }
+}
+
+// TEST ONLY. Public readers and stage-specific bounded inputs are injected.
+// The navigation-only dispatcher supplies no question-opening input.
 export function compositionNavigationSelection({
   intendedSession,
   readSession,
@@ -284,7 +410,7 @@ export function compositionNavigationSelection({
 
 // Pure private wiring seam. No file, process or input is acquired here. The
 // runtime caller must supply freshly admitted fixed inputs and independent live
-// observations. This does not enable the closed real navigation branch below.
+// observations. This does not enable the closed legacy pending branch below.
 export function compositionNavigationObserver({
   executionBinding,
   runtime,
@@ -342,12 +468,16 @@ export function compositionNavigationObserver({
 const evidence = '/run/proceed/evidence';
 assert.ok(
   process.argv.length === 2 ||
-    (process.argv.length === 3 && process.argv[2] === '--product-picker-capture'),
+    (process.argv.length === 3 &&
+      ['--product-picker-capture', '--product-navigation'].includes(process.argv[2])),
 );
 const pickerCapture = process.argv[2] === '--product-picker-capture';
+const navigationOnly = process.argv[2] === '--product-navigation';
+const productMode = pickerCapture || navigationOnly;
 let pickerEvidence, executionBinding;
 let dismissalAdmitted = false;
 let productExitSnapshot;
+let navigationCleanupEnd;
 const cleanupTiming = cleanupMilestones(() => performance.now());
 let cleanupObservation;
 const terminalResponses = [
@@ -374,7 +504,7 @@ let scanReason = 'UNRUN';
 let productCleanup = 'UNRUN',
   hostExit = 'UNRUN';
 let commandEligibility = 'UNRUN';
-const keys = { ctrlG: 0, enter: 0, exit: 0 };
+const keys = { ctrlG: 0, enter: 0, exit: 0, down: 0, escape: 0 };
 let readinessFrame = '';
 let readinessObservation;
 const guardJournal = compositionGuardJournal();
@@ -436,7 +566,7 @@ async function logs(
   accounting = { entries: 0, paths: 0, bytes: 0, deadline: Math.min(end, Date.now() + 5000) },
   depth = 0,
 ) {
-  if (pickerCapture) {
+  if (productMode) {
     return productCaptureLogs(root, accounting, depth);
   }
   const chunks = [];
@@ -496,7 +626,7 @@ try {
       // forwards the real Context and only the four production options unchanged.
       const fixture = join(env.OPENCODE_CONFIG_DIR, 'plugins/proceed-composition');
       await mkdir(join(fixture, 'node_modules/@meshimize'), { recursive: true });
-      if (pickerCapture)
+      if (productMode)
         await cp(staging.product, join(fixture, 'node_modules/@meshimize/proceed-mcp'), {
           recursive: true,
         });
@@ -517,7 +647,7 @@ try {
         staging.config,
         JSON.stringify({ plugins: [{ package: fixture, options: staging.options }] }),
       );
-      if (pickerCapture) {
+      if (productMode) {
         executionBinding = {
           scope: 'product-capture',
           executable: execFileSync('/usr/bin/sha256sum', ['/usr/local/bin/opencode'], {
@@ -545,11 +675,28 @@ try {
           inputs: JSON.parse(await readFile('/payload/input-integrity.json', 'utf8')),
         };
       }
-      const controls = await transportFixtures(h);
+      // Navigation has no transport negative listeners, generated role secrets,
+      // pending setup probe or pending capability. Only the owned broker exists.
+      const controls = navigationOnly
+        ? {
+            secrets: Object.freeze([
+              h.operator.credential,
+              ...(await Promise.all(
+                (await readdir(join(h.state, 'credentials'))).map(async (name) =>
+                  (await readFile(join(h.state, 'credentials', name), 'utf8')).trim(),
+                ),
+              )),
+              JSON.parse(await readFile(join(h.state, 'broker.lock'), 'utf8')).channel.psk,
+            ]),
+            close: async () => {},
+          }
+        : await transportFixtures(h);
       let requiredSecrets;
       let controlsClosed = false;
       try {
-        requiredSecrets = freezeTransportSecrets(controls);
+        requiredSecrets = navigationOnly ? controls.secrets : freezeTransportSecrets(controls);
+        assert.equal(new Set(requiredSecrets).size, requiredSecrets.length);
+        if (navigationOnly) assert.equal(h.pending, undefined);
         assert.match(
           execFileSync('/usr/local/bin/opencode', ['--version'], {
             env,
@@ -563,7 +710,7 @@ try {
         const run = randomUUID();
         await writeFile(
           join(evidence, 'composition-binding.json'),
-          JSON.stringify({ run, captureOnly: pickerCapture }),
+          JSON.stringify({ run, captureOnly: pickerCapture, navigationOnly }),
         );
         // Establish the empty observer stream before any exchange. Missing later
         // is a capture failure, never an invented zero-response scan input.
@@ -643,7 +790,7 @@ try {
             return null;
           }
         };
-        // Prepared, but NOT dispatched. These exact private IO closures bind
+        // These exact private IO closures bind the separate navigation mode
         // the bridge to the maintained current stream and public wrapper files.
         // No historical capture, profile, expected identity or input is accepted.
         const navigationBridgeIO = {
@@ -661,79 +808,204 @@ try {
           requestWrittenAt,
           sequence = 0;
         await progress('rendered-host-and-product-registration');
-        await awaitCompositionKeyAdmission({
-          observe: async () => {
-            const activation = compositionActivation(
-              (await logs('/run/proceed/host-state')).toString(),
-              origin,
-            );
-            if (activation && !binding.hostRun) {
-              binding.hostRun = activation.run;
-              binding.hostSetup = activation.setup;
-            }
-            const frame = compositionReadinessFrame(transcript.toString(), pickerCapture);
-            const frameToken = transcript.length;
-            const response = readObservation('composition-selector-response.json');
-            const responseReadAt = response ? Date.now() : undefined;
-            const live = readObservation('composition-live.json');
-            lastGuardState = {
-              provenance: {
-                observer: pickerCapture ? 'SOURCE_LAYOUT' : 'UNSTYLED',
-                operands: 'LOOP_SAMPLE',
-                activation: activation ? 'OBSERVED' : 'NOT_OBSERVED',
-                prefixSha256: digest(transcript),
-              },
-              binding,
-              activation,
-              frame,
-              frameToken,
-              request,
-              response,
-              live,
-              exited,
-              overflow,
-              requestWrittenAt,
-              responseReadAt,
-            };
-            renderEvidence = compositionRenderEvidence(frame);
-            return lastGuardState;
-          },
-          requestFresh: (state, snapshot) => {
-            // Never reuse historical eligibility. Re-observe only under the
-            // existing current-frame rule and pinned activation/generation.
-            if (compositionCanRequestFresh(state, snapshot)) {
-              request = {
-                ...binding,
-                request: ++sequence,
-                frame: state.frame,
-                frameToken: state.frameToken,
-              };
-              writeFileSync(
-                join(evidence, 'composition-selector-request.json'),
-                JSON.stringify(request),
+        const admitReady = async (onAdmit) =>
+          await awaitCompositionKeyAdmission({
+            observe: async () => {
+              const activation = compositionActivation(
+                (await logs('/run/proceed/host-state')).toString(),
+                origin,
               );
-              requestWrittenAt = Date.now();
-            }
-          },
-          pause: () => delay(20),
-          now: Date.now,
-          deadline: readinessEnd,
-          record: recordGuard,
-          onAdmit: (state) => {
-            readinessFrame = state.frame;
-            readinessObservation = {
-              binding,
-              activation: state.activation,
-              request: state.request,
-              response: state.response,
-              live: state.live,
+              if (activation && !binding.hostRun) {
+                binding.hostRun = activation.run;
+                binding.hostSetup = activation.setup;
+              }
+              const frame = compositionReadinessFrame(transcript.toString(), productMode);
+              const frameToken = transcript.length;
+              const response = readObservation('composition-selector-response.json');
+              const responseReadAt = response ? Date.now() : undefined;
+              const live = readObservation('composition-live.json');
+              lastGuardState = {
+                provenance: {
+                  observer: productMode ? 'SOURCE_LAYOUT' : 'UNSTYLED',
+                  operands: 'LOOP_SAMPLE',
+                  activation: activation ? 'OBSERVED' : 'NOT_OBSERVED',
+                  prefixSha256: digest(transcript),
+                },
+                binding,
+                activation,
+                frame,
+                frameToken,
+                request,
+                response,
+                live,
+                exited,
+                overflow,
+                requestWrittenAt,
+                responseReadAt,
+              };
+              renderEvidence = compositionRenderEvidence(frame);
+              return lastGuardState;
+            },
+            requestFresh: (state, snapshot) => {
+              // Never reuse historical eligibility. Re-observe only under the
+              // existing current-frame rule and pinned activation/generation.
+              if (compositionCanRequestFresh(state, snapshot)) {
+                request = {
+                  ...binding,
+                  request: ++sequence,
+                  frame: state.frame,
+                  frameToken: state.frameToken,
+                };
+                writeFileSync(
+                  join(evidence, 'composition-selector-request.json'),
+                  JSON.stringify(request),
+                );
+                requestWrittenAt = Date.now();
+              }
+            },
+            pause: () => delay(20),
+            now: Date.now,
+            deadline: readinessEnd,
+            record: recordGuard,
+            onAdmit: (state) => {
+              readinessFrame = state.frame;
+              readinessObservation = {
+                binding,
+                activation: state.activation,
+                request: state.request,
+                response: state.response,
+                live: state.live,
+              };
+              commandEligibility = 'FRESH_SAME_GENERATION';
+              onAdmit();
+            },
+          });
+        if (navigationOnly) {
+          const navigationEnd =
+            readProductPickerClock(() => performance.now()) +
+            Math.min(5000, Math.max(0, end - Date.now()));
+          const fixed = structuredClone(executionBinding);
+          const initialLive = readObservation('composition-live.json');
+          const snapshot = structuredClone(initialLive.snapshot);
+          assert.equal(snapshot.length, 2);
+          assert.equal(snapshot[0].title, snapshot[1].title);
+          const captureBinding = {
+            ...fixed,
+            runtime: { version: runtime.version, bun: runtime.bun, node: runtime.node },
+            run,
+            setup: binding.generation,
+            geometry: structuredClone(initialLive.geometry),
+          };
+          const readFixed = () => ({
+            ...fixed,
+            executable: execFileSync('/usr/bin/sha256sum', ['/usr/local/bin/opencode'], {
+              env,
+              timeout: 5000,
+              encoding: 'utf8',
+            }).split(' ')[0],
+            config: digest(readFileSync(staging.config)),
+            configBytes: readFileSync(staging.config).toString('utf8'),
+            package: digest(readFileSync(join(staging.product, 'package.json'))),
+            wrapper: digest(readFileSync(join(fixture, 'tui.ts'))),
+            environment: env,
+            payload: JSON.parse(readFileSync('/payload/input-paths.json', 'utf8')),
+            inputs: JSON.parse(readFileSync('/payload/input-integrity.json', 'utf8')),
+          });
+          const boundSnapshot = (previous) => {
+            assertProductPickerDeadline(() => performance.now(), navigationEnd);
+            assert.deepEqual(readFixed(), fixed);
+            const raw = navigationBridgeIO.readRaw();
+            const live = readObservation('composition-live.json');
+            assert.ok(live?.live && live.run === run && live.generation === binding.generation);
+            assert.deepEqual(live.geometry, captureBinding.geometry);
+            assert.deepEqual(live.snapshot, snapshot);
+            return {
+              raw,
+              binding: captureBinding,
+              previous,
+              hostFrame: readinessFrame,
+              now: () => performance.now(),
+              deadline: navigationEnd,
             };
-            commandEligibility = 'FRESH_SAME_GENERATION';
+          };
+          let prePickerFrames;
+          pickerEvidence = await compositionNavigationDispatch({
+            bridgeIO: {
+              ...navigationBridgeIO,
+              executionBinding: fixed,
+              runtime,
+              run,
+              setup: binding.generation,
+              readExecutionBinding: readFixed,
+              pause: () => delay(20),
+            },
+            ready: (onAdmit) =>
+              admitReady(() => {
+                prePickerFrames = compositionSourceFrame(transcript.toString()).frames;
+                assert.ok(Number.isSafeInteger(prePickerFrames) && prePickerFrames > 0);
+                onAdmit();
+              }),
+            now: () => performance.now(),
+            deadline: navigationEnd,
+            progress,
+            awaitUpdate: async (previousFrames) =>
+              wait(
+                'navigation-completed-update',
+                () => {
+                  const { raw } = boundSnapshot(null);
+                  const current = compositionSourceFrame(
+                    new TextDecoder('utf-8', { fatal: true }).decode(raw),
+                  );
+                  assert.equal(current.supported, true);
+                  // Identity need not be a picker, but the maintained decoder must
+                  // have completed a fresh update before the bridge admits its cells.
+                  return current.frames > (previousFrames || prePickerFrames);
+                },
+                0,
+                navigationEnd,
+              ),
+            awaitDismissal: async (previous) =>
+              wait(
+                'navigation-completed-dismissal',
+                () => {
+                  const state = boundSnapshot(previous);
+                  return productPickerDismissal(state.raw, state.binding, previous, state.hostFrame)
+                    .supported;
+                },
+                0,
+                navigationEnd,
+              ),
+            exitSnapshot: (previous) => {
+              const state = boundSnapshot(previous);
+              navigationCleanupEnd = cleanupTiming.begin(
+                Math.min(15000, Math.max(0, end - Date.now())),
+              );
+              return state;
+            },
+            send: (bytes, name) => {
+              if (name === 'ctrlG') keys.ctrlG++;
+              if (name === 'enter') keys.enter++;
+              if (name === 'down') keys.down++;
+              if (name === 'escape') keys.escape++;
+              if (name === 'exit') {
+                cleanupTiming.record('EXIT_KEY');
+                keys.exit++;
+              }
+              child.stdin.write(bytes);
+            },
+          });
+          dismissalAdmitted = true;
+          assert.equal(keys.enter, 1);
+          assert.equal(
+            await readFile('/run/proceed/qualification-private/composition-wire.jsonl', 'utf8'),
+            '',
+          );
+          await h.noWork();
+        } else if (pickerCapture) {
+          await admitReady(() => {
             keys.ctrlG++;
             child.stdin.write('\x07');
-          },
-        });
-        if (pickerCapture) {
+          });
           const pickerEnd =
             readProductPickerClock(() => performance.now()) +
             Math.min(5000, Math.max(0, end - Date.now()));
@@ -877,7 +1149,9 @@ try {
           await wait('physical-helper-absence', async () => !(await exists('/proc/' + helper.pid)));
           await h.noWork();
         }
-        const cleanupEnd = cleanupTiming.begin(Math.min(15000, Math.max(0, end - Date.now())));
+        const cleanupEnd = navigationOnly
+          ? navigationCleanupEnd
+          : cleanupTiming.begin(Math.min(15000, Math.max(0, end - Date.now())));
         const ownedExit = () => {
           cleanupTiming.record('EXIT_KEY');
           keys.exit++;
@@ -890,7 +1164,7 @@ try {
             exitCount: () => keys.exit,
           });
           dismissalAdmitted = true;
-        } else ownedExit();
+        } else if (!navigationOnly) ownedExit();
         await wait(
           'exact-product-PluginCleanup',
           async () => {
@@ -912,7 +1186,7 @@ try {
             cleanupObservation.wrapper.RETURN !== null,
         );
         await wait('actual-host-exit', () => exited);
-        if (!pickerCapture)
+        if (!productMode)
           await writeFile(
             join(evidence, 'composition-summary.json'),
             JSON.stringify({
@@ -984,7 +1258,7 @@ try {
           lifecycle = await settleCompositionHost({
             observe: () => ({ exited, closed }),
             exitSent: keys.exit > 0,
-            allowExit: !pickerCapture || dismissalAdmitted,
+            allowExit: !productMode || dismissalAdmitted,
             requestExit: () => {
               cleanupTiming.record('EXIT_KEY');
               keys.exit++;
@@ -1012,7 +1286,7 @@ try {
           readCleanupObservation('composition-cleanup-entry.json');
         cleanupObservation = cleanupTiming.value(cleanupWrapper);
         renderEvidence = compositionRenderEvidence(
-          compositionReadinessFrame(transcript.toString(), pickerCapture),
+          compositionReadinessFrame(transcript.toString(), productMode),
         );
         // Failure captures stay private unless the SAME complete raw scan passes.
         // Close is not graceful exit. Forced exit is eligible only after actual
@@ -1026,9 +1300,9 @@ try {
               (p) => /^\d+$/.test(p) && !priorPids.has(p),
             );
             const complete = closed && remainingPids.length === 0;
-            if (pickerCapture) {
+            if (productMode) {
               assert.ok(complete && productCleanup === 'OBSERVED');
-              assert.equal(keys.enter, 0);
+              assert.ok(navigationOnly ? keys.enter <= 1 : keys.enter === 0);
               const observations = Buffer.from(
                 JSON.stringify({
                   pickerEvidence,
@@ -1197,7 +1471,7 @@ try {
           throw Object.assign(Error('scan refused'), { code: 'CAPTURE_SCAN_REFUSED' });
       }
     },
-    { brokerObserver: true, captureOnly: pickerCapture },
+    { brokerObserver: true, captureOnly: productMode },
   );
 } catch (error) {
   errorCode ??= compositionErrorCode(error);

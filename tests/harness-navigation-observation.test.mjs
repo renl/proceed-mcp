@@ -24,6 +24,8 @@ import {
   compositionSourceFrame,
   createCompositionSessionReader,
   observeCompositionSelectors,
+  awaitCompositionKeyAdmission,
+  openTitle,
 } from './support/harness-composition-readiness.mjs';
 
 // Synthetic RGB operands, NOT evidence of the pinned host's actual theme.
@@ -627,20 +629,30 @@ async function compositionSelectionAdapter() {
   );
 }
 
-async function publicBridgeCase() {
+async function publicBridgeCase(navigationOnly = false) {
   const c = navigationCase();
   const files = new Map();
-  const records = [{ id: 'synthetic-id-1', title: 'Composition empty exchange' }];
+  const records = navigationOnly
+    ? []
+    : [{ id: 'synthetic-id-1', title: 'Composition empty exchange' }];
   const hooks = {};
   let tick,
     reads = 0,
     requests = 0;
   const file = (path) => path.split('/').at(-1);
   const save = (path, value) => files.set(file(path), JSON.parse(value));
-  files.set('composition-binding.json', { run: c.io.binding.run, captureOnly: false });
+  files.set('composition-binding.json', {
+    run: c.io.binding.run,
+    captureOnly: false,
+    navigationOnly,
+  });
   const context = {
     renderer: { ...c.io.binding.geometry, on() {}, off() {} },
     app: { version: 'static-wrapper-control' },
+    keymap: {
+      commands: () => [{ id: 'proceed.harness.open', title: openTitle }],
+      active: () => [{ key: 'ctrl+g', title: openTitle }],
+    },
     data: {
       session: {
         list: () => {
@@ -659,7 +671,7 @@ async function publicBridgeCase() {
     client: {
       session: {
         create: async ({ title }) => {
-          const record = { id: 'synthetic-id-2', title };
+          const record = { id: `synthetic-id-${records.length + 1}`, title };
           records.push(record);
           return record;
         },
@@ -704,7 +716,7 @@ async function publicBridgeCase() {
     'utf8',
   );
   const start = source.indexOf('export async function compositionPublicNavigationBridge(');
-  const finish = source.indexOf('// STATIC ONLY. Public readers', start);
+  const finish = source.indexOf('// One closed key alphabet', start);
   const create = runInNewContext(
     '(' + source.slice(start + 7, finish).trim() + ')',
     {
@@ -802,6 +814,9 @@ async function publicBridgeCase() {
     dispose,
     counts: () => ({ reads, requests }),
     create: () => create(io),
+    createFactory: create,
+    tick: () => tick(),
+    paint,
     ready: async () => {
       const bridge = await create(io);
       await bridge.initial();
@@ -811,6 +826,313 @@ async function publicBridgeCase() {
     },
   };
 }
+
+async function navigationDispatchCase() {
+  const p = await publicBridgeCase(true);
+  const source = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('export async function compositionNavigationDispatch(');
+  const finish = source.indexOf('// TEST ONLY. Public readers', start);
+  let constructions = 0,
+    actualBridge;
+  const dispatch = runInNewContext(
+    '(' + source.slice(start + 7, finish).trim() + ')',
+    {
+      assert,
+      readProductPickerClock,
+      assertProductPickerDeadline,
+      issueProductPickerExit,
+      compositionPublicNavigationBridge: async (io) => {
+        constructions++;
+        actualBridge = await p.createFactory(io);
+        return actualBridge;
+      },
+    },
+    { timeout: 100 },
+  );
+  const clear = Array.from({ length: 40 }, (_, n) => `\x1b[${n + 1};1H` + ' '.repeat(120)).join('');
+  let hostFrame = '2.2.5 Ask anything';
+  const hostPaint = '\x1b[?2026h' + clear + '\x1b[1;1H' + hostFrame + '\x1b[?2026l';
+  p.c.state.raw = Buffer.from('\x1b[?1049h' + hostPaint);
+  hostFrame = compositionSourceFrame(p.c.state.raw.toString()).text;
+  const hostRaw = Buffer.from(p.c.state.raw);
+  let prePickerFrames;
+  const events = [];
+  const hook = {};
+  const ready = async (onAdmit) => {
+    const binding = {
+      run: p.io.run,
+      generation: p.io.setup,
+      session: p.records[0].id,
+      hostRun: 'memory-host',
+      hostSetup: 'memory-setup',
+    };
+    const request = { ...binding, request: 1, frame: hostFrame, frameToken: p.c.state.raw.length };
+    p.files.set('composition-selector-request.json', request);
+    p.tick(); // Actual wrapper selector response, not an expected-answer callback.
+    await awaitCompositionKeyAdmission({
+      observe: async () => {
+        const state = {
+          binding,
+          activation: { run: binding.hostRun, setup: binding.hostSetup },
+          frame: compositionSourceFrame(p.c.state.raw.toString()).text,
+          frameToken: p.c.state.raw.length,
+          request,
+          response: p.files.get('composition-selector-response.json'),
+          live: p.files.get('composition-live.json'),
+          exited: p.host.exited,
+          overflow: p.host.overflow,
+        };
+        hook.ready?.(state);
+        return state;
+      },
+      requestFresh() {},
+      record() {},
+      now: () => 1,
+      deadline: 2,
+      pause: async () => {
+        throw Error('memory readiness refused');
+      },
+      onAdmit: () => {
+        prePickerFrames = compositionSourceFrame(p.c.state.raw.toString()).frames;
+        onAdmit();
+      },
+    });
+  };
+  const io = {
+    bridgeIO: p.io,
+    ready,
+    now: p.io.now,
+    deadline: p.io.deadline,
+    progress: async (phase) => {
+      events.push(phase);
+      await hook.stage?.(phase);
+    },
+    awaitUpdate: runInNewContext(
+      '({' +
+        source.slice(
+          source.indexOf('awaitUpdate: async (previousFrames) =>'),
+          source.indexOf(
+            'awaitDismissal:',
+            source.indexOf('awaitUpdate: async (previousFrames) =>'),
+          ),
+        ) +
+        '}).awaitUpdate',
+      {
+        assert,
+        TextDecoder,
+        compositionSourceFrame,
+        boundSnapshot: () => ({ raw: p.io.readRaw() }),
+        navigationEnd: p.io.deadline,
+        get prePickerFrames() {
+          return prePickerFrames;
+        },
+        wait: async (_label, predicate) =>
+          assert.equal(predicate(), true, 'memory completed update unavailable'),
+      },
+      { timeout: 100 },
+    ),
+    awaitDismissal: async (previous) => {
+      const state = io.exitSnapshot(previous);
+      assert.equal(
+        productPickerDismissal(state.raw, state.binding, previous, state.hostFrame).supported,
+        true,
+      );
+    },
+    exitSnapshot: (previous) => {
+      const live = p.files.get('composition-live.json');
+      assert.equal(live.live, true);
+      assert.equal(live.generation, p.io.setup);
+      assert.deepEqual(live.geometry, p.c.state.binding.geometry);
+      assert.deepEqual(p.io.readExecutionBinding(), p.io.executionBinding);
+      const state = { raw: p.io.readRaw(), binding: previous.binding, previous, hostFrame };
+      hook.exit?.(state);
+      return state;
+    },
+    send: (bytes, name) => {
+      events.push(name);
+      if (name === 'ctrlG') p.c.state.raw = Buffer.concat([p.c.state.raw, Buffer.from(p.paint(1))]);
+      if (name === 'down') p.io.moveDown();
+      if (name === 'enter') p.io.pickerEnter();
+      if (name === 'escape') p.c.state.raw = Buffer.concat([p.c.state.raw, Buffer.from(hostPaint)]);
+      hook.send?.(bytes, name);
+    },
+  };
+  const boundExit = io.exitSnapshot;
+  const exitStart = source.indexOf('exitSnapshot: (previous) =>');
+  io.exitSnapshot = runInNewContext(
+    '({' + source.slice(exitStart, source.indexOf('send:', exitStart)) + '}).exitSnapshot',
+    {
+      boundSnapshot: boundExit,
+      navigationCleanupEnd: undefined,
+      cleanupTiming: {
+        begin: (budget) => {
+          assert.equal(budget, 15000);
+          events.push('cleanup-begin');
+          return budget;
+        },
+      },
+      end: 15000,
+      Date: { now: () => 0 },
+    },
+    { timeout: 100 },
+  );
+  return {
+    ...p,
+    events,
+    hook,
+    io,
+    hostRaw,
+    run: () => dispatch(io),
+    constructions: () => constructions,
+    bridge: () => actualBridge,
+  };
+}
+
+test('actual navigation dispatch uses one public bridge, first Enter, identity, Escape and fenced dismissal before exit', async () => {
+  const p = await navigationDispatchCase();
+  const result = await p.run().catch((error) => {
+    throw new Error(p.events.join(','), { cause: error });
+  });
+  assert.equal(p.records.length, 2);
+  assert.equal(p.records[0].title, p.records[1].title);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.keys)), {
+    ctrlG: 1,
+    down: 1,
+    enter: 1,
+    escape: 1,
+    exit: 1,
+  });
+  assert.deepEqual(
+    p.events.filter((v) => ['ctrlG', 'down', 'enter', 'escape', 'exit'].includes(v)),
+    ['ctrlG', 'down', 'enter', 'escape', 'exit'],
+  );
+  assert.ok(result.identity.text.includes(p.records[1].id));
+  assert.ok(result.identity.text.includes(p.records[1].title));
+  assert.equal(result.dismissal.supported, true);
+  assert.ok(p.events.indexOf('cleanup-begin') < p.events.indexOf('exit'));
+  assert.equal(result.qualification, 'UNQUALIFIED');
+  assert.equal(result.selectionProfile, null);
+  assert.equal(p.constructions(), 1);
+  assert.ok(p.counts().requests >= 6);
+  assert.equal(p.io.openQuestion, undefined);
+});
+
+test('actual navigation dispatch refuses changed bindings, correlation, lifetime, cells and cancellation without rebuild or second Enter', async () => {
+  for (const failure of [
+    'readiness',
+    'no-picker-update',
+    'second-open',
+    'prefix',
+    'correlation',
+    'deadline',
+    'clock',
+    'generation',
+    'disposal',
+    'host-exit',
+    'stream-close',
+    'overflow',
+    'snapshot',
+    'title',
+    'exact-id',
+    'unknown-cells',
+    'fixed',
+    'cancelled',
+    'dismissal',
+    'exit-deadline',
+    'dismissal-order',
+    'identity-title',
+    'identity-id',
+    'identity-generation',
+    'identity-gap',
+    'identity-cells',
+    'identity-reader',
+    'identity-clock',
+    'cancel-prefix',
+  ]) {
+    const p = await navigationDispatchCase();
+    p.hook.ready = (state) => {
+      if (failure === 'readiness') state.response.commandEligible = false;
+    };
+    p.hook.send = (_bytes, name) => {
+      if (failure === 'correlation' && name === 'down') p.hooks.response = (r) => r.request++;
+    };
+    if (failure === 'second-open') {
+      const ready = p.io.ready;
+      p.io.ready = (onAdmit) =>
+        ready(() => {
+          onAdmit();
+          onAdmit();
+        });
+    }
+    p.hook.stage = async (phase) => {
+      if (phase === 'navigation-initial' && failure === 'no-picker-update')
+        p.c.state.raw = p.hostRaw;
+      if (phase === 'navigation-moved') {
+        if (failure === 'prefix') p.c.state.raw = Buffer.from(p.paint(2));
+        if (failure === 'deadline') p.c.setTick(p.io.deadline);
+        if (failure === 'clock') p.c.setTick(NaN);
+        if (failure === 'generation')
+          p.files.get('composition-live.json').generation = 'replacement';
+        if (failure === 'disposal') await p.dispose();
+        if (failure === 'host-exit') p.host.exited = true;
+        if (failure === 'stream-close') p.host.closed = true;
+        if (failure === 'overflow') p.host.overflow = true;
+        if (failure === 'snapshot') p.records.reverse();
+        if (failure === 'title') p.records[1].title = 'changed';
+        if (failure === 'exact-id') p.hooks.get = () => (p.records[1].id = 'changed-id');
+        if (failure === 'unknown-cells')
+          p.c.state.raw = Buffer.concat([
+            p.c.state.raw,
+            Buffer.from('\x1b[?2026h\x1b[3;3Hbad\x1b[?2026l'),
+          ]);
+        if (failure === 'fixed') p.c.state.binding.config = 'changed';
+        if (failure === 'cancelled') throw Error('cancelled');
+      }
+      if (phase === 'navigation-identity') {
+        if (failure === 'identity-title') p.records[1].title = 'changed title';
+        if (failure === 'identity-id') p.records[1].id = 'foreign identity';
+        if (failure === 'identity-generation')
+          p.files.get('composition-live.json').generation = 'replacement';
+        if (failure === 'identity-gap') p.bridge().invalidate();
+        if (failure === 'identity-cells')
+          p.c.state.raw = Buffer.concat([p.c.state.raw, Buffer.from(p.paint(2))]);
+        if (failure === 'identity-reader')
+          p.hooks.get = () => {
+            p.bridge().invalidate();
+          };
+        if (failure === 'identity-clock') p.c.setTick(p.io.deadline);
+        if (failure === 'cancel-prefix')
+          p.hooks.read = (name) => {
+            if (name === 'composition-selector-response.json' && p.counts().requests === 6) {
+              p.c.state.raw = Buffer.concat([p.c.state.raw, Buffer.from('changed')]);
+            }
+          };
+      }
+      if (phase === 'navigation-dismissal' && failure === 'dismissal')
+        p.c.state.raw = Buffer.from(p.paint(2));
+      if (phase === 'navigation-exit' && failure === 'exit-deadline') p.c.setTick(p.io.deadline);
+      if (phase === 'navigation-exit' && failure === 'dismissal-order')
+        p.c.state.raw = Buffer.concat([p.c.state.raw, Buffer.from(p.paint(2))]);
+    };
+    await assert.rejects(p.run(), /navigation admission refused/, failure);
+    assert.equal(p.constructions(), 1, failure);
+    const keys = p.events.filter((v) => ['ctrlG', 'down', 'enter', 'escape', 'exit'].includes(v));
+    assert.ok(keys.filter((v) => v === 'enter').length <= 1, failure);
+    assert.equal(keys.includes('exit'), false, failure);
+    if (
+      !['dismissal', 'exit-deadline', 'dismissal-order', 'cancel-prefix'].includes(failure) &&
+      !failure.startsWith('identity-')
+    )
+      assert.equal(keys.includes('enter'), false, failure);
+    const counts = p.counts();
+    await assert.rejects(p.bridge().pickerEnter(), /navigation admission refused/, failure);
+    assert.throws(() => p.bridge().cancel(), /navigation admission refused/, failure);
+    assert.deepEqual(p.counts(), counts, failure);
+  }
+});
 
 test('prepared bridge executes actual wrapper ordered and exact public reads, first Enter only, then closes second Enter', async () => {
   const c = await publicBridgeCase();
@@ -972,7 +1294,7 @@ test('public bridge refuses divergent, stale, forged and invalidated observation
   }
 });
 
-test('bridge identity reads remain fresh after first Enter, and runtime has no bridge dispatch or second-input authority', async () => {
+test('bridge identity reads remain fresh after first Enter, and legacy runtime remains closed without second-input authority', async () => {
   for (const failure of ['title', 'id', 'resize', 'gap', 'dispose']) {
     const c = await publicBridgeCase();
     const bridge = await c.ready();
@@ -994,7 +1316,7 @@ test('bridge identity reads remain fresh after first Enter, and runtime has no b
     new URL('support/harness-composition-inner.mjs', import.meta.url),
     'utf8',
   );
-  assert.equal(source.match(/compositionPublicNavigationBridge\(/g).length, 1);
+  assert.equal(source.match(/compositionPublicNavigationBridge\(/g).length, 2);
   assert.ok(
     source.includes("assert.fail('product navigation requires separate runtime/input authority')"),
   );
@@ -1694,7 +2016,7 @@ test('actual composition final-exit closure refuses live replacement, deadline a
     if (stage === 'final') assert.equal(validationReads, 1);
     if (stage === 'initial' || stage === 'deadline') assert.equal(validationReads, 0);
   }
-  assert.match(source, /allowExit: !pickerCapture \|\| dismissalAdmitted/);
+  assert.match(source, /allowExit: !productMode \|\| dismissalAdmitted/);
   assert.match(source, /pickerEvidence.dismissal = issueProductPickerExit\(/);
   const deadlineStart = source.indexOf('const pickerEnd =');
   const deadlineEnd = source.indexOf(';', deadlineStart);

@@ -27,7 +27,7 @@ import { assertDetailedTransportExport } from './support/harness-runtime-transpo
 
 const readyFrame = `2.2.5\nAsk anything\n┃  ${productReadyText}  ┃`;
 
-test('static composition wiring freshly projects fixed inputs and public snapshot, live navigation remains closed', async () => {
+test('composition wiring freshly projects fixed inputs and public snapshot, legacy pending navigation remains closed', async () => {
   const source = await readFile(
     new URL('support/harness-composition-inner.mjs', import.meta.url),
     'utf8',
@@ -202,7 +202,7 @@ test('actual capture readiness route never substitutes the unstyled failure obse
   );
   assert.match(
     inner,
-    /const frame = compositionReadinessFrame\(transcript.toString\(\), pickerCapture\)/,
+    /const frame = compositionReadinessFrame\(transcript.toString\(\), productMode\)/,
   );
   const catchStart = inner.indexOf('} catch (error) {');
   const failure = inner.slice(catchStart, inner.indexOf('// One exit key only', catchStart));
@@ -211,7 +211,7 @@ test('actual capture readiness route never substitutes the unstyled failure obse
   assert.doesNotMatch(inner, /readGuardFiles/);
   assert.match(
     inner,
-    /compositionRenderEvidence\(\s*compositionReadinessFrame\(transcript.toString\(\), pickerCapture\)/,
+    /compositionRenderEvidence\(\s*compositionReadinessFrame\(transcript.toString\(\), productMode\)/,
   );
 });
 
@@ -1013,7 +1013,7 @@ test('capture host entry dispatch is separate, skips setup pending probe, freeze
     /--product-picker-capture-run[\s\S]*runLinuxHost\(false, 'product-picker-capture'\)/,
   );
   const runner = await source('support/harness-linux-runner.mjs');
-  assert.match(runner, /if \(pickerCapture\) assert.equal\(preflight, false\)/);
+  assert.match(runner, /if \(productMode\) assert.equal\(preflight, false\)/);
   assert.match(runner, /pickerCapture \? \['--product-picker-capture'\]/);
   assert.match(runner, /transferProductCapture\(/);
   assert.match(
@@ -1032,7 +1032,7 @@ test('capture host entry dispatch is separate, skips setup pending probe, freeze
   assert.match(branch, /moveDown:[\s\S]*\\x1b\[B/);
   assert.match(branch, /dismiss:[\s\S]*\\x1b/);
   assert.doesNotMatch(branch, /confirmRenderedNavigation|waitIdentity|stdin.write\('\\r'\)/);
-  assert.match(inner, /brokerObserver: true, captureOnly: pickerCapture/);
+  assert.match(inner, /brokerObserver: true, captureOnly: productMode/);
   assert.match(inner, /configBytes:[\s\S]*environment: env/);
   assert.match(inner, /resolvedTheme: null,\s*designMode: null,\s*effectiveColorDepth: null/);
   assert.match(inner, /const \{ journal, api \} = await productCaptureInputs\(/);
@@ -1041,6 +1041,113 @@ test('capture host entry dispatch is separate, skips setup pending probe, freeze
     /assert.equal\(api.length, 0\)/,
   );
   assert.match(inner, /collectProductCapture\(/);
+});
+
+test('actual navigation host entry dispatches only its maintained mode, never preflight or another mode', async () => {
+  const source = await readFile(new URL('run-harness-host.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf("if (process.argv[2] === '--product-navigation-run')");
+  const finish = source.indexOf('} else if', start);
+  const branch = source.slice(start, finish) + '}';
+  for (const argv of [
+    ['node', 'entry', '--product-navigation-run'],
+    ['node', 'entry', '--product-navigation-run', 'extra'],
+  ]) {
+    const calls = [];
+    const run = runInNewContext(
+      '(async () => {' +
+        branch.replace(
+          "await import('./support/harness-linux-runner.mjs')",
+          '{ runLinuxHost: injectedRun }',
+        ) +
+        '})',
+      {
+        assert,
+        process: { argv },
+        injectedRun: async (...args) => calls.push(args),
+      },
+      { timeout: 100 },
+    );
+    if (argv.length === 3) {
+      await run();
+      assert.deepEqual(calls, [[false, 'product-navigation']]);
+    } else {
+      await assert.rejects(run());
+      assert.deepEqual(calls, []);
+    }
+  }
+  const inner = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const nav = inner.slice(
+    inner.indexOf('if (navigationOnly) {\n          const navigationEnd'),
+    inner.indexOf('} else if (pickerCapture)'),
+  );
+  assert.match(nav, /pickerEvidence = await compositionNavigationDispatch\(/);
+  assert.match(nav, /bridgeIO: \{[\s\S]*\.\.\.navigationBridgeIO/);
+  assert.match(nav, /ready: \(onAdmit\) =>[\s\S]*admitReady\(/);
+  assert.match(nav, /prePickerFrames = compositionSourceFrame\(transcript.toString\(\)\).frames/);
+  assert.match(nav, /current.frames > \(previousFrames \|\| prePickerFrames\)/);
+  assert.match(nav, /readExecutionBinding: readFixed/);
+  assert.match(nav, /deadline: navigationEnd/);
+  assert.doesNotMatch(
+    nav,
+    /pending\(|openQuestion|h\.http|request_approval|decisions|transportFixtures/,
+  );
+  const runner = await readFile(
+    new URL('support/harness-linux-runner.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(runner, /navigationOnly \? \['--product-navigation'\]/);
+  assert.match(runner, /const productMode = pickerCapture \|\| navigationOnly/);
+  assert.match(inner, /allowExit: !productMode \|\| dismissalAdmitted/);
+  assert.match(
+    inner,
+    /if \(productMode\) \{\s*assert.ok\(complete && productCleanup === 'OBSERVED'\)/,
+  );
+});
+
+test('actual navigation setup skips all transport listeners and inventories every generated credential plus operator and channel', async () => {
+  const source = await readFile(
+    new URL('support/harness-composition-inner.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('const controls = navigationOnly');
+  const finish = source.indexOf('let requiredSecrets;', start);
+  let listeners = 0;
+  const generated = new Map([
+    ['control.token', 'synthetic-control'],
+    ['owner.shared.token', 'synthetic-owner'],
+    ['owner.foreign.token', 'synthetic-foreign'],
+  ]);
+  const run = runInNewContext(
+    '(async () => {' + source.slice(start, finish) + 'return controls;})',
+    {
+      navigationOnly: true,
+      Object,
+      h: { state: '/memory', operator: { credential: 'synthetic-operator' } },
+      join: (...p) => p.join('/'),
+      readdir: async () => [...generated.keys()],
+      readFile: async (p) =>
+        p.endsWith('broker.lock')
+          ? JSON.stringify({ channel: { psk: 'synthetic-channel' } })
+          : generated.get(p.split('/').at(-1)),
+      transportFixtures: async () => {
+        listeners++;
+        throw Error('transport is unavailable');
+      },
+    },
+    { timeout: 100 },
+  );
+  const controls = await run();
+  assert.deepEqual(
+    [...controls.secrets].sort(),
+    ['synthetic-operator', 'synthetic-channel', ...generated.values()].sort(),
+  );
+  assert.equal(listeners, 0);
+  assert.equal(controls.pending, undefined);
+  await controls.close();
+  assert.equal(listeners, 0);
 });
 
 test('actual broker setup capture branch cannot send a pending probe or expose its callable, including failures', async () => {

@@ -56,6 +56,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       'parent-process',
       'composition',
       'product-picker-capture',
+      'product-navigation',
       'renderer',
       'renderer-diagnostic',
       'renderer-inventory',
@@ -67,8 +68,10 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
   const renderer = mode === 'renderer' || rendererDiagnostic || rendererInventory;
   if (rendererInventory) assert.equal(preflight, false);
   const pickerCapture = mode === 'product-picker-capture';
-  if (pickerCapture) assert.equal(preflight, false);
-  const composition = mode === 'composition' || pickerCapture;
+  const navigationOnly = mode === 'product-navigation';
+  const productMode = pickerCapture || navigationOnly;
+  if (productMode) assert.equal(preflight, false);
+  const composition = mode === 'composition' || productMode;
   const helper = mode === 'helper-contract' || parent;
   if (helper && !parent) {
     assert.equal(
@@ -106,7 +109,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       timeout,
       maxBuffer,
       windowsHide: true,
-      ...((renderer || pickerCapture) && args[0] === 'cp' ? { encoding: 'buffer' } : {}),
+      ...((renderer || productMode) && args[0] === 'cp' ? { encoding: 'buffer' } : {}),
     });
   };
   for (const name of ['plugin', 'client']) {
@@ -195,7 +198,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
     await writeFile(join(run, 'progress.json'), JSON.stringify(record, null, 2));
   };
   const retainDiagnostic = async (cleanup = false) => {
-    if (pickerCapture) {
+    if (productMode) {
       const archive = await command(
         ['cp', `${name}:/run/proceed/evidence/composition-diagnostic.json`, '-'],
         3000,
@@ -250,9 +253,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       integrity.push({ path, sha256: createHash('sha256').update(staged).digest('hex') });
     }
     await writeFile(join(run, 'input-integrity.json'), JSON.stringify(integrity, null, 2));
-    if (pickerCapture)
+    if (productMode)
       await writeFile(join(stage, 'input-integrity.json'), JSON.stringify(integrity));
-    if (renderer || pickerCapture) {
+    if (renderer || productMode) {
       const outerInputs = [
         'tests/run-harness-host.mjs',
         'tests/support/harness-linux-runner.mjs',
@@ -287,9 +290,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
         {
           candidate,
           image: linuxImage,
-          ...(pickerCapture
+          ...(productMode
             ? {
-                purpose: 'PRODUCT_PICKER_CAPTURE_ONLY',
+                purpose: navigationOnly ? 'PRODUCT_NAVIGATION_ONLY' : 'PRODUCT_PICKER_CAPTURE_ONLY',
                 qualification: 'UNQUALIFIED',
                 selectionProfile: null,
               }
@@ -301,7 +304,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
             ? { purpose: 'DIAGNOSTIC_CAPTURE_ONLY', profile: 'UNPROVEN' }
             : {}),
           payload,
-          command: `node tests/run-harness-host.mjs ${pickerCapture ? '--product-picker-capture-run' : rendererInventory ? '--renderer-inventory-run' : rendererDiagnostic ? '--renderer-diagnostic-run' : renderer ? '--renderer-run' : composition ? '--composition-run' : parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
+          command: `node tests/run-harness-host.mjs ${navigationOnly ? '--product-navigation-run' : pickerCapture ? '--product-picker-capture-run' : rendererInventory ? '--renderer-inventory-run' : rendererDiagnostic ? '--renderer-diagnostic-run' : renderer ? '--renderer-run' : composition ? '--composition-run' : parent ? '--parent-process-run' : helper ? '--helper-contract-run ' + helperEntry : firstOnly ? '--transport-first-exchange-run' : transport ? '--transport-run' : setupOnly ? '--broker-setup-run' : '--linux-run'}`,
         },
         null,
         2,
@@ -342,6 +345,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       ...(rendererDiagnostic ? ['--diagnostic-capture'] : []),
       ...(rendererInventory ? ['--metadata-inventory'] : []),
       ...(pickerCapture ? ['--product-picker-capture'] : []),
+      ...(navigationOnly ? ['--product-navigation'] : []),
       ...(helper && !parent ? ['/payload/' + helperEntry] : []),
     ]);
     created = true;
@@ -442,7 +446,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           assert.equal(diagnostic.diagnostic.profile, 'UNPROVEN');
         }
       }
-    } else if (pickerCapture) {
+    } else if (productMode) {
       const diagnostic = await retainDiagnostic();
       productDetailsAttempted = true;
       const details = await transferProductCapture(
@@ -459,7 +463,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       for (const [file, bytes] of details) await writeFile(evidenceDestination(file), bytes);
       assert.equal(waited.stdout.trim(), '0', 'PRODUCT_CAPTURE_FAILURE');
       assert.equal(diagnostic.status, 'PASS');
-      assert.equal(diagnostic.keys.enter, 0);
+      assert.equal(diagnostic.keys.enter, navigationOnly ? 1 : 0);
     } else if (composition) {
       // Fixed phase/classification is not raw capture. Detailed assertion export
       // is forbidden until the complete in-container raw scan has passed.
@@ -632,7 +636,7 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
       }
       try {
         // Also on failure, detailed evidence requires the complete raw scan.
-        if (pickerCapture) {
+        if (productMode) {
           assert.equal(productDetailsAttempted, false, 'NO_PRODUCT_TRANSFER_RETRY');
           productDetailsAttempted = true;
           const details = await transferProductCapture(
@@ -720,9 +724,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           containerExit: progressState?.containerExit ?? 'UNRUN',
           elapsed: Date.now() - started,
           image: linuxImage,
-          ...(pickerCapture
+          ...(productMode
             ? {
-                purpose: 'PRODUCT_PICKER_CAPTURE_ONLY',
+                purpose: navigationOnly ? 'PRODUCT_NAVIGATION_ONLY' : 'PRODUCT_PICKER_CAPTURE_ONLY',
                 qualification: 'UNQUALIFIED',
                 selectionProfile: null,
               }
@@ -746,9 +750,9 @@ export async function runLinuxHost(preflight, mode = 'platform', helperEntry) {
           failure,
           cleanup,
           evidence: run,
-          ...(pickerCapture
+          ...(productMode
             ? {
-                purpose: 'PRODUCT_PICKER_CAPTURE_ONLY',
+                purpose: navigationOnly ? 'PRODUCT_NAVIGATION_ONLY' : 'PRODUCT_PICKER_CAPTURE_ONLY',
                 qualification: 'UNQUALIFIED',
                 selectionProfile: null,
               }

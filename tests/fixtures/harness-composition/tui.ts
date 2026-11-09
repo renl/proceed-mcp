@@ -16,9 +16,11 @@ export default Plugin.define({
     const cleanupOrigin = performance.now();
     let phase = 'product-setup';
     const root = '/run/proceed/evidence/';
-    const { run, captureOnly } = JSON.parse(
-      readFileSync(root + 'composition-binding.json', 'utf8'),
-    );
+    const {
+      run,
+      captureOnly,
+      navigationOnly = false,
+    } = JSON.parse(readFileSync(root + 'composition-binding.json', 'utf8'));
     const snapshot = () =>
       context.data.session.list().map((s, n) => ({
         id: s.id,
@@ -47,7 +49,7 @@ export default Plugin.define({
           run,
           generation,
           live,
-          snapshot: captureOnly ? snapshot() : undefined,
+          snapshot: captureOnly || navigationOnly ? snapshot() : undefined,
           geometry: {
             width: context.renderer?.width,
             height: context.renderer?.height,
@@ -73,7 +75,7 @@ export default Plugin.define({
       phase = 'host-session-sync';
       await context.data.session.sync(session.id);
       if (!context.data.session.get(session.id)) throw new Error('Host session unresolved');
-      if (captureOnly) {
+      if (captureOnly || navigationOnly) {
         const second = await context.client.session.create({ title: 'Composition empty exchange' });
         await context.data.session.sync((second.data ?? second).id);
       }
@@ -89,15 +91,14 @@ export default Plugin.define({
           return;
         }
         try {
-          if (captureOnly) publish();
+          if (captureOnly || navigationOnly) publish();
           const request = JSON.parse(
             readFileSync(root + 'composition-selector-request.json', 'utf8'),
           );
           const token = `${request.kind ?? 'selector'}:${request.request}`;
           if (request.run !== run || request.generation !== generation || token === last) return;
           last = token;
-          // Read-only static bridge route. Capture retains its original zero-
-          // Enter observer. No navigation mode or input is enabled here.
+          // Read-only public bridge. The separate driver owns its closed keys.
           if (!captureOnly && request.kind === 'navigation-observation') {
             const observation = readNavigation(request);
             if (!live) return;
