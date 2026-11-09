@@ -147,6 +147,17 @@ function failure(error) {
   return { status: 500, body: STORAGE_ENVELOPE };
 }
 
+// A scanned member name is still raw text, so decoding it can fail on a body that
+// is not JSON at all (an unterminated key or an invalid escape). That is the same
+// caller error the ordinary parse translation reports, never a storage failure.
+function decodeMemberKey(token) {
+  try {
+    return JSON.parse(token);
+  } catch {
+    throw invalidRequest('request body must be JSON');
+  }
+}
+
 // JSON.parse silently keeps the last of duplicated members, so a reservation body
 // is scanned first. Object keys are the only strings directly after `{` or `,`, and
 // each token is decoded before comparison so escaped spellings collide. A repeated
@@ -166,7 +177,7 @@ function rejectRepeatedMembers(text) {
       }
       const current = stack[stack.length - 1];
       if (current instanceof Set && expectKey) {
-        const key = JSON.parse(text.slice(start, index + 1));
+        const key = decodeMemberKey(text.slice(start, index + 1));
         if (current.has(key)) throw invalidRequest('request body must not repeat a member');
         current.add(key);
         expectKey = false;
