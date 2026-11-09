@@ -72,9 +72,10 @@ const CREATION_FIELDS = new Set([
   'expires_in_seconds',
   'harness_route',
 ]);
-// A reservation accepts its display label and one optional immutable harness
-// route; anything else is an argument error rather than an ignored permission.
-const HANDLE_FIELDS = new Set(['session_label', 'harness_route']);
+// A reservation accepts its display label, one optional immutable harness route and
+// the optional preparation-time host boolean; anything else is an argument error
+// rather than an ignored permission.
+const HANDLE_FIELDS = new Set(['session_label', 'harness_route', 'host_configured']);
 const HARNESS_ROUTE_FIELDS = new Set(['harness_id', 'session_id']);
 // Harness wire bodies carry exactly their documented fields.
 const ENROLLMENT_FIELDS = new Set(['harness_id', 'owner_id']);
@@ -146,9 +147,55 @@ function failure(error) {
   return { status: 500, body: STORAGE_ENVELOPE };
 }
 
+// JSON.parse silently keeps the last of duplicated members, so a reservation body
+// is scanned first. Object keys are the only strings directly after `{` or `,`, and
+// each token is decoded before comparison so escaped spellings collide. A repeated
+// member is ambiguous, so it is refused rather than resolved to whichever spelling
+// arrived last.
+function rejectRepeatedMembers(text) {
+  const stack = [];
+  let expectKey = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '"') {
+      const start = index;
+      index += 1;
+      while (index < text.length && text[index] !== '"') {
+        if (text[index] === '\\') index += 1;
+        index += 1;
+      }
+      const current = stack[stack.length - 1];
+      if (current instanceof Set && expectKey) {
+        const key = JSON.parse(text.slice(start, index + 1));
+        if (current.has(key)) throw invalidRequest('request body must not repeat a member');
+        current.add(key);
+        expectKey = false;
+      }
+      continue;
+    }
+    if (char === '{') {
+      stack.push(new Set());
+      expectKey = true;
+      continue;
+    }
+    if (char === '[') {
+      stack.push(null);
+      expectKey = false;
+      continue;
+    }
+    if (char === '}' || char === ']') {
+      stack.pop();
+      expectKey = false;
+      continue;
+    }
+    if (char === ',') expectKey = stack[stack.length - 1] instanceof Set;
+  }
+}
+
 // The whole body is drained so a rejected request still receives its response,
-// while only the admitted prefix is retained in memory.
-async function readJsonBody(request) {
+// while only the admitted prefix is retained in memory. A strict body also refuses
+// repeated object members before any of it is read as a value.
+async function readJsonBody(request, { strictMembers = false } = {}) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
@@ -157,9 +204,11 @@ async function readJsonBody(request) {
   }
   if (size > MAX_BODY_BYTES) throw invalidRequest('request body exceeds 64 KiB of UTF-8 JSON');
   if (size === 0) return {};
+  const text = Buffer.concat(chunks).toString('utf8');
+  if (strictMembers) rejectRepeatedMembers(text);
   let value;
   try {
-    value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    value = JSON.parse(text);
   } catch {
     throw invalidRequest('request body must be JSON');
   }
@@ -261,17 +310,27 @@ export function createPortableServer({
   };
 
   const reserve = async (request, response, principal) => {
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, { strictMembers: true });
     for (const key of Object.keys(body)) {
       if (!HANDLE_FIELDS.has(key)) {
         throw invalidRequest(`request body must not contain ${key}`);
       }
     }
     const harnessRoute = harnessRouteFrom(body.harness_route);
+    // Preparation context is a literal boolean only: an omitted member is the legacy
+    // unknown rather than an inferred false, and one prepared without a configured
+    // host cannot also claim a route.
+    if (body.host_configured !== undefined && typeof body.host_configured !== 'boolean') {
+      throw invalidRequest('host_configured must be the literal boolean true or false');
+    }
+    if (body.host_configured === false && harnessRoute !== undefined) {
+      throw invalidRequest('host_configured false cannot accompany a harness route');
+    }
     const reservation = await broker.reserveHandle({
       ownerId: principal.ownerId,
       sessionLabel: body.session_label,
       harnessRoute,
+      hostConfigured: body.host_configured,
     });
     send(response, 201, reservation);
   };

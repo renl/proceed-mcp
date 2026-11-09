@@ -220,6 +220,15 @@ const DELIVERY_STATES = new Set([
   'blocked',
 ]);
 const EVENT_STATES = new Set(['unverified', 'unsupported', 'verified']);
+// Design section 2: harness eligibility is the broker's own observation. It has
+// exactly two fields, three states and three unavailable reasons, and a value that
+// disagrees with the resolution it accompanies is not repaired into a status.
+const HARNESS_CHANNEL_FIELDS = ['reason', 'state'];
+const HARNESS_CHANNEL_REASONS = new Set([
+  'HOST_NOT_CONFIGURED',
+  'SESSION_ROUTE_UNAVAILABLE',
+  'OPERATOR_NOT_ENROLLED',
+]);
 // Design section 3 "Response fields and authority privacy": a representation exposes
 // only these fields, and the two nested objects expose only their documented members.
 // Additional broker metadata is additive detail, so it is omitted rather than rejected
@@ -243,6 +252,7 @@ const COMMON_FIELDS = [
   'delivery_state',
   'delivery_error',
   'event_capability',
+  'harness_channel',
 ];
 const DIAGNOSTIC_FIELDS = ['code', 'message', 'retryable'];
 const EVENT_FIELDS = ['status', 'revision', 'reason'];
@@ -262,6 +272,9 @@ function projection(body) {
   value.delivery_error =
     body.delivery_error === null ? null : admitted(body.delivery_error, DIAGNOSTIC_FIELDS);
   value.event_capability = admitted(body.event_capability, EVENT_FIELDS);
+  // The admitted status is copied unchanged, as a fresh object, so neither
+  // projection can be edited back into a different eligibility.
+  value.harness_channel = admitted(body.harness_channel, HARNESS_CHANNEL_FIELDS);
   return value;
 }
 
@@ -295,6 +308,21 @@ function events(value) {
   return pinned('revision') && pinned('reason');
 }
 
+// A pending request carries one declared eligibility observation, and a terminal
+// one carries only its closure. A missing, additional, malformed or
+// resolution-contradicting object proves no status, so it is never promoted and
+// never replaced with an invented one.
+function harnessChannel(value, resolution) {
+  if (!isPlainObject(value)) return false;
+  if (Object.keys(value).length !== 2) return false;
+  if (!Object.hasOwn(value, 'state') || !Object.hasOwn(value, 'reason')) return false;
+  if (resolution === 'pending') {
+    if (value.state === 'eligible') return value.reason === null;
+    return value.state === 'unavailable' && HARNESS_CHANNEL_REASONS.has(value.reason);
+  }
+  return value.state === 'closed' && value.reason === null;
+}
+
 // A request representation is this outcome only when it names the prepared handle,
 // the committed request and its complete common view; a pending or invented shape is
 // never promoted, and a terminal one names exactly one decision. What survives is the
@@ -304,7 +332,9 @@ function requestView(body, handle, requestId) {
   // A disclosed authority field makes the whole representation unusable, before any
   // of it is promoted or reported, and nothing from it is echoed.
   if (AUTHORITY_FIELDS.some((field) => Object.hasOwn(body, field))) return null;
-  if (body.request_handle !== handle) return null;
+  if (typeof body.request_handle !== 'string' || !REQUEST_HANDLE_PATTERN.test(body.request_handle))
+    return null;
+  if (handle !== null && body.request_handle !== handle) return null;
   if (typeof body.request_id !== 'string' || !REQUEST_ID_PATTERN.test(body.request_id)) return null;
   if (requestId !== null && body.request_id !== requestId) return null;
   if (
@@ -324,6 +354,9 @@ function requestView(body, handle, requestId) {
   ) {
     return null;
   }
+  // The derived status travels with the representation it describes, so a
+  // resolution and an eligibility that cannot both be true are unusable.
+  if (!harnessChannel(body.harness_channel, body.resolution)) return null;
   // A live request carries no outcome and no delivery standing yet, and its nullable
   // outcome fields are present.
   if (body.resolution === 'pending') {
@@ -507,6 +540,20 @@ export function createToolExecutor({ client, waitClient, registration, harnessId
     return outcomeOf(sent.response);
   };
 
+  // A management success is the same complete common representation, bound to the
+  // exact request the caller named, so a value that cannot be that representation
+  // is unusable rather than a generic object result.
+  const manage = async (method, path, body, headers, requestId, signal) => {
+    const sent = await transmit(client, method, path, body, headers, signal);
+    if (sent.error !== undefined) return localFailure(sent);
+    const { status } = sent.response;
+    if (status >= 200 && status < 300) {
+      const view = requestView(sent.response.body, null, requestId);
+      return view === null ? unusable() : complete(view, false);
+    }
+    return outcomeOf(sent.response);
+  };
+
   // One creation per invocation, then that same invocation waits on the broker's bounded
   // poll; a pending receipt is not its result and no returned write is reported.
   async function requestApproval(args, signal, context) {
@@ -665,6 +712,11 @@ export function createToolExecutor({ client, waitClient, registration, harnessId
     // routes keep their owner-plus-capability authority exactly as before.
     if (name === 'prepare_approval') {
       const body = args.session_label === undefined ? {} : { session_label: args.session_label };
+      // Design section 3: this adapter's own CLI-validated startup configuration is
+      // the only preparation context, and it is always supplied so a configured but
+      // unroutable preparation is distinguishable from an unconfigured one. Model
+      // arguments and the foreground session never supply it.
+      body.host_configured = harnessId !== null;
       const sessionId = routedSession(context);
       const route = routeBody(sessionId);
       if (route !== null) body.harness_route = route;
@@ -689,9 +741,18 @@ export function createToolExecutor({ client, waitClient, registration, harnessId
     // carry an unexpected segment.
     const path = `/v1/requests/${encodeURIComponent(args.request_id)}`;
     const headers = { [CAPABILITY_HEADER]: args.request_capability };
-    if (name === 'get_approval') return send('GET', path, undefined, headers, signal);
-    if (name === 'cancel_approval') return send('POST', `${path}/cancel`, {}, headers, signal);
-    return send('POST', `${path}/acknowledge`, { decision_id: args.decision_id }, headers, signal);
+    if (name === 'get_approval')
+      return manage('GET', path, undefined, headers, args.request_id, signal);
+    if (name === 'cancel_approval')
+      return manage('POST', `${path}/cancel`, {}, headers, args.request_id, signal);
+    return manage(
+      'POST',
+      `${path}/acknowledge`,
+      { decision_id: args.decision_id },
+      headers,
+      args.request_id,
+      signal,
+    );
   }
 
   return {

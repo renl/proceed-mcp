@@ -961,11 +961,19 @@ function exactFields(value, fields) {
 
 // Replay trusts only what the writer committed: the mutation carries exactly
 // the persisted fields, and any deviation, unknown operation or reused
-// identifier stops recovery before a byte is rewritten.
+// identifier stops recovery before a byte is rewritten. The preparation context
+// boolean is the one optional member, because its absence is the legacy unknown.
 function readReservation(mutation) {
-  exactFields(mutation, RESERVATION_FIELDS);
+  const context = Object.hasOwn(mutation, 'host_configured');
+  exactFields(
+    mutation,
+    context ? [...RESERVATION_FIELDS, 'host_configured'].sort() : RESERVATION_FIELDS,
+  );
   if (typeof mutation.owner_id !== 'string' || mutation.owner_id.length === 0) {
     throw integrity(`${RESERVE_OP} requires an owner`);
+  }
+  if (context && typeof mutation.host_configured !== 'boolean') {
+    throw integrity(`${RESERVE_OP} has a nonboolean preparation host context`);
   }
   if (!REQUEST_HANDLE_PATTERN.test(mutation.request_handle)) {
     throw integrity(`${RESERVE_OP} has a malformed request handle`);
@@ -984,7 +992,7 @@ function readReservation(mutation) {
   ) {
     throw integrity(`${RESERVE_OP} has a malformed preparation time`);
   }
-  return {
+  const record = {
     owner_id: mutation.owner_id,
     request_handle: mutation.request_handle,
     request_id: mutation.request_id,
@@ -992,6 +1000,10 @@ function readReservation(mutation) {
     session_label: mutation.session_label,
     prepared_at: mutation.prepared_at,
   };
+  // Omission stays absent in memory, never an inferred false, so a legacy record
+  // keeps its unknown preparation context through every later view.
+  if (context) record.host_configured = mutation.host_configured;
+  return record;
 }
 
 // A stored instant keeps its exact second and its fraction as written, so an
@@ -2232,7 +2244,10 @@ function stageCreate(record, staged, pairing, reservedNow) {
     // A routed request is bound to its immutable preparation route. The
     // presentation binding is a later committed fact; occupancy starts with this
     // creation, so a second unresolved request in one session is invalid history.
+    // Preparation context is materialized from the retained reservation only, so a
+    // legacy reservation without the member stays unknown.
     harness_route: null,
+    host_configured: reservation.host_configured,
     presentation_id: null,
   };
   const route = staged.routes.get(request.request_id) ?? null;
@@ -2802,6 +2817,9 @@ function stageHarnessRoute(record, staged) {
   if (reservation.owner_id !== record.owner_id) {
     throw integrity(`${HARNESS_ROUTE_OP} does not match the reserved principal`);
   }
+  if (reservation.host_configured === false) {
+    throw integrity(`${HARNESS_ROUTE_OP} accompanies a reservation without a configured host`);
+  }
   if (staged.routes.has(record.request_id)) {
     throw integrity(`${HARNESS_ROUTE_OP} binds the request twice`);
   }
@@ -3225,9 +3243,10 @@ class PortableBroker {
 
   // Reserves fresh authority for one preparation call. Validated up front, then
   // serialized so one journal append per call is ordered with every other
-  // mutation this broker performs. An optional harness route is persisted with
-  // the reservation; it is routing context, never request or decision authority.
-  reserveHandle({ ownerId, sessionLabel, harnessRoute } = {}) {
+  // mutation this broker performs. An optional harness route and the optional
+  // preparation-time host context are persisted with the reservation; both are
+  // description of the caller's own adapter, never request or decision authority.
+  reserveHandle({ ownerId, sessionLabel, harnessRoute, hostConfigured } = {}) {
     const refusal = this.#admissionRefusal();
     if (refusal !== null) return Promise.reject(refusal);
     if (!this.#recovered) {
@@ -3240,6 +3259,14 @@ class PortableBroker {
     const label = sessionLabel === undefined ? owner.label : sessionLabel;
     const problem = labelProblem(label);
     if (problem !== null) return Promise.reject(invalidArgument(problem));
+    // Preparation context is a literal boolean only, and a reservation that had no
+    // configured host cannot also claim a session route. Either refusal happens
+    // before the queue, so nothing is sampled, queued or appended.
+    if (hostConfigured !== undefined && typeof hostConfigured !== 'boolean') {
+      return Promise.reject(
+        invalidArgument('host_configured must be the literal boolean true or false'),
+      );
+    }
     let route = null;
     if (harnessRoute !== undefined) {
       if (!isPlainObject(harnessRoute)) {
@@ -3250,7 +3277,12 @@ class PortableBroker {
       const sessionId = requireSessionId(harnessRoute.sessionId);
       route = { harnessId: harnessRoute.harnessId, sessionId };
     }
-    return this.#enqueue(() => this.#reserve(ownerId, label, route));
+    if (hostConfigured === false && route !== null) {
+      return Promise.reject(
+        invalidArgument('host_configured false cannot accompany a harness route'),
+      );
+    }
+    return this.#enqueue(() => this.#reserve(ownerId, label, route, hostConfigured));
   }
 
   // Authenticates a reservation with its capability. Missing, malformed,
@@ -3616,7 +3648,7 @@ class PortableBroker {
           chat_id: mapping.chat_id,
           message_id: mapping.message_id,
           decision_id: request.decision_id,
-          request: requestView(request),
+          request: this.#view(request),
         });
       } else if (
         STATUS_DISPLAY_STATES.has(request.delivery_state) &&
@@ -3629,7 +3661,7 @@ class PortableBroker {
           message_id: mapping.message_id,
           decision_id: request.decision_id,
           delivery_state: request.delivery_state,
-          request: requestView(request),
+          request: this.#view(request),
         });
       }
     }
@@ -3640,7 +3672,7 @@ class PortableBroker {
           request_id: request.request_id,
           chat_id: request.pairing_snapshot.chat_id,
           callback_token: request.callback_token,
-          request: requestView(request),
+          request: this.#view(request),
           last_failure_code: request.lastFailureCode,
         })),
       edits: [...controls, ...statuses],
@@ -3670,7 +3702,7 @@ class PortableBroker {
         .map((request) => ({
           request_id: request.request_id,
           chat_id: request.pairing_snapshot.chat_id,
-          request: requestView(request),
+          request: this.#view(request),
         })),
     };
   }
@@ -3718,7 +3750,7 @@ class PortableBroker {
   snapshot() {
     return {
       prepared: [...this.#byHandle.values()].map(reservationView),
-      requests: [...this.#requests.values()].map(requestView),
+      requests: [...this.#requests.values()].map((request) => this.#view(request)),
     };
   }
 
@@ -4091,7 +4123,7 @@ class PortableBroker {
     }
   }
 
-  async #reserve(ownerId, sessionLabel, route = null) {
+  async #reserve(ownerId, sessionLabel, route = null, hostConfigured = undefined) {
     const requestHandle = randomRequestHandle();
     const requestId = randomRequestId();
     const requestCapability = randomRequestCapability();
@@ -4117,6 +4149,10 @@ class PortableBroker {
       session_label: sessionLabel,
       prepared_at: utcTimestamp(this.#clock()),
     };
+    // The preparation-time host context commits in the same transaction as the
+    // optional route, and omission stays absent so a legacy reservation keeps its
+    // unknown meaning.
+    if (hostConfigured !== undefined) record.host_configured = hostConfigured;
     // The route is committed with its reservation, so no usable handle exists
     // without the immutable binding it was prepared for.
     const mutations = [record];
@@ -4157,6 +4193,35 @@ class PortableBroker {
     this.#byHandle.set(record.request_handle, record);
     this.#byRequestId.set(record.request_id, record);
     this.#byVerifier.set(record.capability_hash, record);
+  }
+
+  // Design section 2's derived eligibility, computed at observation time and never
+  // stored: a terminal request is closed first, then the preparation-time host
+  // context, then the request's own durable route enablement, and only then the
+  // current active enrollment for that exact scope. An absent context is the legacy
+  // unknown, which never asserts a configured host, so a route-less legacy request
+  // reports the missing safe route instead.
+  #channel(request) {
+    if (request.resolution !== 'pending') return { state: 'closed', reason: null };
+    if (request.host_configured === false) {
+      return { state: 'unavailable', reason: 'HOST_NOT_CONFIGURED' };
+    }
+    const route = request.harness_route;
+    if (route === null || request.presentation_id === null) {
+      return { state: 'unavailable', reason: 'SESSION_ROUTE_UNAVAILABLE' };
+    }
+    for (const active of this.#activeOperators.values()) {
+      if (active.owner_id === route.owner_id && active.harness_id === route.harness_id) {
+        return { state: 'eligible', reason: null };
+      }
+    }
+    return { state: 'unavailable', reason: 'OPERATOR_NOT_ENROLLED' };
+  }
+
+  // The common representation every authorized observation uses, with the status
+  // derived from this broker's own retained facts and current durable eligibility.
+  #view(request) {
+    return { ...requestView(request), harness_channel: this.#channel(request) };
   }
 
   // Authority binding for a target read, resolved before the queue: the principal
@@ -4351,7 +4416,10 @@ class PortableBroker {
       // bounded by this request's response opening rather than an allocation.
       promptFailureAt: null,
       promptFailureCode: null,
+      // Preparation context is materialized from the retained reservation, never
+      // from the creating or observing adapter, and its absence stays unknown.
       harness_route: storedRoute,
+      host_configured: this.#byRequestId.get(reservation.request_id)?.host_configured,
       presentation_id: null,
     };
     // The complete plain-text presentation is measured before the append, so a
@@ -4397,7 +4465,7 @@ class PortableBroker {
       this.#presentations.set(presentationId, request.request_id);
     }
     this.#logger('portable.request.created', { request_id: request.request_id });
-    return { created: true, request: requestView(request) };
+    return { created: true, request: this.#view(request) };
   }
 
   // The one unresolved routed request occupying this scope and session, if any.
@@ -4616,7 +4684,7 @@ class PortableBroker {
       };
       await this.#commitFor([mutation], [requestId]);
       this.#installClosure(mutation, 'expired');
-      this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
+      this.#waiters.wake(requestId, { state: 'terminal', request: this.#view(request) });
       return harnessDecisionView(request, false);
     }
     // A recorded time before creation cannot describe this request's lifetime, so
@@ -4654,7 +4722,7 @@ class PortableBroker {
       session_id: sessionId,
       presentation_id: presentationId,
     };
-    this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
+    this.#waiters.wake(requestId, { state: 'terminal', request: this.#view(request) });
     this.#logger('portable.request.resolved', { request_id: requestId, resolution });
     return harnessDecisionView(request, true);
   }
@@ -4969,7 +5037,7 @@ class PortableBroker {
     return {
       chat_id: request.pairing_snapshot.chat_id,
       callback_token: request.callback_token,
-      request: requestView(request),
+      request: this.#view(request),
     };
   }
 
@@ -5016,7 +5084,7 @@ class PortableBroker {
       await this.#commitExpiry(sampled.milliseconds, [request]);
       return null;
     }
-    return { chat_id: request.pairing_snapshot.chat_id, request: requestView(request) };
+    return { chat_id: request.pairing_snapshot.chat_id, request: this.#view(request) };
   }
 
   // Receipt and callback-resolution turns share the ordinary admission and
@@ -5045,7 +5113,7 @@ class PortableBroker {
     const owner = this.#mappings.get(key);
     if (owner !== undefined) {
       const mine = owner.role === 'request' && owner.request_id === requestId;
-      return mine ? requestView(request) : null;
+      return mine ? this.#view(request) : null;
     }
     const sampled = sentTime(this.#clock);
     if (request.preparedAt === null || compareInstants(sampled.instant, request.preparedAt) < 0) {
@@ -5065,7 +5133,7 @@ class PortableBroker {
     request.mapped = true;
     request.telegram_state = 'sent';
     this.#logger('portable.presentation.sent', { request_id: requestId });
-    return requestView(request);
+    return this.#view(request);
   }
 
   // One serialized failed-receipt turn (design section 5, C2a-ii). Every actual
@@ -5099,7 +5167,7 @@ class PortableBroker {
     request.lastFailureCode = errorCode;
     if (!request.mapped) request.telegram_state = 'failed';
     this.#logger('portable.presentation.failed', { request_id: requestId });
-    return requestView(request);
+    return this.#view(request);
   }
 
   // One serialized prompt-sent turn (design section 5, C3d). The target, its
@@ -5119,7 +5187,7 @@ class PortableBroker {
     const existing = this.#mappings.get(key);
     if (existing !== undefined) {
       const mine = existing.role === 'prompt' && existing.request_id === requestId;
-      return mine ? { sent: false, request: requestView(request) } : null;
+      return mine ? { sent: false, request: this.#view(request) } : null;
     }
     const sampled = sentTime(this.#clock);
     if (compareInstants(sampled.instant, request.openedAt) < 0) {
@@ -5144,7 +5212,7 @@ class PortableBroker {
     }
     this.#mappings.set(key, promptMapping(requestId, chatId, messageId));
     this.#logger('portable.prompt.sent', { request_id: requestId });
-    return { sent: true, request: requestView(request) };
+    return { sent: true, request: this.#view(request) };
   }
 
   // One serialized prompt-failure turn (design section 5, C3d). The target and the
@@ -5198,7 +5266,7 @@ class PortableBroker {
     request.promptFailureAt = sampled.instant;
     request.promptFailureCode = errorCode;
     this.#logger('portable.prompt.failed', { request_id: requestId });
-    return { request: requestView(request) };
+    return { request: this.#view(request) };
   }
 
   // A receipt's only write path: an append that did not already carry the storage
@@ -5226,7 +5294,7 @@ class PortableBroker {
     const mapping = this.#mappings.get(mappingKey(chatId, messageId));
     if (mapping === undefined || mapping.role !== 'request') return null;
     if (mapping.request_id !== requestId) return null;
-    if (mapping.retired) return { retired: false, request: requestView(request) };
+    if (mapping.retired) return { retired: false, request: this.#view(request) };
     await this.#appendControlsRetired([
       {
         op: RETIRED_OP,
@@ -5238,7 +5306,7 @@ class PortableBroker {
     ]);
     mapping.retired = true;
     this.#logger('portable.controls.retired', { request_id: requestId });
-    return { retired: true, request: requestView(request) };
+    return { retired: true, request: this.#view(request) };
   }
 
   // A retirement's only write path: #append has already installed the fence for an
@@ -5273,7 +5341,7 @@ class PortableBroker {
     if (mapping.request_id !== requestId || !mapping.retired) return null;
     if (request.delivery_state !== deliveryState) return null;
     if (sameShownPair(mapping.shown, decisionId, deliveryState)) {
-      return { shown: false, request: requestView(request) };
+      return { shown: false, request: this.#view(request) };
     }
     await this.#appendStatusShown([
       {
@@ -5287,7 +5355,7 @@ class PortableBroker {
     ]);
     mapping.shown = { decision_id: decisionId, delivery_state: deliveryState };
     this.#logger('portable.status.shown', { request_id: requestId });
-    return { shown: true, request: requestView(request) };
+    return { shown: true, request: this.#view(request) };
   }
 
   // A status display's only write path: #append has already installed the fence
@@ -5311,7 +5379,7 @@ class PortableBroker {
       const now = this.#clock();
       if (isDue(request, now)) await this.#commitExpiry(now, [request]);
     }
-    return requestView(request);
+    return this.#view(request);
   }
 
   // Closes at most this one target as cancelled and reports the committed
@@ -5322,11 +5390,11 @@ class PortableBroker {
   async #cancel(requestId) {
     const request = this.#requests.get(requestId);
     if (request === undefined) return null;
-    if (request.resolution !== 'pending') return requestView(request);
+    if (request.resolution !== 'pending') return this.#view(request);
     const sampled = cancellationTime(this.#clock);
     if (isDue(request, sampled.milliseconds)) {
       await this.#commitExpiry(sampled.milliseconds, [request]);
-      return requestView(request);
+      return this.#view(request);
     }
     // A recorded time before creation cannot describe this request's lifetime, so
     // it is the existing storage failure rather than a caller error.
@@ -5342,9 +5410,9 @@ class PortableBroker {
     };
     await this.#commitFor([mutation], [request.request_id]);
     this.#installClosure(mutation, 'cancelled');
-    this.#waiters.wake(request.request_id, { state: 'terminal', request: requestView(request) });
+    this.#waiters.wake(request.request_id, { state: 'terminal', request: this.#view(request) });
     this.#logger('portable.request.cancelled', { request_id: request.request_id });
-    return requestView(request);
+    return this.#view(request);
   }
 
   // One serialized callback-resolution turn (design section 5, C3 callback-core
@@ -5391,7 +5459,7 @@ class PortableBroker {
     };
     if (request.resolution !== 'pending') {
       await advance([cursorMutation], []);
-      return { result: 'retained', request: requestView(request) };
+      return { result: 'retained', request: this.#view(request) };
     }
     const sampled = turnTime(this.#clock, 'recording a callback resolution', 'resolution');
     // Reachability is selected while the mutation is constructed, so a later
@@ -5407,8 +5475,8 @@ class PortableBroker {
       };
       await advance([mutation, cursorMutation], [requestId]);
       this.#installClosure(mutation, 'expired');
-      this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
-      return { result: 'expired', request: requestView(request) };
+      this.#waiters.wake(requestId, { state: 'terminal', request: this.#view(request) });
+      return { result: 'expired', request: this.#view(request) };
     }
     // A recorded time before creation cannot describe this request's lifetime, so
     // it is the existing storage failure rather than a caller error.
@@ -5444,9 +5512,9 @@ class PortableBroker {
       update_id: updateId,
       ...mutation.source,
     };
-    this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
+    this.#waiters.wake(requestId, { state: 'terminal', request: this.#view(request) });
     this.#logger('portable.request.resolved', { request_id: requestId, resolution });
-    return { result: 'recorded', request: requestView(request) };
+    return { result: 'recorded', request: this.#view(request) };
   }
 
   // One serialized Respond-opening turn (design section 5, C3 opening checkpoint).
@@ -5486,7 +5554,7 @@ class PortableBroker {
     };
     if (request.resolution !== 'pending') {
       await advance([cursorMutation], []);
-      return { result: 'retained', request: requestView(request) };
+      return { result: 'retained', request: this.#view(request) };
     }
     const sampled = turnTime(this.#clock, 'opening a response', 'response opening');
     if (isDue(request, sampled.milliseconds)) {
@@ -5499,8 +5567,8 @@ class PortableBroker {
       };
       await advance([mutation, cursorMutation], [requestId]);
       this.#installClosure(mutation, 'expired');
-      this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
-      return { result: 'expired', request: requestView(request) };
+      this.#waiters.wake(requestId, { state: 'terminal', request: this.#view(request) });
+      return { result: 'expired', request: this.#view(request) };
     }
     // A recorded time before creation cannot describe this request's lifetime, so
     // it is the existing storage failure rather than a caller error.
@@ -5509,7 +5577,7 @@ class PortableBroker {
     }
     if (request.openedAt !== null) {
       await advance([cursorMutation], []);
-      return { result: 'open', request: requestView(request) };
+      return { result: 'open', request: this.#view(request) };
     }
     await advance(
       [
@@ -5530,7 +5598,7 @@ class PortableBroker {
     );
     request.openedAt = sampled.instant;
     this.#logger('portable.response.opened', { request_id: requestId });
-    return { result: 'opened', request: requestView(request) };
+    return { result: 'opened', request: this.#view(request) };
   }
 
   // One serialized text-resolution turn (design section 5, C3e-B). The admitted
@@ -5585,7 +5653,7 @@ class PortableBroker {
     };
     if (request.resolution !== 'pending') {
       await advance([cursorMutation], []);
-      return { result: 'retained', request: requestView(request) };
+      return { result: 'retained', request: this.#view(request) };
     }
     const sampled = turnTime(this.#clock, 'recording a text response', 'resolution');
     // Reachability is selected while the mutation is constructed, so a later
@@ -5601,8 +5669,8 @@ class PortableBroker {
       };
       await advance([mutation, cursorMutation], [requestId]);
       this.#installClosure(mutation, 'expired');
-      this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
-      return { result: 'expired', request: requestView(request) };
+      this.#waiters.wake(requestId, { state: 'terminal', request: this.#view(request) });
+      return { result: 'expired', request: this.#view(request) };
     }
     // A recorded time before creation cannot describe this request's lifetime, so
     // it is the existing storage failure rather than a caller error.
@@ -5638,9 +5706,9 @@ class PortableBroker {
       update_id: updateId,
       ...mutation.source,
     };
-    this.#waiters.wake(requestId, { state: 'terminal', request: requestView(request) });
+    this.#waiters.wake(requestId, { state: 'terminal', request: this.#view(request) });
     this.#logger('portable.request.resolved', { request_id: requestId, resolution: 'responded' });
-    return { result: 'recorded', request: requestView(request) };
+    return { result: 'recorded', request: this.#view(request) };
   }
 
   // One serialized wait admission (design section 3, G3). A queued call whose
@@ -5655,7 +5723,7 @@ class PortableBroker {
     if (request === undefined) return null;
     if (this.#waiters.has(requestId)) return WAIT_CONFLICT;
     if (request.resolution !== 'pending')
-      return { state: 'terminal', request: requestView(request) };
+      return { state: 'terminal', request: this.#view(request) };
     const entry = this.#waiters.enter({
       requestId,
       signal,
@@ -5666,7 +5734,7 @@ class PortableBroker {
       const { milliseconds } = turnTime(this.#clock, 'checking a wait deadline', 'wait');
       if (!isDue(request, milliseconds)) return { wait: entry.wait };
       await this.#commitExpiry(milliseconds, [request]);
-      return { state: 'terminal', request: requestView(request) };
+      return { state: 'terminal', request: this.#view(request) };
     } catch (error) {
       // A refused admission releases its slot, timer and listener without fencing.
       entry.release();
@@ -5682,11 +5750,11 @@ class PortableBroker {
     const request = this.#requests.get(requestId);
     if (request === undefined) return WAIT_DETACHED;
     if (request.resolution !== 'pending')
-      return { state: 'terminal', request: requestView(request) };
+      return { state: 'terminal', request: this.#view(request) };
     const { milliseconds } = turnTime(this.#clock, 'checking a wait deadline', 'wait');
     if (isDue(request, milliseconds)) await this.#commitExpiry(milliseconds, [request]);
     if (request.resolution === 'pending') return { state: 'pending' };
-    return { state: 'terminal', request: requestView(request) };
+    return { state: 'terminal', request: this.#view(request) };
   }
 
   // One serialized first-evidence turn (design sections 4 and 6, A2b). A pending
@@ -5707,7 +5775,7 @@ class PortableBroker {
       );
     }
     const field = kind === 'acknowledge' ? 'acknowledgedAt' : 'returnedAt';
-    if (request[field] !== null) return requestView(request);
+    if (request[field] !== null) return this.#view(request);
     const sampled = evidenceTime(this.#clock);
     if (request.resolvedAt === null || compareInstants(sampled.instant, request.resolvedAt) < 0) {
       throw storageFailure(`${op} would precede its resolution`, 'STORAGE_FAILURE');
@@ -5730,7 +5798,7 @@ class PortableBroker {
     // what first evidence means, and it never invents an error or a repair.
     request.delivery_error = null;
     this.#logger(`portable.request.${kind}`, { request_id: request.request_id });
-    return requestView(request);
+    return this.#view(request);
   }
 
   // Expiry work for one serialized turn: pending requests are grouped, and only a
@@ -5775,7 +5843,7 @@ class PortableBroker {
     for (const mutation of mutations) this.#installClosure(mutation, 'expired');
     for (const mutation of mutations) {
       const request = this.#requests.get(mutation.request_id);
-      this.#waiters.wake(mutation.request_id, { state: 'terminal', request: requestView(request) });
+      this.#waiters.wake(mutation.request_id, { state: 'terminal', request: this.#view(request) });
     }
     this.#logger('portable.request.expired', { count: mutations.length });
   }
