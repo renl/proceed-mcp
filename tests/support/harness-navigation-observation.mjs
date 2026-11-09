@@ -183,6 +183,12 @@ export function createProductNavigationObserver({
     moved,
     identity,
     selected;
+  let invalidated = false;
+  const active = () => assert.equal(invalidated, false);
+  const advance = (next) => {
+    active();
+    stage = next;
+  };
   let lastClock = -Infinity;
   const clock = () => {
     const tick = readProductPickerClock(now);
@@ -192,11 +198,14 @@ export function createProductNavigationObserver({
   };
   const fence = (work) => {
     try {
-      assert.notEqual(stage, 'INVALID');
+      active();
       clock();
-      return work();
+      active();
+      const result = work();
+      active();
+      return result;
     } catch {
-      stage = 'INVALID';
+      invalidated = true;
       assert.fail('navigation admission refused');
     }
   };
@@ -239,7 +248,7 @@ export function createProductNavigationObserver({
   };
   return Object.freeze({
     invalidate() {
-      stage = 'INVALID';
+      invalidated = true;
     },
     initial() {
       return fence(() => {
@@ -247,7 +256,7 @@ export function createProductNavigationObserver({
         initial = observe();
         assert.ok(initial.rows[0].style.bold);
         assert.ok(initial.rows.slice(1).every((r) => !r.style.bold));
-        stage = 'READY_TO_MOVE';
+        advance('READY_TO_MOVE');
         return structuredClone(initial);
       });
     },
@@ -255,8 +264,10 @@ export function createProductNavigationObserver({
       return fence(() => {
         assert.equal(stage, 'READY_TO_MOVE');
         unchangedPicker(initial);
-        stage = 'AWAIT_MOVED';
+        advance('AWAIT_MOVED');
+        assert.equal(typeof moveDown, 'function');
         clock();
+        active();
         moveDown(); // One causally bracketed physical movement, not a callback result.
       });
     },
@@ -266,7 +277,7 @@ export function createProductNavigationObserver({
         moved = observe(initial);
         assert.equal(moved.frames, initial.frames + 1);
         assert.equal(productPickerInterval(initial, moved).emittedTransfer, true);
-        stage = 'PICKER';
+        advance('PICKER');
         return structuredClone(moved); // Still UNQUALIFIED and null profile.
       });
     },
@@ -276,8 +287,10 @@ export function createProductNavigationObserver({
         assert.deepEqual(session, sessions[1]);
         unchangedPicker(moved);
         selected = structuredClone(session);
-        stage = 'AWAIT_IDENTITY';
-        clock(); // Last operation before the bounded input callback.
+        advance('AWAIT_IDENTITY');
+        assert.equal(typeof enter, 'function');
+        clock();
+        active(); // After validation and the final clock, immediately before input.
         enter();
       });
     },
@@ -300,7 +313,7 @@ export function createProductNavigationObserver({
           screen: frame.generation,
           text: frame.text,
         };
-        stage = 'IDENTITY';
+        advance('IDENTITY');
         return structuredClone(identity);
       });
     },
@@ -320,8 +333,10 @@ export function createProductNavigationObserver({
         );
         assert.equal(frame.text, identity.text);
         assertCurrentIdentityFrame(frame.text, selected, admitted.geometry);
-        stage = 'DONE';
+        advance('DONE');
+        assert.equal(typeof enter, 'function');
         clock();
+        active(); // Invalidation is irreversible, including inside the clock reader.
         enter(); // Navigation only. No pending/decision or callback authority here.
       });
     },

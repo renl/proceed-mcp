@@ -592,18 +592,22 @@ test('forged/historical/fixture observations cannot grant authority or cross an 
   assert.deepEqual(wrong.writes, ['Down']);
 });
 
-test('actual composition adapter drives current-cell observer with fresh independent bindings and snapshot', async () => {
+async function compositionObserverAdapter() {
   const source = await readFile(
     new URL('support/harness-composition-inner.mjs', import.meta.url),
     'utf8',
   );
   const start = source.indexOf('export function compositionNavigationObserver(');
   const finish = source.indexOf('\nconst evidence =', start);
-  const adapter = runInNewContext(
+  return runInNewContext(
     '(' + source.slice(start + 'export '.length, finish).trim() + ')',
     { createProductNavigationObserver, structuredClone },
     { timeout: 100 },
   );
+}
+
+test('actual composition adapter drives current-cell observer with fresh independent bindings and snapshot', async () => {
+  const adapter = await compositionObserverAdapter();
   const factory = (io) =>
     adapter({
       ...io,
@@ -628,6 +632,199 @@ test('actual composition adapter drives current-cell observer with fresh indepen
       observer.identity();
       observer.openQuestion();
       assert.deepEqual(c.writes, ['Down', 'Enter', 'Enter']);
+    }
+  }
+});
+
+test('actual composition readers cannot revive invalidation during either final admission', async () => {
+  const adapter = await compositionObserverAdapter();
+  for (const second of [false, true]) {
+    for (const boundary of ['live', 'raw', 'fixed', 'validation', 'final-clock']) {
+      for (const reason of ['observed gap', 'setup replacement', 'observed capability change']) {
+        let observer,
+          armed = false,
+          clocks = 0,
+          samples = 0,
+          hits = 0;
+        const invalidate = () => {
+          hits++;
+          observer.invalidate(reason);
+        };
+        const c = navigationCase({
+          factory: (io) =>
+            adapter({
+              ...io,
+              executionBinding: io.binding,
+              runtime: io.binding.runtime,
+              run: io.binding.run,
+              setup: io.binding.setup,
+              readLive: () => {
+                if (armed) samples++;
+                if (armed && boundary === 'live') invalidate();
+                return io.sample().live;
+              },
+              readRaw: () => {
+                if (armed && boundary === 'raw') invalidate();
+                return io.sample().raw;
+              },
+              readExecutionBinding: () => {
+                if (armed && boundary === 'fixed') invalidate();
+                return io.sample().binding;
+              },
+              now: () => {
+                if (armed && ++clocks === 2 && boundary === 'final-clock') invalidate();
+                return io.now();
+              },
+            }),
+        });
+        observer = c.ready();
+        if (second) {
+          observer.pickerEnter(productSnapshot[1]);
+          c.identity();
+          observer.identity();
+        }
+        // This accessor runs in read() validation after all three composition
+        // readers returned. Its value stays valid, so only invalidation fences it.
+        Object.defineProperty(c.state.live, 'live', {
+          configurable: true,
+          get() {
+            if (armed && boundary === 'validation') invalidate();
+            return true;
+          },
+        });
+        armed = true;
+        const admit = () =>
+          second ? observer.openQuestion() : observer.pickerEnter(productSnapshot[1]);
+        assert.throws(admit, (error) => error.message === 'navigation admission refused');
+        assert.ok(hits > 0, boundary);
+        assert.equal(samples, 1, 'no resampling or observer rebuild during admission');
+        assert.deepEqual(c.writes, second ? ['Down', 'Enter'] : ['Down']);
+        armed = false;
+        // Restoring every reader to valid values cannot recover this lifetime.
+        assert.throws(admit, /navigation admission refused/);
+        assert.throws(() => observer.initial(), /navigation admission refused/);
+        assert.deepEqual(c.writes, second ? ['Down', 'Enter'] : ['Down']);
+        assert.equal(samples, 1);
+      }
+    }
+  }
+});
+
+test('actual composition observation-stage invalidation is irreversible before any later admission', async () => {
+  const adapter = await compositionObserverAdapter();
+  for (const stage of ['initial', 'moveDown', 'moved', 'identity']) {
+    let observer,
+      armed = false;
+    const c = navigationCase({
+      factory: (io) =>
+        adapter({
+          ...io,
+          executionBinding: io.binding,
+          runtime: io.binding.runtime,
+          run: io.binding.run,
+          setup: io.binding.setup,
+          readExecutionBinding: () => io.sample().binding,
+          readLive: () => io.sample().live,
+          readRaw: () => {
+            if (armed) observer.invalidate('observation gap during stage');
+            return io.sample().raw;
+          },
+        }),
+    });
+    observer = c.create();
+    if (stage !== 'initial') observer.initial();
+    if (['moved', 'identity'].includes(stage)) {
+      observer.moveDown();
+      c.state.raw = Buffer.concat([c.state.raw, Buffer.from(c.paint(2))]);
+    }
+    if (stage === 'identity') {
+      observer.moved();
+      observer.pickerEnter(productSnapshot[1]);
+      c.identity();
+    }
+    const before = [...c.writes];
+    armed = true;
+    assert.throws(() => observer[stage](), /navigation admission refused/);
+    armed = false;
+    assert.throws(() => observer[stage](), /navigation admission refused/);
+    assert.throws(() => observer.pickerEnter(productSnapshot[1]), /navigation admission refused/);
+    assert.throws(() => observer.openQuestion(), /navigation admission refused/);
+    assert.deepEqual(c.writes, before);
+  }
+});
+
+test('actual composition final readers fail closed on state changes, deadline, exceptions and unavailable input', async () => {
+  const adapter = await compositionObserverAdapter();
+  for (const second of [false, true]) {
+    for (const boundary of [
+      'dispose',
+      'setup',
+      'snapshot',
+      'resize',
+      'deadline',
+      'late',
+      'throw-live',
+      'throw-raw',
+      'throw-fixed',
+      'throw-enter',
+      ...(!second ? ['missing-enter'] : []),
+    ]) {
+      let armed = false,
+        samples = 0;
+      const c = navigationCase({
+        factory: (io) =>
+          adapter({
+            ...io,
+            enter:
+              boundary === 'missing-enter'
+                ? undefined
+                : () => {
+                    if (armed && boundary === 'throw-enter') throw Error('private-input-detail');
+                    io.enter();
+                  },
+            executionBinding: io.binding,
+            runtime: io.binding.runtime,
+            run: io.binding.run,
+            setup: io.binding.setup,
+            readLive: () => {
+              if (armed) {
+                samples++;
+                if (boundary === 'throw-live') throw Error('private-reader-detail');
+                if (boundary === 'dispose') c.state.live.live = false;
+                if (boundary === 'setup') c.state.live.generation = 'replacement';
+                if (boundary === 'snapshot') c.state.live.snapshot[1].title = 'changed';
+                if (boundary === 'resize') c.state.live.geometry.resizeSequence++;
+              }
+              return io.sample().live;
+            },
+            readRaw: () => {
+              if (armed && boundary === 'throw-raw') throw Error('private-reader-detail');
+              if (armed && ['deadline', 'late'].includes(boundary))
+                c.setTick(boundary === 'deadline' ? 10 : 11);
+              return io.sample().raw;
+            },
+            readExecutionBinding: () => {
+              if (armed && boundary === 'throw-fixed') throw Error('private-reader-detail');
+              return io.sample().binding;
+            },
+          }),
+      });
+      const observer = c.ready();
+      if (second) {
+        observer.pickerEnter(productSnapshot[1]);
+        c.identity();
+        observer.identity();
+      }
+      armed = true;
+      const admit = () =>
+        second ? observer.openQuestion() : observer.pickerEnter(productSnapshot[1]);
+      assert.throws(admit, (error) => error.message === 'navigation admission refused');
+      assert.equal(samples, 1);
+      assert.deepEqual(c.writes, second ? ['Down', 'Enter'] : ['Down']);
+      armed = false;
+      c.setTick(1);
+      assert.throws(admit, /navigation admission refused/);
+      assert.deepEqual(c.writes, second ? ['Down', 'Enter'] : ['Down']);
     }
   }
 });
