@@ -13,6 +13,12 @@ const PAIR = /^\/pair ([0-9a-f]{32})$/;
 // command-position classification of the whole raw message, exactly like
 // `/pair`, so trailing data or a later line stays ordinary content.
 const HARNESS = /^\/harness (hen_[a-f0-9]{32})$/;
+// `/harness_revoke <key_id>` is the one revocation command. It is a
+// command-position classification of the whole raw message, exactly like
+// `/harness`, so trailing data or a later line stays ordinary content and can
+// never reach a response writer.
+const REVOKE = /^\/harness_revoke ([a-f0-9]{64})$/;
+
 // Pairing intent is a command-position classification of the whole raw message, not a
 // search for `/pair` anywhere in its content: after any initial Unicode White_Space the
 // first delimited token must be exactly `/pair` or begin `/pair@`. A doubled space,
@@ -28,6 +34,11 @@ const harnessIntent = (text) => {
   if (typeof text !== 'string') return false;
   const token = FIRST_TOKEN.exec(text)[1];
   return token === '/harness' || token.startsWith('/harness@');
+};
+const revokeIntent = (text) => {
+  if (typeof text !== 'string') return false;
+  const token = FIRST_TOKEN.exec(text)[1];
+  return token === '/harness_revoke' || token.startsWith('/harness_revoke@');
 };
 const START = '/start';
 // Exact product copy (proposal C3 Product-Copy Annex) for this surface.
@@ -47,6 +58,11 @@ const CANCELLED =
 const RESOLVED = 'This request is already resolved. The recorded outcome is unchanged.';
 const GUIDANCE =
   'No response was recorded. Select Respond on the intended request, then reply to its prompt or send /respond <request_id> <text>. Text is instructions, not approval.';
+// One neutral revocation copy for a committed revocation and for a named key that
+// holds no authority, so the paired chat cannot learn whether another key exists.
+// It claims no decision and no changed request outcome.
+const REVOKED =
+  'Operator key is not active. Decisions need a newly confirmed key; pending requests and recorded outcomes are unchanged.';
 
 // The fixed ladder repeats its last step; a platform retry_after is honoured
 // when it is longer.
@@ -392,6 +408,32 @@ export function createPortableTelegramPoller({
     // A command-position enrollment attempt that fails the exact grammar keeps its
     // own state undisclosed and never falls through as response text.
     if (harnessIntent(text)) {
+      await broker.advanceCursor(id);
+      return true;
+    }
+
+    // `/harness_revoke <key_id>` removes the named key's decision authority for the
+    // exact paired private sender. The core rechecks the pairing, the active
+    // enrollment and its own cursor inside one serialized turn, so a foreign or
+    // replayed command changes nothing; this consumer never derives a target from
+    // the text. A repeated command is idempotent and answers the same copy.
+    const revokeCommand = typeof text === 'string' ? REVOKE.exec(text) : null;
+    if (revokeCommand !== null) {
+      if (!own) {
+        await broker.advanceCursor(id);
+        return true;
+      }
+      const result = await broker.revokeEnrollment({
+        keyId: revokeCommand[1],
+        userId: identity.userId,
+        chatId: identity.chatId,
+        updateId: id,
+      });
+      return result.result === 'stale' ? true : reply(identity.chatId, REVOKED);
+    }
+    // A command-position revocation attempt that fails the exact grammar keeps its
+    // own state undisclosed and never falls through as response text.
+    if (revokeIntent(text)) {
       await broker.advanceCursor(id);
       return true;
     }

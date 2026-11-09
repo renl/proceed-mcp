@@ -165,7 +165,9 @@ function interactionActive(generation, interaction) {
 
 // A resize invalidates the affected stage and its successors even when the new
 // geometry would still fit: the admission was observed for one dialog instance
-// only, so a fresh open is required. The listener belongs to the interaction, so
+// only, so a fresh open is required. An exchange this interaction already owns is
+// aborted at once (design section 2), so a stalled reply cannot keep its pending
+// take alive until another deadline. The listener belongs to the interaction, so
 // replacement, disposal and Cleanup remove it while a dialog is still open.
 function watchDisplayResize(context, interaction) {
   const renderer = context.renderer;
@@ -174,6 +176,7 @@ function watchDisplayResize(context, interaction) {
   }
   const onResize = () => {
     interaction.invalidated = true;
+    interaction.controller.abort();
   };
   renderer.on('resize', onResize);
   const detach = () => {

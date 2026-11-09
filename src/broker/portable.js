@@ -167,6 +167,7 @@ const ENROLL_PROPOSE_OP = 'harness.enrollment.propose';
 const ENROLL_NOTICE_OP = 'harness.enrollment.notice';
 const ENROLL_CONFIRM_OP = 'harness.enrollment.confirm';
 const ENROLL_DENY_OP = 'harness.enrollment.deny';
+const ENROLL_REVOKE_OP = 'harness.enrollment.revoke';
 const HARNESS_ROUTE_OP = 'harness.route';
 const HARNESS_PRESENT_OP = 'harness.presentation';
 const HARNESS_RESOLVE_OP = 'request.resolve.harness';
@@ -177,6 +178,7 @@ const HARNESS_OPS = new Set([
   ENROLL_NOTICE_OP,
   ENROLL_CONFIRM_OP,
   ENROLL_DENY_OP,
+  ENROLL_REVOKE_OP,
   HARNESS_ROUTE_OP,
   HARNESS_PRESENT_OP,
   HARNESS_RESOLVE_OP,
@@ -386,6 +388,18 @@ const CONFIRM_FIELDS = [
   'user_id',
 ];
 const DENY_FIELDS = ['denied_at', 'enrollment_id', 'op', 'update_id'];
+const REVOKE_FIELDS = [
+  'chat_id',
+  'enrollment_id',
+  'harness_id',
+  'key_id',
+  'op',
+  'owner_id',
+  'revoked_at',
+  'update_id',
+  'user_id',
+];
+
 // A preparation route is bound to its reserved handle and request; a presentation
 // binding is the durable correlation id that survives lost responses and restart.
 const ROUTE_FIELDS = ['harness_id', 'op', 'owner_id', 'request_handle', 'request_id', 'session_id'];
@@ -1813,6 +1827,48 @@ function readEnrollmentDeny(mutation) {
   };
 }
 
+function readEnrollmentRevoke(mutation) {
+  exactFields(mutation, REVOKE_FIELDS);
+  if (
+    typeof mutation.enrollment_id !== 'string' ||
+    !ENROLLMENT_ID_PATTERN.test(mutation.enrollment_id)
+  ) {
+    throw integrity(`${ENROLL_REVOKE_OP} has a malformed enrollment id`);
+  }
+  if (typeof mutation.key_id !== 'string' || !OPERATOR_KEY_ID_PATTERN.test(mutation.key_id)) {
+    throw integrity(`${ENROLL_REVOKE_OP} has a malformed operator fingerprint`);
+  }
+  const problem = scopeProblem(mutation.harness_id, mutation.owner_id);
+  if (problem !== null) throw integrity(`${ENROLL_REVOKE_OP}: ${problem}`);
+  if (identityProblem(mutation.user_id) !== null) {
+    throw integrity(`${ENROLL_REVOKE_OP} has a malformed actor`);
+  }
+  if (identityProblem(mutation.chat_id) !== null) {
+    throw integrity(`${ENROLL_REVOKE_OP} has a malformed chat id`);
+  }
+  if (!usableUpdateId(mutation.update_id)) {
+    throw integrity(
+      `${ENROLL_REVOKE_OP} needs a raw nonnegative update id with a safe next offset`,
+    );
+  }
+  const revokedAt = readInstant(mutation.revoked_at);
+  if (revokedAt === null) throw integrity(`${ENROLL_REVOKE_OP} has a malformed revocation time`);
+  return {
+    kind: 'enrollRevoke',
+    record: {
+      enrollment_id: mutation.enrollment_id,
+      key_id: mutation.key_id,
+      harness_id: mutation.harness_id,
+      owner_id: mutation.owner_id,
+      user_id: mutation.user_id,
+      chat_id: mutation.chat_id,
+      update_id: mutation.update_id,
+      revoked_at: mutation.revoked_at,
+      revokedAt,
+    },
+  };
+}
+
 function readHarnessRoute(mutation) {
   exactFields(mutation, ROUTE_FIELDS);
   if (typeof mutation.request_id !== 'string' || !REQUEST_ID_PATTERN.test(mutation.request_id)) {
@@ -1975,6 +2031,8 @@ function readMutation(mutation) {
       return readEnrollmentConfirm(mutation);
     case ENROLL_DENY_OP:
       return readEnrollmentDeny(mutation);
+    case ENROLL_REVOKE_OP:
+      return readEnrollmentRevoke(mutation);
     case HARNESS_ROUTE_OP:
       return readHarnessRoute(mutation);
     case HARNESS_PRESENT_OP:
@@ -2704,6 +2762,34 @@ function stageEnrollmentDeny(record, staged) {
   }
 }
 
+// Revocation removes exactly the active decision authority named by its own
+// enrollment and key; the enrollment record and every retained request outcome
+// stay in history. A revoked enrollment is not enrolled for scope purposes, so a
+// later proposal for the same scope is accepted and needs fresh confirmation.
+function stageEnrollmentRevoke(record, staged) {
+  const enrollment = staged.enrollments.get(record.enrollment_id);
+  if (enrollment === undefined) {
+    throw integrity(`${ENROLL_REVOKE_OP} names no proposed enrollment`);
+  }
+  if (enrollment.state !== 'enrolled') {
+    throw integrity(`${ENROLL_REVOKE_OP} targets an enrollment that is not enrolled`);
+  }
+  if (
+    enrollment.key_id !== record.key_id ||
+    enrollment.harness_id !== record.harness_id ||
+    enrollment.owner_id !== record.owner_id
+  ) {
+    throw integrity(`${ENROLL_REVOKE_OP} does not match the enrolled scope`);
+  }
+  const active = staged.activeOperators.get(record.key_id);
+  if (active === undefined || active.enrollment_id !== record.enrollment_id) {
+    throw integrity(`${ENROLL_REVOKE_OP} names no active enrolled operator`);
+  }
+  enrollment.state = 'revoked';
+  enrollment.revokedAt = record.revokedAt;
+  staged.activeOperators.delete(record.key_id);
+}
+
 // A preparation route is bound to its committed reservation and can only ever
 // name that reservation's own request and principal.
 function stageHarnessRoute(record, staged) {
@@ -3033,6 +3119,9 @@ class PortableBroker {
           enrollmentRecords.push(record.record);
         } else if (record.kind === 'enrollDeny') {
           stageEnrollmentDeny(record.record, staged);
+          enrollmentRecords.push(record.record);
+        } else if (record.kind === 'enrollRevoke') {
+          stageEnrollmentRevoke(record.record, staged);
           enrollmentRecords.push(record.record);
         } else if (record.kind === 'harnessRoute') stageHarnessRoute(record.record, staged);
         else if (record.kind === 'harnessPresentation')
@@ -3370,6 +3459,35 @@ class PortableBroker {
         this.#enrollCallback({
           kind: input.kind,
           token: input.token,
+          userId: input.userId,
+          chatId: input.chatId,
+          updateId: input.updateId,
+        }),
+      );
+    });
+  }
+
+  // One `/harness_revoke <key_id>` command from the current paired private sender
+  // (design section 1). The command consumes its own update in the same
+  // transaction as the revocation, so a repeated or racing command has no second
+  // effect and a failed append commits nothing. Only decision authority is
+  // removed: retained outcomes and pending Telegram requests are unchanged.
+  revokeEnrollment(input = {}) {
+    return Promise.resolve().then(() => {
+      if (!isPlainObject(input)) throw invalidArgument('a harness revocation needs an object');
+      if (typeof input.keyId !== 'string' || !OPERATOR_KEY_ID_PATTERN.test(input.keyId)) {
+        throw invalidArgument('key_id must be 64 lowercase hexadecimal characters');
+      }
+      if (identityProblem(input.userId) !== null || identityProblem(input.chatId) !== null) {
+        throw invalidArgument('a harness revocation needs a decimal actor and chat');
+      }
+      if (!usableUpdateId(input.updateId)) {
+        throw invalidArgument('a harness revocation needs a raw nonnegative update id');
+      }
+      this.#receiptAdmission();
+      return this.#enqueue(() =>
+        this.#revokeEnrollment({
+          keyId: input.keyId,
           userId: input.userId,
           chatId: input.chatId,
           updateId: input.updateId,
@@ -4737,6 +4855,54 @@ class PortableBroker {
       enrollment_id: enrollment.enrollment_id,
     });
     return { result: 'denied' };
+  }
+
+  // One serialized `/harness_revoke <key_id>` turn. Authority is the current
+  // paired private sender and the named key's own active enrollment, both
+  // rechecked here, so an unpaired, foreign, unknown, already revoked or stale
+  // command changes nothing and consumes only its own update. The revocation and
+  // that update commit in one transaction, so no later position can outrun a held
+  // or failed append and no failed append leaves a revocation installed.
+  async #revokeEnrollment({ keyId, userId, chatId, updateId }) {
+    if (this.#cursor !== null && updateId <= this.#cursor) return { result: 'stale' };
+    if (
+      this.#pairing === null ||
+      this.#pairing.user_id !== userId ||
+      this.#pairing.chat_id !== chatId
+    ) {
+      await this.#commitCursor(updateId);
+      return { result: 'refused' };
+    }
+    const active = this.#activeOperators.get(keyId);
+    const enrollment =
+      active === undefined ? undefined : this.#enrollments.get(active.enrollment_id);
+    if (enrollment === undefined || enrollment.state !== 'enrolled') {
+      await this.#commitCursor(updateId);
+      return { result: 'refused' };
+    }
+    const sampled = turnTime(this.#clock, 'recording an operator revocation', 'revocation');
+    const mutation = {
+      op: ENROLL_REVOKE_OP,
+      enrollment_id: enrollment.enrollment_id,
+      key_id: enrollment.key_id,
+      harness_id: enrollment.harness_id,
+      owner_id: enrollment.owner_id,
+      user_id: userId,
+      chat_id: chatId,
+      update_id: updateId,
+      revoked_at: sampled.text,
+    };
+    await this.#append([mutation, { op: CURSOR_OP, last_update_id: updateId }]);
+    this.#cursor = updateId;
+    enrollment.state = 'revoked';
+    enrollment.revokedAt = sampled.instant;
+    this.#activeOperators.delete(enrollment.key_id);
+    this.#logger('portable.harness.enrollment.revoked', {
+      enrollment_id: enrollment.enrollment_id,
+      harness_id: enrollment.harness_id,
+      owner_id: enrollment.owner_id,
+    });
+    return { result: 'revoked' };
   }
 
   // One serialized allocation turn (design section 5, C2a-i). The target is
