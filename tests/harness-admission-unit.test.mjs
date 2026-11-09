@@ -119,6 +119,8 @@ for (const [name, raw] of [
   ['false plus route', JSON.stringify({ host_configured: false, harness_route: wireRoute })],
   ['duplicate booleans', '{"host_configured":true,"host_configured":false}'],
   ['duplicate identical booleans', '{"host_configured":true,"host_configured":true}'],
+  ['unterminated context key', '{"host_configured'],
+  ['invalid context key escape', '{"host_\\qconfigured":true}'],
   ['body principal', '{"owner_id":"foreign"}'],
   ['human flag', '{"human":true}'],
   [
