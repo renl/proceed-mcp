@@ -6,6 +6,7 @@ import { writeFile } from 'node:fs/promises';
 import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { compositionHostAction } from '/payload/tests/support/harness-wrapper-invocation.mjs';
+import { privateCaptureWriter } from '/payload/tests/support/harness-transparent-capture.mjs';
 import {
   collectionAdmit,
   collectionLimits,
@@ -42,6 +43,8 @@ export default Plugin.define({
     const actionTasks = new Set();
     const privateRoot = '/run/proceed/qualification-private/';
     let publicApiBytes = 0;
+    const apiWriter = privateCaptureWriter();
+    let serviceInventoryWritten = false;
     if (integratedScenario)
       writeFileSync(privateRoot + 'composition-public-api.jsonl', '', { flag: 'wx', mode: 0o600 });
     const actionResult = (request, value) =>
@@ -155,18 +158,25 @@ export default Plugin.define({
                   action,
                   controller.signal,
                   async (event) => {
-                    if (event.kind === 'service-inventory')
+                    if (event.kind === 'service-inventory') {
                       writeFileSync(
                         privateRoot + 'composition-service-inventory.json',
                         JSON.stringify(event.value),
                       );
-                    else {
+                      serviceInventoryWritten = true;
+                    } else {
                       const line = JSON.stringify(event) + '\n';
                       publicApiBytes += Buffer.byteLength(line);
-                      collectionAdmit(publicApiBytes, collectionLimits.file);
-                      appendFileSync(privateRoot + 'composition-public-api.jsonl', line, {
-                        mode: 0o600,
-                      });
+                      try {
+                        collectionAdmit(publicApiBytes, collectionLimits.file);
+                        appendFileSync(privateRoot + 'composition-public-api.jsonl', line, {
+                          mode: 0o600,
+                        });
+                        apiWriter.written(Buffer.from(line));
+                      } catch (error) {
+                        apiWriter.failed();
+                        throw error;
+                      }
                     }
                   },
                 )
@@ -230,6 +240,12 @@ export default Plugin.define({
         clearInterval(timer);
         for (const c of actions) c.abort();
         await Promise.allSettled([...actionTasks]);
+        if (integratedScenario)
+          writeFileSync(
+            privateRoot + 'composition-api-seal.json',
+            JSON.stringify({ api: apiWriter.seal(), actionSequence, serviceInventoryWritten }),
+            { flag: 'wx', mode: 0o600 },
+          );
         publish();
         const entry = Math.floor(performance.now() - cleanupOrigin);
         writeFileSync(

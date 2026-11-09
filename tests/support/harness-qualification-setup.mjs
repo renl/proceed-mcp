@@ -117,6 +117,7 @@ export async function withQualificationBroker(
           assert.deepEqual((await status.json()).requests, [], 'setup must create no work');
         };
         await noWork();
+        let finalized = false;
         const result = await work({
           ...h,
           operator,
@@ -124,9 +125,21 @@ export async function withQualificationBroker(
           owner,
           pending: captureOnly ? undefined : pending,
           noWork,
+          async verifyCaptureScenario(result) {
+            assert.equal(scenario, 'request-to-originating-result');
+            const status = await h.http('/v1/status', h.control);
+            assert.equal(status.status, 200);
+            await verifyCompletion(result, await status.json());
+          },
+          async finalizeCapture() {
+            assert.equal(scenario, 'request-to-originating-result');
+            assert.equal(finalized, false);
+            await h.stopCaptureWriters();
+            finalized = true;
+          },
         });
         if (scenario === null) await noWork();
-        else {
+        else if (!finalized) {
           // Explicit scenario scope only. Never silently weaken setup/capture's
           // zero-work postcondition or treat a created request as setup success.
           const status = await h.http('/v1/status', h.control);

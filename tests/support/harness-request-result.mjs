@@ -37,6 +37,7 @@ export function requestResultWireAdapter(
   const presentations = new Map(),
     lastPending = new Map();
   const scope = { harness_id: 'qualification', owner_id: 'shared' };
+  let transportPrefix = null;
   const post = async (path, body) => {
     const response = await h.http(path, h.operator.credential, { method: 'POST', body });
     assert.equal(response.status, 200);
@@ -68,6 +69,10 @@ export function requestResultWireAdapter(
   };
   return Object.freeze({
     connection: 'composition-shared-owner',
+    async beginScenario() {
+      assert.equal(transportPrefix, null);
+      transportPrefix = await lines('composition-wire.jsonl');
+    },
     async captureArmed() {
       const marker = JSON.parse((await readPrivate('mcp-armed.json')).toString());
       return marker.connection === 'composition-shared-owner' && marker.capture === 'ATTACHED';
@@ -240,13 +245,17 @@ export function requestResultWireAdapter(
         status.requests.every((r) => ['approved', 'rejected', 'responded'].includes(r.resolution)),
       );
       const wire = await lines('composition-wire.jsonl');
+      assert.ok(Array.isArray(transportPrefix), 'transport phase boundary required');
+      assert.deepEqual(wire.slice(0, transportPrefix.length), transportPrefix);
+      const scenarioWire = wire.slice(transportPrefix.length);
       assert.equal(
-        wire.filter((r) => r.path === '/v1/harness/pending' && r.helpers.length > 0).length,
+        scenarioWire.filter((r) => r.path === '/v1/harness/pending' && r.helpers.length > 0).length,
         5,
         'only the five confirmed genuine navigation paths may query pending through a product helper',
       );
       assert.equal(
-        wire.filter((r) => r.path === '/v1/harness/decisions' && r.body.accepted === true).length,
+        scenarioWire.filter((r) => r.path === '/v1/harness/decisions' && r.body.accepted === true)
+          .length,
         3,
       );
     },
@@ -291,9 +300,19 @@ export function observeCurrentQuestion({ raw, live, binding, presentation, previ
     row++;
   };
   assert.equal(rows[start + 1]?.trim(), '', 'missing question separator');
-  for (const [index, field] of ['request_id', 'session_label', 'action', 'context', 'expires_at'].entries()) {
+  for (const [index, field] of [
+    'request_id',
+    'session_label',
+    'action',
+    'context',
+    'expires_at',
+  ].entries()) {
     assert.equal(typeof presentation[field], 'string');
-    assert.equal(rows.filter((r) => r.trim() === labels[index]).length, 1, 'repeated/missing label');
+    assert.equal(
+      rows.filter((r) => r.trim() === labels[index]).length,
+      1,
+      'repeated/missing label',
+    );
     exact(labels[index]);
     for (const source of presentation[field].split('\n')) {
       assert.match(source, /^[\x20-\x7e]+$/, 'unsupported question value');

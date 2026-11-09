@@ -1,4 +1,4 @@
-// TEST ONLY. Embedded-runtime capability controls, not the product operator UI.
+// TEST ONLY. Compiled-host production Node-helper controls, not the operator UI.
 import * as Plugin from '@opencode/plugin/tui/plugin';
 import { readFile, writeFile } from 'node:fs/promises';
 import {
@@ -44,7 +44,7 @@ export default Plugin.define({
       await writeFile(
         `${evidence_directory}/runtime-transport.json`,
         JSON.stringify({
-          scope: 'actual embedded secure-client capability only',
+          scope: 'compiled-host production runHelperExchange/private-pipe/Node TLS route',
           observations,
           diagnostic: transportDiagnostic(null, state),
         }),

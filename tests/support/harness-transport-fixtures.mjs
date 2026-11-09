@@ -4,7 +4,7 @@ import tls from 'node:tls';
 import net from 'node:net';
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { mkdir, writeFile, symlink, link } from 'node:fs/promises';
+import { mkdir, writeFile, symlink, link, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { profile, identity, listen, lockAt } from './automatic-startup.mjs';
 
@@ -23,32 +23,57 @@ export function scanRequiredCaptures(captures, secrets, required) {
 }
 
 const transportRoles = Object.freeze([
-  'enrolled', 'unenrolled', 'owner', 'control', 'foreign', 'plaintext', 'wrong-psk',
+  'enrolled',
+  'unenrolled',
+  'owner',
+  'control',
+  'foreign',
+  'plaintext',
+  'wrong-psk',
 ]);
 
 // Pure producer shared by real fixture setup and memory-only integration controls.
 export function transportFixtureAuthorities(h, channel, unenrolled) {
   const base = [h.operator.credential, channel, h.control, h.owner];
-  const roles = Object.fromEntries(transportRoles.map((id) => [id,
-    id === 'owner' ? h.owner : id === 'control' ? h.control :
-      id === 'unenrolled' ? unenrolled : h.operator.credential,
-  ]));
-  return { authorities: { base, roles }, secrets: [...base, ...Object.values(roles)] };
+  const roles = Object.fromEntries(
+    transportRoles.map((id) => [
+      id,
+      id === 'owner'
+        ? h.owner
+        : id === 'control'
+          ? h.control
+          : id === 'unenrolled'
+            ? unenrolled
+            : h.operator.credential,
+    ]),
+  );
+  const generated = { wrongPsk: 'a'.repeat(64), changedPsk: 'f'.repeat(64) };
+  const setup = h.setupSecrets;
+  assert.ok(Array.isArray(setup) && setup.length > 0, 'complete setup secret ledger required');
+  return {
+    authorities: { base, roles, generated, setup },
+    secrets: [...base, ...Object.values(roles), ...Object.values(generated), ...setup],
+  };
 }
 
 // The only normalization boundary. Validate the complete producer ledger before
 // deduplication, then require exact coverage of every base and generated role.
-export function freezeTransportSecrets({ authorities: { base, roles }, secrets }) {
+export function freezeTransportSecrets({
+  authorities: { base, roles, generated, setup },
+  secrets,
+}) {
   const valid = (s) => typeof s === 'string' && s.length > 0 && s.trim() === s;
   assert.ok(Array.isArray(base) && base.length === 4 && Array.from(base).every(valid));
   assert.equal(new Set(base).size, 4);
   assert.ok(roles && typeof roles === 'object' && !Array.isArray(roles));
   assert.ok(transportRoles.every((id) => Object.hasOwn(roles, id)));
-  const generated = Object.values(roles);
-  assert.ok(generated.every(valid));
+  const roleValues = Object.values(roles);
+  assert.ok(roleValues.every(valid));
+  assert.deepEqual(generated, { wrongPsk: 'a'.repeat(64), changedPsk: 'f'.repeat(64) });
+  assert.ok(Array.isArray(setup) && setup.length > 0 && setup.every(valid));
   assert.equal(base.includes(roles.unenrolled), false);
   assert.ok(Array.isArray(secrets) && Array.from(secrets).every(valid));
-  const expected = new Set([...base, ...generated]);
+  const expected = new Set([...base, ...roleValues, ...Object.values(generated), ...setup]);
   const unique = [...new Set(secrets)];
   assert.deepEqual(new Set(unique), expected);
   return Object.freeze(unique);
@@ -64,8 +89,16 @@ export async function transportFixtures(h) {
     hits = {};
   const lock = await lockAt(h.state);
   const secret = lock.channel.psk;
+  const credentials = await Promise.all(
+    (await readdir(join(h.state, 'credentials'))).map(async (name) =>
+      (await readFile(join(h.state, 'credentials', name), 'utf8')).trim(),
+    ),
+  );
+  assert.ok(Array.isArray(h.setupSecrets) && h.setupSecrets.length > 0);
   const authoritySet = transportFixtureAuthorities(
-    h, secret, `hop_${randomBytes(32).toString('hex')}`,
+    { ...h, setupSecrets: [...h.setupSecrets, ...credentials] },
+    secret,
+    `hop_${randomBytes(32).toString('hex')}`,
   );
   const { secrets, authorities } = authoritySet;
   const later = (fn, ms) => {
@@ -170,7 +203,7 @@ export async function transportFixtures(h) {
   const roleCases = [];
   try {
     const plaintext = await listener('plaintext', 'plaintext');
-    const wrong = await listener('wrong-psk', 'wrong-psk', 'a'.repeat(64));
+    const wrong = await listener('wrong-psk', 'wrong-psk', authorities.generated.wrongPsk);
     // Observe encrypted input before the wrong-PSK endpoint consumes it.
     const wrongRelay = net.createServer((down) => {
       own(down);

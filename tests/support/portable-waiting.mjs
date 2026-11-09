@@ -35,6 +35,7 @@ export async function telegramFixture() {
   const polls = new Set();
   let updateId = 1,
     messageId = 100;
+  let fixtureClosed = false;
   const server = createServer(async (req, res) => {
     try {
       const chunks = [];
@@ -135,6 +136,7 @@ export async function telegramFixture() {
       });
     },
     async close() {
+      if (fixtureClosed) return;
       for (const wake of [...polls]) wake();
       server.closeAllConnections();
       await new Promise((done, reject) =>
@@ -146,6 +148,7 @@ export async function telegramFixture() {
         probe.once('error', reject);
         probe.listen(Number(new URL(address).port), '127.0.0.1', done);
       });
+      fixtureClosed = true;
       await new Promise((done) => probe.close(done));
     },
   };
@@ -304,8 +307,18 @@ export async function portable(
                 state,
               ]);
             let broker = await start('serve', '--secure-local');
-            broker.child.stderr.on('data', (b) => logs.push(String(b)));
-            broker.child.stdout.on('data', (b) => logs.push(String(b)));
+            const brokerOutput = [];
+            let brokerOutputBytes = 0,
+              brokerOutputOverflow = false;
+            for (const stream of [broker.child.stderr, broker.child.stdout])
+              stream.on('data', (b) => {
+                logs.push(String(b));
+                if (brokerObserver) {
+                  brokerOutputBytes += b.length;
+                  if (brokerOutputBytes <= 1048576) brokerOutput.push(Buffer.from(b));
+                  else brokerOutputOverflow = true;
+                }
+              });
             const control = (
               await readFile(join(state, 'credentials/control.token'), 'utf8')
             ).trim();
@@ -330,6 +343,7 @@ export async function portable(
               const pairing = await cli('pair');
               const code = /Pairing code: (\S+)/.exec(pairing)?.[1];
               assert.ok(Boolean(code), 'operator CLI returns pairing challenge');
+              secrets.push(code);
               fixture.text(`/pair ${code}`);
               await until(
                 () => fixture.messages.some((m) => !m.reply_markup),
@@ -473,6 +487,27 @@ export async function portable(
                 cli,
                 http,
                 control,
+                setupSecrets: Object.freeze(secrets.slice()),
+                closedBrokerOutput() {
+                  assert.ok(
+                    broker.closed &&
+                      broker.child.stdout.readableEnded &&
+                      broker.child.stderr.readableEnded,
+                  );
+                  assert.equal(brokerOutputOverflow, false);
+                  return Buffer.concat(brokerOutput);
+                },
+                async stopCaptureWriters() {
+                  assert.equal(connectAdapter, false, 'host must own the sole adapter');
+                  if (!broker.closed) await stopped(broker);
+                  assert.ok(
+                    broker.closed &&
+                      broker.child.stdout.readableEnded &&
+                      broker.child.stderr.readableEnded,
+                  );
+                  await fixture.close();
+                  return { broker: 'CLOSED', telegram: 'CLOSED' };
+                },
                 ...(controlledClock ? { setTime } : {}),
               });
             } finally {

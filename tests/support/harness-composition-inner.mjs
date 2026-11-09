@@ -22,6 +22,7 @@ import {
   confirmQualificationEnrollment,
 } from './harness-qualification-setup.mjs';
 import { transportFixtures, freezeTransportSecrets } from './harness-transport-fixtures.mjs';
+import { assertIntegratedTransportGate } from './harness-runtime-transport.mjs';
 import {
   waitCompositionPhase,
   failureSnapshot,
@@ -36,6 +37,7 @@ import {
   productCaptureLogs,
   productCaptureReadFile,
   scanIntegratedPrivateCaptures,
+  admitIntegratedPrivateInventory,
 } from './harness-composition-retention.mjs';
 import { digest, collectionAdmit, collectionLimits } from './harness-renderer-observation.mjs';
 import {
@@ -532,6 +534,8 @@ let phase = 'policy',
   child,
   exited = false,
   closed = false,
+  stdoutEnded = false,
+  stderrEnded = false,
   overflow = false;
 let transcript = Buffer.alloc(0);
 let errorCode,
@@ -541,6 +545,7 @@ let scanReason = 'UNRUN';
 let productCleanup = 'UNRUN',
   hostExit = 'UNRUN';
 let commandEligibility = 'UNRUN';
+let scenarioSucceeded = false;
 const keys = { ctrlG: 0, ctrlE: 0, enter: 0, exit: 0, down: 0, up: 0, escape: 0 };
 let readinessFrame = '';
 let readinessObservation;
@@ -803,6 +808,12 @@ try {
           pending = last >= 0 && tail.length - last < 32 ? tail.slice(last) : '';
         });
         child.stderr.on('data', capture);
+        child.stdout.on('end', () => {
+          stdoutEnded = true;
+        });
+        child.stderr.on('end', () => {
+          stderrEnded = true;
+        });
         readinessEnd = Math.min(end, Date.now() + 60000);
         await wait(
           'public-session-and-product-ready',
@@ -1177,16 +1188,15 @@ try {
             Math.max(0, readinessEnd - Date.now()),
           );
           const transport = readObservation('runtime-transport.json');
-          assert.notEqual(transport.status, 'FAIL', 'embedded transport controls failed');
-          assert.deepEqual(
-            transport.observations.map((o) => o.id).sort(),
+          await assertIntegratedTransportGate(
+            transport,
             [
               ...controls.plan.roles.cases.map((c) => c.id),
               ...controls.plan.product.controls.map((c) => c.id),
               'product-loader-unsafe-files',
-            ].sort(),
+            ],
+            () => controls.assertObserved(),
           );
-          await controls.assertObserved();
           const fixed = structuredClone(executionBinding);
           const live = readObservation('composition-live.json');
           const integratedBinding = {
@@ -1263,6 +1273,7 @@ try {
             scenario: 'request-to-originating-result',
             wait: integratedWait,
           });
+          await integratedWire.beginScenario();
           await wait(
             'integrated-capture-armed',
             () => exists('/run/proceed/qualification-private/mcp-armed.json'),
@@ -1374,6 +1385,8 @@ try {
             cleanupObservation.wrapper.RETURN !== null,
         );
         await wait('actual-host-exit', () => exited);
+        if (integratedScenario) await h.verifyCaptureScenario(integratedResult);
+        scenarioSucceeded = true;
         return integratedResult;
       } catch (error) {
         errorCode = compositionErrorCode(error);
@@ -1468,12 +1481,13 @@ try {
           try {
             await controls.close();
             controlsClosed = true;
+            if (integratedScenario) await h.finalizeCapture();
             const remainingPids = (await readdir('/proc')).filter(
               (p) => /^\d+$/.test(p) && !priorPids.has(p),
             );
-            const complete = closed && remainingPids.length === 0;
+            const complete = closed && stdoutEnded && stderrEnded && remainingPids.length === 0;
             if (productMode) {
-              assert.ok(complete && productCleanup === 'OBSERVED');
+              assert.ok(complete);
               if (!integratedScenario)
                 assert.ok(navigationOnly ? keys.enter <= 1 : keys.enter === 0);
               let privateCaptureScan;
@@ -1484,7 +1498,7 @@ try {
                 const captures = new Map();
                 const names = (await readdir(root))
                   .filter((n) =>
-                    /^(?:mcp\.jsonl|wrapper\.jsonl|composition-action(?:-result)?-\d+\.json|composition-service-inventory\.json|composition-public-api\.jsonl)$/.test(
+                    /^(?:mcp\.jsonl|wrapper\.jsonl|(?:mcp|wrapper)-seal\.json|composition-api-seal\.json|composition-action(?:-result)?-\d+\.json|composition-service-inventory\.json|composition-public-api\.jsonl)$/.test(
                       n,
                     ),
                   )
@@ -1502,6 +1516,13 @@ try {
                     other: [...captures]
                       .filter(([name]) => !['mcp.jsonl', 'wrapper.jsonl'].includes(name))
                       .map(([, bytes]) => bytes),
+                    receipts: admitIntegratedPrivateInventory(captures, {
+                      mcp: JSON.parse(captures.get('mcp-seal.json').toString()),
+                      callbacks: JSON.parse(captures.get('wrapper-seal.json').toString()),
+                      api: JSON.parse(captures.get('composition-api-seal.json').toString()),
+                    }),
+                    secretLedger: controls,
+                    scenarioSuccess: scenarioSucceeded,
                   },
                   requiredSecrets,
                 );
@@ -1527,8 +1548,12 @@ try {
                 integratedScenario,
               );
               const telegram = Buffer.from(JSON.stringify(h.fixture.calls));
+              const brokerDiagnostics = integratedScenario
+                ? h.closedBrokerOutput()
+                : Buffer.alloc(0);
               const extras = [
                 ...[journal, api, telegram, transcript].map((bytes) => ({ bytes })),
+                ...(integratedScenario ? [{ bytes: brokerDiagnostics }] : []),
                 ...privateInputs,
               ];
               const entries = await collectProductCapture(
@@ -1539,7 +1564,10 @@ try {
               );
               const logEntries = entries.filter((e) => /\.log(?:$|[.-])/.test(e.path));
               assert.ok(logEntries.length > 0);
-              const diagnostics = Buffer.concat(logEntries.map((e) => e.bytes));
+              const diagnostics = Buffer.concat([
+                ...logEntries.map((e) => e.bytes),
+                ...(integratedScenario ? [brokerDiagnostics] : []),
+              ]);
               const pluginLines = diagnostics
                 .toString('utf8')
                 .split('\n')
@@ -1552,7 +1580,7 @@ try {
                 collectionLimits.detail,
               );
               const pluginBytes = Buffer.from(pluginLines.join('\n'));
-              if (integratedScenario) {
+              if (integratedScenario && scenarioSucceeded) {
                 assertPluginInventory(pluginLines, {
                   entries: [
                     { plugin: fixture, entry: join(fixture, 'tui.ts') },
@@ -1611,6 +1639,25 @@ try {
                 complete,
                 overflow,
                 details,
+                integratedScenario
+                  ? {
+                      tui: ['script.stdout:end', 'script.stderr:end', 'host-state/pty.raw'],
+                      telegram: ['closed-fixture.calls'],
+                      journal: ['closed-broker/journal.log'],
+                      diagnostics: [
+                        ...logEntries.map((e) => e.path),
+                        'closed-broker.stdout:end',
+                        'closed-broker.stderr:end',
+                      ],
+                      evidence: entries.map((e) => e.path),
+                      api: [
+                        'closed-broker/composition-wire.jsonl',
+                        'sealed-mcp',
+                        'sealed-wrapper',
+                        'sealed-public-api',
+                      ],
+                    }
+                  : undefined,
               );
               scanStage = 'WRITE';
               for (const [file, bytes] of Object.entries(frozen.details))

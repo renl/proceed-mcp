@@ -5,48 +5,100 @@ import {
   compositionErrorCode,
   compositionGuardJournal,
 } from './harness-composition-readiness.mjs';
-import { scanRequiredCaptures } from './harness-transport-fixtures.mjs';
-import { decodeMcpCapture } from './harness-transparent-capture.mjs';
+import { scanRequiredCaptures, freezeTransportSecrets } from './harness-transport-fixtures.mjs';
+import { decodeMcpCapture, assertPrivateCaptureReceipt } from './harness-transparent-capture.mjs';
+import { safeTransportFailure } from './harness-runtime-transport.mjs';
 
 // Raw private MCP/callback captures are not publishable surfaces. Preparation
 // capabilities are expected only at their contract-defined paths on the original
 // connection. Inspect raw bytes AND decoded frames before deriving any summary.
 // The six-surface public exporter and its blanket capability refusal stay intact.
-export function scanIntegratedPrivateCaptures({ mcp, callbacks, other = [] }, secrets) {
-  assert.ok(Buffer.isBuffer(mcp) && Buffer.isBuffer(callbacks) && mcp.length && callbacks.length);
+export function scanIntegratedPrivateCaptures(
+  { mcp, callbacks, other = [], receipts, secretLedger, scenarioSuccess = false },
+  secrets,
+) {
+  assert.deepEqual(secrets, freezeTransportSecrets(secretLedger));
+  assertPrivateCaptureReceipt(mcp, receipts?.mcp);
+  assertPrivateCaptureReceipt(callbacks, receipts?.callbacks);
   const inputs = [mcp, callbacks, ...other];
   assert.ok(inputs.every(Buffer.isBuffer));
   const bytes = inputs.reduce((n, b) => n + b.length, 0);
   collectionAdmit(bytes, collectionLimits.contents);
   rendererWork(bytes, inputs.length, secrets.length, bytes);
   const parse = (bytes) =>
-    bytes
-      .toString('utf8')
-      .trim()
-      .split('\n')
-      .map((s) => JSON.parse(s));
-  const capture = decodeMcpCapture(parse(mcp), 'composition-shared-owner');
+    bytes.length === 0
+      ? []
+      : bytes
+          .toString('utf8')
+          .trim()
+          .split('\n')
+          .map((s) => JSON.parse(s));
+  const capture = decodeMcpCapture(parse(mcp), 'composition-shared-owner', {
+    allowEmptyDirections: true,
+  });
   const prepared = new Map();
   for (const { message } of capture.calls)
-    if (message.method === 'tools/call' && message.params.name === 'prepare_approval')
+    if (message.method === 'tools/call' && message.params.name === 'prepare_approval') {
+      assert.ok(!prepared.has(message.id), 'duplicate originating preparation');
+      assert.ok(
+        typeof message.params._meta?.['ai.opencode/sessionID'] === 'string' &&
+          message.params._meta['ai.opencode/sessionID'].length > 0,
+      );
       prepared.set(message.id, message.params._meta?.['ai.opencode/sessionID']);
+    }
   const capabilities = new Map();
+  const requestIds = new Set(),
+    handles = new Set();
   for (const { message } of capture.results)
     if (prepared.has(message.id)) {
       const p = message.result?.structuredContent;
+      if (message.error !== undefined || message.result?.isError === true) continue;
       assert.match(p?.request_capability, /^cap_[a-f0-9]{64}$/);
+      assert.match(p?.request_id, /^req_[a-f0-9]{32}$/);
+      assert.match(p?.request_handle, /^hdl_[a-f0-9]{32}$/);
+      assert.ok(!capabilities.has(p.request_capability), 'duplicate preparation capability');
+      assert.ok(
+        !requestIds.has(p.request_id) && !handles.has(p.request_handle),
+        'inconsistent preparation identity',
+      );
+      requestIds.add(p.request_id);
+      handles.add(p.request_handle);
       capabilities.set(p.request_capability, {
         session: prepared.get(message.id),
         request: p.request_id,
+        handle: p.request_handle,
       });
     }
-  assert.equal(capabilities.size, 3, 'all three actual preparations must be captured');
+  if (scenarioSuccess) {
+    assert.ok(mcp.length && callbacks.length, 'successful scenario workflow captures required');
+    assert.equal(capabilities.size, 3, 'all three actual preparations must be captured');
+    assert.equal(prepared.size, 3, 'successful scenario has exactly three prepare calls');
+  }
+  const waiting = new Map();
+  for (const { message } of capture.calls) {
+    if (message.method !== 'tools/call' || message.params.name !== 'request_approval') continue;
+    assert.ok(!waiting.has(message.id));
+    const binding = capabilities.get(message.params.arguments.request_capability);
+    assert.ok(binding, 'unmatched request capability');
+    assert.equal(binding.session, message.params._meta?.['ai.opencode/sessionID']);
+    assert.equal(binding.handle, message.params.arguments.request_handle);
+    waiting.set(message.id, binding);
+  }
+  if (scenarioSuccess) assert.equal(waiting.size, 3);
+  const returned = new Set();
+  for (const { message } of capture.results) {
+    assert.ok(!returned.has(message.id), 'duplicate original result');
+    returned.add(message.id);
+    if (waiting.has(message.id) && message.result?.structuredContent) {
+      assert.equal(message.result.structuredContent.request_id, waiting.get(message.id).request);
+    }
+  }
   const inspect = (value, path = [], allowed = null) => {
     if (typeof value === 'string') {
       for (const secret of secrets)
         assert.equal(value.includes(secret), false, 'private authority leak');
       assert.equal(
-        /(?:sk-|ghp_)[A-Za-z0-9_-]{20,}|Bearer [A-Za-z0-9_.-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(
+        /hop_[a-f0-9]{64}|(?:sk-|ghp_)[A-Za-z0-9_-]{20,}|Bearer [A-Za-z0-9_.-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(
           value,
         ),
         false,
@@ -60,7 +112,16 @@ export function scanIntegratedPrivateCaptures({ mcp, callbacks, other = [] }, se
           'capability outside its original private protocol field',
         );
     } else if (value && typeof value === 'object')
-      for (const [key, child] of Object.entries(value)) inspect(child, [...path, key], allowed);
+      for (const [key, child] of Object.entries(value)) {
+        assert.equal(
+          /^(?:authorization|credential|operator_credential|owner_token|control_token|psk|secret)$/i.test(
+            key,
+          ),
+          false,
+          'unknown private authority field',
+        );
+        inspect(child, [...path, key], allowed);
+      }
   };
   const checkBytes = (bytes) => {
     for (const secret of secrets)
@@ -70,7 +131,7 @@ export function scanIntegratedPrivateCaptures({ mcp, callbacks, other = [] }, se
   for (const { message } of [...capture.calls, ...capture.results]) {
     checkBytes(Buffer.from(JSON.stringify(message)));
     let allowed;
-    if (prepared.has(message.id) && message.result) {
+    if (prepared.has(message.id) && message.result && message.result.isError !== true) {
       const body = message.result.structuredContent;
       allowed = [
         { path: 'result.structuredContent.request_capability', cap: body.request_capability },
@@ -85,24 +146,67 @@ export function scanIntegratedPrivateCaptures({ mcp, callbacks, other = [] }, se
       });
     } else if (message.method === 'tools/call' && message.params.name === 'request_approval') {
       const cap = message.params.arguments.request_capability;
+      assert.ok(capabilities.has(cap), 'unmatched request capability');
       assert.equal(capabilities.get(cap)?.session, message.params._meta?.['ai.opencode/sessionID']);
+      assert.equal(capabilities.get(cap).handle, message.params.arguments.request_handle);
       allowed = [{ path: 'params.arguments.request_capability', cap }];
     }
     inspect(message, [], allowed);
   }
+  const callbackStarts = new Map();
   for (const callback of parse(callbacks)) {
     let allowed;
-    if (callback.phase === 'prepare-returned') {
+    if (['prepare-started', 'wait-started'].includes(callback.phase)) {
+      assert.ok(typeof callback.coreCallID === 'string' && callback.coreCallID.length > 0);
+      assert.ok(!callbackStarts.has(callback.coreCallID));
+      callbackStarts.set(callback.coreCallID, {
+        phase: callback.phase,
+        session: callback.sessionID,
+      });
+    }
+    if (['prepare-returned', 'wait-returned'].includes(callback.phase)) {
+      assert.deepEqual(
+        callbackStarts.get(callback.coreCallID),
+        {
+          phase: callback.phase.replace('-returned', '-started'),
+          session: callback.sessionID,
+        },
+        'unmatched original callback',
+      );
+      callbackStarts.delete(callback.coreCallID);
+    }
+    if (
+      callback.phase === 'prepare-returned' &&
+      callback.value?.output?.request_capability !== undefined
+    ) {
       const p = callback.value?.output;
       assert.deepEqual(capabilities.get(p?.request_capability), {
         session: callback.sessionID,
         request: p?.request_id,
+        handle: p?.request_handle,
       });
       allowed = [{ path: 'value.output.request_capability', cap: p.request_capability }];
     }
+    if (callback.phase === 'wait-returned' && callback.value?.output?.request_id !== undefined) {
+      assert.ok(
+        [...waiting.values()].some(
+          (b) =>
+            b.session === callback.sessionID && b.request === callback.value?.output?.request_id,
+        ),
+        'unmatched wait callback',
+      );
+    }
     inspect(callback, [], allowed);
   }
-  for (const bytes of other) inspect(bytes.toString('utf8'));
+  if (scenarioSuccess) {
+    assert.equal(callbackStarts.size, 0, 'successful scenario has no unfinished callbacks');
+    for (const phase of ['prepare-returned', 'wait-returned'])
+      assert.equal(parse(callbacks).filter((c) => c.phase === phase).length, 3);
+  }
+  for (const bytes of other) {
+    inspect(bytes.toString('utf8'));
+    for (const value of parse(bytes)) inspect(value);
+  }
   return {
     status: 'PASS',
     bytes,
@@ -110,6 +214,27 @@ export function scanIntegratedPrivateCaptures({ mcp, callbacks, other = [] }, se
     hashes: inputs.map(digest),
     scope: 'Raw private protocol capture only. No raw export.',
   };
+}
+
+export function admitIntegratedPrivateInventory(captures, seals) {
+  assertPrivateCaptureReceipt(captures.get('mcp.jsonl'), seals.mcp);
+  assertPrivateCaptureReceipt(captures.get('wrapper.jsonl'), seals.callbacks);
+  assertPrivateCaptureReceipt(captures.get('composition-public-api.jsonl'), seals.api.api);
+  const n = seals.api.actionSequence;
+  assert.ok(Number.isSafeInteger(n) && n >= 0 && n <= 64);
+  for (let i = 1; i <= n; i++) {
+    assert.ok(captures.has(`composition-action-${i}.json`), 'missing processed action input');
+    assert.ok(
+      captures.has(`composition-action-result-${i}.json`),
+      'missing processed action output',
+    );
+  }
+  assert.equal(typeof seals.api.serviceInventoryWritten, 'boolean');
+  assert.equal(
+    captures.has('composition-service-inventory.json'),
+    seals.api.serviceInventoryWritten,
+  );
+  return { mcp: seals.mcp, callbacks: seals.callbacks };
 }
 import { lstat, open, opendir } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -290,7 +415,19 @@ export async function collectProductCapture(
   return entries;
 }
 
-export function productCaptureExport(captures, secrets, complete, overflow, details) {
+export function productCaptureExport(captures, secrets, complete, overflow, details, inventory) {
+  if (inventory !== undefined) {
+    assert.deepEqual(Object.keys(inventory), compositionSurfaces);
+    for (const surface of compositionSurfaces) {
+      assert.ok(
+        Array.isArray(inventory[surface]) && inventory[surface].length > 0,
+        'nonempty required surface inventory',
+      );
+      for (const source of inventory[surface]) {
+        assert.ok(typeof source === 'string' && source.length > 0);
+      }
+    }
+  }
   const { scan, captures: frozenCaptures } = scanFrozenComposition({
     captures,
     secrets,
@@ -319,6 +456,7 @@ export function productCaptureExport(captures, secrets, complete, overflow, deta
       { bytes: bytes.length, sha256: digest(bytes) },
     ]),
   );
+  if (inventory !== undefined) scan.inventory = structuredClone(inventory);
   collectionAdmit(
     Buffer.byteLength(JSON.stringify(scan)) +
       Object.values(details).reduce((n, b) => n + b.length, 0),
@@ -399,6 +537,7 @@ export function failureSnapshot({ error, phase, keys, state, now, deadline, last
     sampledGuard = projection.value().records[0];
   }
   return freeze({
+    transport: safeTransportFailure(own(error, 'transportFailure')),
     phase: phases.has(phase) ? phase : 'UNLISTED_PHASE',
     errorCode: compositionErrorCode(error),
     keys: Object.fromEntries(
@@ -671,6 +810,7 @@ export function safeCompositionDiagnostic(input) {
       lastLoopGuard = projection;
     }
     failureAt = {
+      transport: safeTransportFailure(own(at, 'transport')),
       phase: phases.has(own(at, 'phase')) ? own(at, 'phase') : 'UNLISTED_PHASE',
       errorCode: compositionErrorCode({ code: own(at, 'errorCode') }),
       keys: keys(own(at, 'keys')),

@@ -1,8 +1,27 @@
 // TEST ONLY. Called inside the actual TUI runtime, never a substitute operator UI.
-// This exercises the existing protected-lock secure client, not an invented wire.
+// The compiled host owns the production parent. Only its Node child consumes TLS.
 import assert from 'node:assert/strict';
 import { readFile, lstat } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { runHelperExchange } from '../../src/harness/node-helper.js';
+
+export function helperTransportClient(options) {
+  return {
+    request(_method, _path, body, _headers, { signal } = {}) {
+      assert.equal(_method, 'POST');
+      assert.equal(_path, '/v1/harness/pending');
+      assert.deepEqual(_headers, {});
+      return runHelperExchange({
+        operation: 'pending',
+        body,
+        port: options.port,
+        lockFile: options.lockFile,
+        operatorCredential: options.token,
+        signal,
+      });
+    },
+  };
+}
 
 const diagnosticCases = [
   'unknown',
@@ -27,6 +46,14 @@ const diagnosticCases = [
   'product-loader-unsafe-files',
 ];
 const diagnosticPhases = [
+  'role-response',
+  'product-response',
+  'budget-assertion',
+  'handshake-assertion',
+  'abort-assertion',
+  'reconnect-assertion',
+  'record-assertion',
+  'loader-refusal',
   'setup',
   'key-protection',
   'key-load',
@@ -62,6 +89,12 @@ const safeCodes = [
   'ERR_NOT_IMPLEMENTED',
   'ERR_ASSERTION',
   'ABORT_ERR',
+  'HELPER_PROTOCOL_INVALID',
+  'EXCHANGE_DEADLINE',
+  'EXCHANGE_CANCELLED',
+  'NODE_UNAVAILABLE',
+  'NODE_UNSUPPORTED',
+  'HELPER_LIMIT_EXCEEDED',
 ];
 const safeNames = [
   'Error',
@@ -72,6 +105,7 @@ const safeNames = [
   'SecureChannelError',
   'CliError',
   'BrokerError',
+  'HelperChannelError',
 ];
 const pick = (value, allowed) => (allowed.includes(value) ? value : 'REDACTED');
 // Read only explicitly named own data properties. Never invoke error getters,
@@ -163,11 +197,50 @@ export function assertDetailedTransportExport(scan) {
   assert.equal(scan?.status, 'PASS', 'required complete raw-capture scan marker missing or failed');
 }
 
+export function transportFailureCategory(value) {
+  return {
+    case: pick(own(value, 'case'), diagnosticCases),
+    phase: pick(own(value, 'phase'), diagnosticPhases),
+    classification: pick(own(value, 'classification'), ['CONTROL_FAILURE', 'FIRST_EXCHANGE_PASS']),
+  };
+}
+
+export async function assertIntegratedTransportGate(transport, expectedIds, assertObserved) {
+  let check = 'transport-status';
+  try {
+    assert.notEqual(transport.status, 'FAIL');
+    check = 'transport-case-inventory';
+    assert.deepEqual(transport.observations.map((o) => o.id).sort(), [...expectedIds].sort());
+    check = 'transport-listener-observation';
+    await assertObserved();
+  } catch (error) {
+    Object.defineProperty(error, 'transportFailure', {
+      value: {
+        ...transportFailureCategory(transport.diagnostic),
+        check,
+      },
+    });
+    throw error;
+  }
+}
+
+export function safeTransportFailure(value) {
+  if (!value) return null;
+  return {
+    ...transportFailureCategory(value),
+    check: pick(own(value, 'check'), [
+      'transport-status',
+      'transport-case-inventory',
+      'transport-listener-observation',
+    ]),
+  };
+}
+
 export const transportExpectations = Object.freeze({
   enrolled: [200, null],
   unenrolled: [401, 'AUTH_REQUIRED'],
-  owner: [403, 'FORBIDDEN'],
-  control: [403, 'FORBIDDEN'],
+  owner: [null, 'HELPER_PROTOCOL_INVALID'],
+  control: [null, 'HELPER_PROTOCOL_INVALID'],
   foreign: [403, 'FORBIDDEN'],
   plaintext: [null, 'BROKER_INSTANCE_CONFLICT'],
   'wrong-psk': [null, 'BROKER_INSTANCE_CONFLICT'],
@@ -176,7 +249,7 @@ export const transportExpectations = Object.freeze({
 export function assertRuntimeRoleOutcome(id, response, failure, elapsed_ms, observe) {
   const [status, code] = transportExpectations[id];
   // Retain the typed exchange error BEFORE assert.equal can replace it.
-  observe({ case: id, phase: failure ? 'exchange' : 'response-assertion', elapsed_ms }, failure);
+  observe({ case: id, phase: failure ? 'exchange' : 'role-response', elapsed_ms }, failure);
   if (status === null) {
     assert.equal(response, undefined, `${id} listener must never admit HTTP authority`);
     assert.equal(failure?.code, code, `${id} must fail secure admission`);
@@ -214,8 +287,6 @@ export async function exerciseRuntimeTransport(
 ) {
   assert.equal(process.platform, 'linux', 'requires the controlled actual Linux TUI');
   assertTransportPlan(plan);
-  const { createOperatorLocalClient, createSecureLocalClient } =
-    await import('../../src/http/local-client.js');
   const { loadOperatorKeyFile } = await import('../../src/harness/operator-key.js');
   const observations = [];
   for (const c of firstOnly ? plan.cases.filter((c) => c.id === 'enrolled') : plan.cases) {
@@ -248,9 +319,7 @@ export async function exerciseRuntimeTransport(
       );
     state.phase = 'client-create';
     observe(state);
-    const client = (
-      ['owner', 'control'].includes(c.id) ? createSecureLocalClient : createOperatorLocalClient
-    )({
+    const client = helperTransportClient({
       port: c.port,
       lockFile: c.lock_file,
       token,
@@ -277,7 +346,6 @@ export async function exerciseRuntimeTransport(
 // evidence of a human choice or the lifecycle of the production TUI generation.
 export async function exerciseProductTransport(plan, signal, observe = () => {}) {
   observe({ case: 'product-controls', phase: 'key-load', elapsed_ms: 0 });
-  const { createOperatorLocalClient } = await import('../../src/http/local-client.js');
   const { loadOperatorKeyFile } = await import('../../src/harness/operator-key.js');
   const { credential } = await loadOperatorKeyFile({
     file: plan.key_file,
@@ -287,7 +355,7 @@ export async function exerciseProductTransport(plan, signal, observe = () => {})
   for (const c of plan.controls) {
     observe({ case: c.id, phase: 'client-create', elapsed_ms: 0 });
     signal.throwIfAborted();
-    const client = createOperatorLocalClient({
+    const client = helperTransportClient({
       port: c.port,
       lockFile: c.lock_file,
       token: credential,
@@ -315,9 +383,16 @@ export async function exerciseProductTransport(plan, signal, observe = () => {})
       { case: c.id, phase: error ? 'exchange' : 'response-assertion', elapsed_ms: elapsed },
       error,
     );
-    if (c.error) {
+    const expectedError =
+      c.id === 'original-budget'
+        ? 'EXCHANGE_DEADLINE'
+        : c.id === 'abort'
+          ? 'EXCHANGE_CANCELLED'
+          : c.error;
+    observe({ case: c.id, phase: 'product-response', elapsed_ms: elapsed });
+    if (expectedError) {
       assert.equal(value, undefined, `${c.id}: unexpected admission`);
-      assert.equal(error?.code, c.error, `${c.id}: wrong refusal`);
+      assert.equal(error?.code, expectedError, `${c.id}: wrong refusal`);
     } else {
       assert.equal(error, undefined, `${c.id}: product exchange failed`);
       assert.equal(value.status, c.status);
@@ -325,20 +400,34 @@ export async function exerciseProductTransport(plan, signal, observe = () => {})
         assert.equal(Buffer.byteLength(JSON.stringify(value.body)), 65536);
     }
     observe({ case: c.id, phase: 'response-assertion', elapsed_ms: elapsed });
-    if (c.id === 'original-budget')
+    if (c.id === 'original-budget') {
+      observe({ case: c.id, phase: 'budget-assertion', elapsed_ms: elapsed });
       assert.ok(
-        elapsed >= 9500 && elapsed < 10500,
-        'original 10000 ms budget, not restarted after TLS',
+        elapsed >= 8500 && elapsed < 10000,
+        'original helper 10000 ms budget includes reserved cleanup, never restarted after TLS',
       );
-    if (c.id === 'handshake-stall')
+    }
+    if (c.id === 'handshake-stall') {
+      observe({ case: c.id, phase: 'handshake-assertion', elapsed_ms: elapsed });
       assert.ok(elapsed >= 900 && elapsed < 1500, '1000 ms handshake ceiling');
-    if (c.id === 'abort') assert.ok(elapsed < 1500, 'abort must destroy owned socket');
+    }
+    if (c.id === 'abort') {
+      observe({ case: c.id, phase: 'abort-assertion', elapsed_ms: elapsed });
+      assert.ok(elapsed < 1500, 'abort must destroy owned socket');
+    }
     if (c.id === 'reconnect') {
-      observe({ case: c.id, phase: 'exchange', elapsed_ms: elapsed });
-      const next = await client.request('POST', '/v1/harness/pending', {}, {}, { signal });
+      observe({ case: c.id, phase: 'reconnect-assertion', elapsed_ms: elapsed });
+      const next = await client.request(
+        'POST',
+        '/v1/harness/pending',
+        { harness_id: 'qualification', owner_id: 'shared', session_id: 'transport-session' },
+        {},
+        { signal },
+      );
       assert.equal(next.status, 200, 'explicit observation reconnect succeeds on a fresh channel');
     }
     if (c.id === 'record-next') {
+      observe({ case: c.id, phase: 'record-assertion', elapsed_ms: elapsed });
       // Same client must reread the protected record on every connection.
       const { writeFile } = await import('node:fs/promises');
       const original = await readFile(c.lock_file);
@@ -346,9 +435,18 @@ export async function exerciseProductTransport(plan, signal, observe = () => {})
         const changed = JSON.parse(original);
         changed.channel.psk = 'f'.repeat(64);
         await writeFile(c.lock_file, JSON.stringify(changed));
-        await assert.rejects(client.request('POST', '/v1/harness/pending', {}, {}, { signal }), {
-          code: 'BROKER_INSTANCE_CONFLICT',
-        });
+        await assert.rejects(
+          client.request(
+            'POST',
+            '/v1/harness/pending',
+            { harness_id: 'qualification', owner_id: 'shared', session_id: 'transport-session' },
+            {},
+            { signal },
+          ),
+          {
+            code: 'BROKER_INSTANCE_CONFLICT',
+          },
+        );
       } finally {
         await writeFile(c.lock_file, original);
       }
@@ -361,7 +459,7 @@ export async function exerciseProductTransport(plan, signal, observe = () => {})
     });
   }
   // Production loader rejection tests are separate from fixture lstat capability.
-  observe({ case: 'product-loader-unsafe-files', phase: 'key-load', elapsed_ms: 0 });
+  observe({ case: 'product-loader-unsafe-files', phase: 'loader-refusal', elapsed_ms: 0 });
   for (const file of plan.rejected_keys) {
     await assert.rejects(loadOperatorKeyFile({ file, stateDir: plan.state_dir }));
   }

@@ -651,6 +651,7 @@ function producedTransportAuthorities() {
       operator: { credential: 'hop_' + '1'.repeat(64) },
       control: 'control-' + '2'.repeat(64),
       owner: 'owner-' + '3'.repeat(64),
+      setupSecrets: ['setup-pairing-challenge'],
     },
     '4'.repeat(64),
     'hop_' + '5'.repeat(64),
@@ -659,17 +660,17 @@ function producedTransportAuthorities() {
 
 test('actual transport producer freezes every distinct authority once and rejects incomplete or malformed coverage', async () => {
   const produced = producedTransportAuthorities();
-  assert.equal(produced.secrets.length, 11);
+  assert.equal(produced.secrets.length, 14);
   const frozen = freezeTransportSecrets(produced);
-  assert.equal(frozen.length, 5);
+  assert.equal(frozen.length, 8);
   assert.equal(Object.isFrozen(frozen), true);
   const late = 'late-role-' + '6'.repeat(64);
   produced.authorities.roles.late = late;
   produced.secrets.push(late, produced.authorities.base[0]);
   const final = freezeTransportSecrets(produced);
-  assert.equal(final.length, 6);
+  assert.equal(final.length, 9);
   assert.ok(final.includes(late));
-  assert.equal(frozen.length, 5);
+  assert.equal(frozen.length, 8);
   for (const secret of final) {
     assert.throws(() =>
       freezeTransportSecrets({
@@ -748,7 +749,7 @@ test('actual transport producer freezes every distinct authority once and reject
   );
   assert.match(
     inner,
-    /let controlsClosed = false;\s*try \{\s*requiredSecrets = freezeTransportSecrets\(controls\)/,
+    /let controlsClosed = false;\s*try \{\s*requiredSecrets = navigationOnly \? controls.secrets : freezeTransportSecrets\(controls\)/,
   );
   assert.match(transport, /const authoritySet = transportFixtureAuthorities\(/);
   assert.match(transport, /const key = authorities.roles\[id\]/);
@@ -765,6 +766,24 @@ test('product exports require all six product meanings, every secret, exact froz
     details['progress.jsonl'],
   ]);
   const frozen = productCaptureExport(captures, secrets, true, false, details);
+  const inventory = Object.fromEntries(
+    compositionSurfaces.map((s) => [s, ['actual-producer-' + s]]),
+  );
+  assert.equal(
+    productCaptureExport(captures, secrets, true, false, details, inventory).scan.status,
+    'PASS',
+  );
+  for (const surface of compositionSurfaces) {
+    assert.throws(() =>
+      productCaptureExport(captures, secrets, true, false, details, {
+        ...inventory,
+        [surface]: [],
+      }),
+    );
+    const missing = { ...captures };
+    delete missing[surface];
+    assert.throws(() => productCaptureExport(missing, secrets, true, false, details, inventory));
+  }
   for (const file of productCaptureFiles) {
     assert.notEqual(frozen.details[file], details[file]);
     assert.deepEqual(frozen.details[file], details[file]);
@@ -891,9 +910,11 @@ test('product exports require all six product meanings, every secret, exact froz
     ).length,
     2,
   );
-  assert.match(
-    inner,
-    /await controls\.close\(\);[\s\S]*const complete = closed && remainingPids\.length === 0;[\s\S]*assert\.ok\(complete && productCleanup === 'OBSERVED'\);[\s\S]*const entries = await collectProductCapture\([\s\S]*const frozen = productCaptureExport\([\s\S]*Object\.entries\(frozen\.details\)/,
+  assert.ok(
+    /await controls\.close\(\);[\s\S]*await h\.finalizeCapture\(\);[\s\S]*const complete = closed && stdoutEnded && stderrEnded && remainingPids\.length === 0;[\s\S]*assert\.ok\(complete\);[\s\S]*const entries = await collectProductCapture\([\s\S]*const frozen = productCaptureExport\([\s\S]*Object\.entries\(frozen\.details\)/.test(
+      inner,
+    ),
+    'all producers and both host streams must close before complete collection and five-file retention',
   );
   // Restore the synthetic input for the existing substitution controls below.
   details['progress.jsonl'] = Buffer.from('progress.jsonl');

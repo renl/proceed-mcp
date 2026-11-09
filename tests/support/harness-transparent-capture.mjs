@@ -3,6 +3,39 @@ import assert from 'node:assert/strict';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { assertOriginalCallRouting } from './harness-qualification-assertions.mjs';
+import { createHash } from 'node:crypto';
+
+// Receipt of completed private writes, not a claim of scenario success. A killed
+// producer without this receipt cannot be replaced by an empty file assumption.
+export function privateCaptureWriter(maxBytes = 16 * 1048576) {
+  const hash = createHash('sha256');
+  let bytes = 0,
+    failed = false;
+  return {
+    written(chunk) {
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        failed = true;
+        throw Error('private file limit');
+      }
+      hash.update(chunk);
+    },
+    failed() {
+      failed = true;
+    },
+    seal() {
+      return { complete: !failed, bytes, sha256: hash.digest('hex') };
+    },
+  };
+}
+
+export function assertPrivateCaptureReceipt(bytes, receipt) {
+  assert.ok(Buffer.isBuffer(bytes));
+  assert.deepEqual(Object.keys(receipt).sort(), ['bytes', 'complete', 'sha256']);
+  assert.equal(receipt.complete, true, 'private writer incomplete');
+  assert.equal(receipt.bytes, bytes.length, 'private writer byte coverage');
+  assert.equal(receipt.sha256, createHash('sha256').update(bytes).digest('hex'));
+}
 
 export function transparentMcpCapture(connection, persist, maxBytes = 1048576) {
   assert.ok(typeof connection === 'string' && connection.length > 0);
@@ -60,14 +93,23 @@ export async function bridgeCapturedMcp({
   if (failure) throw failure.reason;
 }
 
-export function decodeMcpCapture(events, connection) {
-  assert.ok(events.length > 0);
+export function decodeMcpCapture(events, connection, { allowEmptyDirections = false } = {}) {
+  assert.ok(Array.isArray(events) && (allowEmptyDirections || events.length > 0));
+  for (const e of events) {
+    assert.deepEqual(Object.keys(e).sort(), ['base64', 'connection', 'direction', 'sequence']);
+    assert.equal(e.connection, connection);
+    assert.equal(Buffer.from(e.base64, 'base64').toString('base64'), e.base64);
+  }
   for (const e of events) assert.ok(['host-to-adapter', 'adapter-to-host'].includes(e.direction));
   const result = {};
   for (const direction of ['host-to-adapter', 'adapter-to-host']) {
     const selected = events.filter((e) => e.direction === direction);
     for (const e of selected) assert.equal(e.connection, connection);
     const raw = Buffer.concat(selected.map((e) => Buffer.from(e.base64, 'base64')));
+    if (allowEmptyDirections && raw.length === 0) {
+      result[direction] = [];
+      continue;
+    }
     assert.equal(raw.at(-1), 10, 'incomplete MCP frame or missing direction');
     result[direction] = raw
       .toString('utf8')

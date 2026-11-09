@@ -24,6 +24,38 @@ import {
   compositionScanReason,
   scanIntegratedPrivateCaptures,
 } from './support/harness-composition-retention.mjs';
+import {
+  privateCaptureWriter,
+  assertPrivateCaptureReceipt,
+} from './support/harness-transparent-capture.mjs';
+import {
+  transportFixtureAuthorities,
+  freezeTransportSecrets,
+} from './support/harness-transport-fixtures.mjs';
+
+const secretLedger = transportFixtureAuthorities(
+  {
+    operator: { credential: 'synthetic-operator' },
+    control: 'synthetic-control',
+    owner: 'synthetic-owner',
+    setupSecrets: ['synthetic-setup'],
+  },
+  'synthetic-psk',
+  'synthetic-unenrolled',
+);
+const receipt = (bytes) => {
+  const writer = privateCaptureWriter();
+  writer.written(bytes);
+  return writer.seal();
+};
+const privateInput = (input) => ({
+  ...input,
+  secretLedger,
+  receipts: {
+    mcp: receipt(input.mcp),
+    callbacks: receipt(input.callbacks),
+  },
+});
 
 const presentation = {
   request_id: `req_${'a'.repeat(32)}`,
@@ -51,29 +83,55 @@ const paint = (lines) =>
     '\x1b[?2026h\x1b[2J' + lines.map((s, n) => `\x1b[${n + 1};1H${s}`).join('') + '\x1b[?2026l',
   );
 const questionLines = (p) => [
-  'Proceed approval request', '',
-  ...[['Request ID', p.request_id], ['Session label', p.session_label], ['Action', p.action],
-    ['Context', p.context], ['Expires', p.expires_at]].flatMap(([label, value]) =>
-      [label + ':', ...value.split('\n').flatMap(identityLines)]),
-  '', 'Choose Reject, Respond or Approve.', 'Dismissing this dialog sends no decision.',
-  'Reject', 'Respond', 'Approve',
+  'Proceed approval request',
+  '',
+  ...[
+    ['Request ID', p.request_id],
+    ['Session label', p.session_label],
+    ['Action', p.action],
+    ['Context', p.context],
+    ['Expires', p.expires_at],
+  ].flatMap(([label, value]) => [label + ':', ...value.split('\n').flatMap(identityLines)]),
+  '',
+  'Choose Reject, Respond or Approve.',
+  'Dismissing this dialog sends no decision.',
+  'Reject',
+  'Respond',
+  'Approve',
 ];
 const lines = questionLines(presentation);
 
 test('outer maintained post-export verdict requires the exact mode-specific Enter ledger', () => {
-  for (const [mode, count] of [['composition', 14], ['product-picker-capture', 0], ['product-navigation', 1]]) {
-    const diagnostic = { status: 'PASS', keys: { ctrlG: mode === 'composition' ? 5 : 1, enter: count, exit: 1 } };
+  for (const [mode, count] of [
+    ['composition', 14],
+    ['product-picker-capture', 0],
+    ['product-navigation', 1],
+  ]) {
+    const diagnostic = {
+      status: 'PASS',
+      keys: { ctrlG: mode === 'composition' ? 5 : 1, enter: count, exit: 1 },
+    };
     assertProductCaptureOutcome(mode, '0\n', diagnostic);
     for (const enter of new Set([count - 1, count + 1, 0, 1, 14].filter((n) => n !== count)))
-      assert.throws(() => assertProductCaptureOutcome(mode, '0', { ...diagnostic, keys: { ...diagnostic.keys, enter } }));
+      assert.throws(() =>
+        assertProductCaptureOutcome(mode, '0', {
+          ...diagnostic,
+          keys: { ...diagnostic.keys, enter },
+        }),
+      );
     assert.throws(() => assertProductCaptureOutcome(mode, '1', diagnostic));
     assert.throws(() => assertProductCaptureOutcome(mode, '0', { ...diagnostic, status: 'FAIL' }));
   }
-  assert.throws(() => assertProductCaptureOutcome('platform', '0', {status: 'PASS', keys: {enter: 14}}));
+  assert.throws(() =>
+    assertProductCaptureOutcome('platform', '0', { status: 'PASS', keys: { enter: 14 } }),
+  );
 });
 
 test('actual outer PRODUCT branch admits all transfers before export and mode verdict', async () => {
-  const source = await readFile(new URL('support/harness-linux-runner.mjs', import.meta.url), 'utf8');
+  const source = await readFile(
+    new URL('support/harness-linux-runner.mjs', import.meta.url),
+    'utf8',
+  );
   const start = source.indexOf('} else if (productMode) {') + '} else if (productMode) {'.length;
   const end = source.indexOf('} else if (composition) {', start);
   assert.ok(start > 30 && end > start);
@@ -90,23 +148,38 @@ test('actual outer PRODUCT branch admits all transfers before export and mode ve
     ['composition', 14, 'PASS', '0', true],
   ]) {
     const calls = [];
-    const branch = runInNewContext('(async () => {' + source.slice(start, end) + '})', {
-      mode, waited: { stdout: exit }, productDetailsAttempted: false,
-      retainDiagnostic: async () => ({status, keys: {enter}}),
-      transferProductCapture: async () => {
-        calls.push('five-transfer-admission');
-        if (refused) throw Error('refused synthetic admission');
-        return new Map([['synthetic-scan-pass', Buffer.from('synthetic')]]);
+    const branch = runInNewContext(
+      '(async () => {' + source.slice(start, end) + '})',
+      {
+        mode,
+        waited: { stdout: exit },
+        productDetailsAttempted: false,
+        retainDiagnostic: async () => ({ status, keys: { enter } }),
+        transferProductCapture: async () => {
+          calls.push('five-transfer-admission');
+          if (refused) throw Error('refused synthetic admission');
+          return new Map([['synthetic-scan-pass', Buffer.from('synthetic')]]);
+        },
+        evidenceDestination: (file) => file,
+        writeFile: async () => calls.push('export'),
+        assertProductCaptureOutcome: (...args) => {
+          calls.push('verdict');
+          return assertProductCaptureOutcome(...args);
+        },
       },
-      evidenceDestination: (file) => file,
-      writeFile: async () => calls.push('export'),
-      assertProductCaptureOutcome: (...args) => { calls.push('verdict'); return assertProductCaptureOutcome(...args); },
-    }, {timeout: 100});
-    const passes = status === 'PASS' && exit === '0' && !refused &&
-      enter === ({composition: 14, 'product-picker-capture': 0, 'product-navigation': 1})[mode];
+      { timeout: 100 },
+    );
+    const passes =
+      status === 'PASS' &&
+      exit === '0' &&
+      !refused &&
+      enter === { composition: 14, 'product-picker-capture': 0, 'product-navigation': 1 }[mode];
     if (passes) await branch();
     else await assert.rejects(branch());
-    assert.deepEqual(calls, refused ? ['five-transfer-admission'] : ['five-transfer-admission', 'export', 'verdict']);
+    assert.deepEqual(
+      calls,
+      refused ? ['five-transfer-admission'] : ['five-transfer-admission', 'export', 'verdict'],
+    );
   }
 });
 
@@ -115,15 +188,19 @@ test('labelled current question reconstructs UUID continuation exactly and refus
   const context = lines.indexOf('Context:') + 1;
   const variants = [
     lines.filter((_, i) => i !== context + 1),
-    lines.map((s, i) => i === context ? s.slice(0, -1) : s),
-    lines.map((s, i) => i === context ? lines[context + 1] : i === context + 1 ? lines[context] : s),
-    lines.map((s, i) => i === context + 1 ? 'X' + s.slice(1) : s),
+    lines.map((s, i) => (i === context ? s.slice(0, -1) : s)),
+    lines.map((s, i) =>
+      i === context ? lines[context + 1] : i === context + 1 ? lines[context] : s,
+    ),
+    lines.map((s, i) => (i === context + 1 ? 'X' + s.slice(1) : s)),
     [...lines.slice(0, context), 'Context:', ...lines.slice(context)],
     [...lines, ...lines],
-    lines.map((s, i) => i === context ? presentation.context : i === context + 1 ? '' : s),
+    lines.map((s, i) => (i === context ? presentation.context : i === context + 1 ? '' : s)),
   ];
   for (const values of variants)
-    assert.throws(() => observeCurrentQuestion({ raw: paint(values), live, binding, presentation }));
+    assert.throws(() =>
+      observeCurrentQuestion({ raw: paint(values), live, binding, presentation }),
+    );
   const padded = lines.map((s) => '    ' + s + '  ');
   observeCurrentQuestion({ raw: paint(padded), live, binding, presentation });
 });
@@ -371,6 +448,8 @@ test('integrated private capture scans decoded original fields before summary an
       base64: Buffer.from(JSON.stringify(message) + '\n').toString('base64'),
     });
   let ordinal = 0;
+  let failWait = false;
+  let failPrepare = false;
   const context = {
     session: { get: async ({ sessionID }) => ({ id: sessionID, agent: 'memory-host-agent' }) },
     agent: { get: async () => ({ data: { id: 'memory-host-agent' } }) },
@@ -402,6 +481,16 @@ test('integrated private capture scans decoded original fields before summary an
               name === 'prepare_approval'
                 ? prepared
                 : { request_id: prepared.request_id, resolution: 'rejected' };
+            if (name === 'prepare_approval' && failPrepare) {
+              emit('adapter-to-host', {
+                jsonrpc: '2.0',
+                id,
+                error: { code: -32603, message: 'synthetic preparation failure' },
+              });
+              throw Error('synthetic preparation failure');
+            }
+            if (name === 'request_approval' && failWait)
+              throw Error('synthetic invocation failure');
             emit('adapter-to-host', {
               jsonrpc: '2.0',
               id,
@@ -415,21 +504,56 @@ test('integrated private capture scans decoded original fields before summary an
         })),
     },
   };
-  for (const sessionID of ['memory-first', 'memory-second', 'memory-first'])
+  const encode = (v) => Buffer.from(v.map((e) => JSON.stringify(e) + '\n').join(''));
+  const secrets = freezeTransportSecrets(secretLedger);
+  const snapshot = () => privateInput({ mcp: encode(events), callbacks: encode(records) });
+  assert.equal(scanIntegratedPrivateCaptures(snapshot(), secrets).status, 'PASS');
+  assert.throws(() =>
+    scanIntegratedPrivateCaptures({ ...snapshot(), scenarioSuccess: true }, secrets),
+  );
+  for (const sessionID of ['memory-first', 'memory-second', 'memory-first']) {
     await invokeRegisteredProceed(
       context,
       { sessionID, prompt: { text: '' } },
       new AbortController().signal,
       async (record) => records.push(record),
     );
-  const encode = (v) => Buffer.from(v.map((e) => JSON.stringify(e) + '\n').join(''));
-  const secrets = ['synthetic-operator', 'synthetic-owner', 'synthetic-control', 'synthetic-psk'];
-  const input = {
+    assert.equal(scanIntegratedPrivateCaptures(snapshot(), secrets).status, 'PASS');
+  }
+  const input = privateInput({
     mcp: encode(events),
     callbacks: encode(records),
-    other: [Buffer.from('complete current private action record')],
-  };
+    other: [Buffer.from('{}')],
+    scenarioSuccess: true,
+  });
   assert.equal(scanIntegratedPrivateCaptures(input, secrets).status, 'PASS');
+  for (const bad of [
+    { ...input, receipts: undefined },
+    { ...input, mcp: Buffer.alloc(0) },
+    { ...input, receipts: { ...input.receipts, mcp: { ...input.receipts.mcp, complete: false } } },
+    { ...input, secretLedger: { ...secretLedger, secrets: secretLedger.secrets.slice(1) } },
+  ])
+    assert.throws(() => scanIntegratedPrivateCaptures(bad, secrets));
+  assert.throws(() => scanIntegratedPrivateCaptures(input, secrets.slice(1)));
+  const wrongSession = structuredClone(records);
+  wrongSession.find((r) => r.phase === 'prepare-returned').sessionID = 'unrelated';
+  assert.throws(() =>
+    scanIntegratedPrivateCaptures(
+      privateInput({ ...input, callbacks: encode(wrongSession) }),
+      secrets,
+    ),
+  );
+  for (const value of [
+    `hop_${'e'.repeat(64)}`,
+    `cap_${'f'.repeat(64)}`,
+    { operator_credential: 'unclassified' },
+  ])
+    assert.throws(() =>
+      scanIntegratedPrivateCaptures(
+        { ...input, other: [Buffer.from(JSON.stringify(value))] },
+        secrets,
+      ),
+    );
   assert.throws(
     () =>
       scanIntegratedPrivateCaptures(
@@ -441,13 +565,13 @@ test('integrated private capture scans decoded original fields before summary an
   assert.throws(
     () =>
       scanIntegratedPrivateCaptures(
-        {
+        privateInput({
           ...input,
           callbacks: Buffer.concat([
             input.callbacks,
             Buffer.from(JSON.stringify({ phase: 'extra', value: 'synthetic-operator' }) + '\n'),
           ]),
-        },
+        }),
         secrets,
       ),
     /raw private authority leak/,
@@ -457,9 +581,138 @@ test('integrated private capture scans decoded original fields before summary an
   body.params.extra = 'synthetic-operator';
   mutated[0].base64 = Buffer.from(JSON.stringify(body) + '\n').toString('base64');
   assert.throws(
-    () => scanIntegratedPrivateCaptures({ ...input, mcp: encode(mutated) }, secrets),
+    () => scanIntegratedPrivateCaptures(privateInput({ ...input, mcp: encode(mutated) }), secrets),
     /raw private authority leak/,
   );
+  events.length = 0;
+  records.length = 0;
+  ordinal = 0;
+  failWait = true;
+  await assert.rejects(
+    invokeRegisteredProceed(
+      context,
+      { sessionID: 'memory-partial', prompt: { text: '' } },
+      new AbortController().signal,
+      async (record) => records.push(record),
+    ),
+  );
+  assert.equal(scanIntegratedPrivateCaptures(snapshot(), secrets).status, 'PASS');
+  assert.throws(() =>
+    scanIntegratedPrivateCaptures({ ...snapshot(), scenarioSuccess: true }, secrets),
+  );
+  const incomplete = structuredClone(events);
+  incomplete.at(-1).base64 = Buffer.from('{').toString('base64');
+  assert.throws(() =>
+    scanIntegratedPrivateCaptures(
+      privateInput({ ...snapshot(), mcp: encode(incomplete) }),
+      secrets,
+    ),
+  );
+  events.length = 0;
+  records.length = 0;
+  failWait = false;
+  failPrepare = true;
+  await assert.rejects(
+    invokeRegisteredProceed(
+      context,
+      { sessionID: 'memory-failed-prepare', prompt: { text: '' } },
+      new AbortController().signal,
+      async (record) => records.push(record),
+    ),
+  );
+  assert.equal(scanIntegratedPrivateCaptures(snapshot(), secrets).status, 'PASS');
+});
+
+test('actual registered wrapper seals zero and failed partial callback captures only after owned writes and invocations drain', async () => {
+  const source = await readFile(
+    new URL('./fixtures/harness-wrapper/server.mjs', import.meta.url),
+    'utf8',
+  );
+  for (const partial of [false, true]) {
+    let raw = Buffer.alloc(0),
+      command,
+      closed = false,
+      disposed = false;
+    const seals = new Map();
+    const fixture = runInNewContext(
+      source.replace(/^import[\s\S]*?from '[^']+';\s*/gm, '').replace('export default ', ''),
+      {
+        Plugin: { define: (v) => v },
+        Buffer,
+        AbortController,
+        setTimeout,
+        clearTimeout,
+        privateCaptureWriter,
+        invokeRegisteredProceed,
+        wrapperCommand: 'proceed-qualification-request',
+        open: async () => ({
+          writeFile: async (bytes) => {
+            assert.equal(closed, false);
+            raw = Buffer.concat([raw, bytes]);
+          },
+          close: async () => {
+            closed = true;
+          },
+        }),
+        writeFile: async (path, bytes) => {
+          assert.ok(closed && disposed);
+          seals.set(path, JSON.parse(bytes));
+        },
+      },
+    );
+    const prepared = {
+      request_id: 'req_' + '1'.repeat(32),
+      request_handle: 'hdl_' + '1'.repeat(32),
+      request_capability: 'cap_' + '1'.repeat(64),
+    };
+    const cleanup = await fixture.setup({
+      app: { version: '2.2.5' },
+      command: {
+        transform: async (edit) => {
+          edit({
+            add: (v) => {
+              command = v;
+            },
+          });
+          return {
+            dispose: async () => {
+              disposed = true;
+            },
+          };
+        },
+      },
+      session: { get: async ({ sessionID }) => ({ id: sessionID, agent: 'selected' }) },
+      agent: { get: async () => ({ data: { id: 'selected' } }) },
+      tool: {
+        list: async () =>
+          ['prepare_approval', 'request_approval'].map((name) => ({
+            name,
+            options: { namespace: 'proceed' },
+            execute: async () => {
+              if (name === 'request_approval') throw Error('native partial failure');
+              return { output: prepared };
+            },
+          })),
+      },
+    });
+    if (partial)
+      await assert.rejects(command.execute({ sessionID: 'native-session', prompt: { text: '' } }));
+    await cleanup();
+    assertPrivateCaptureReceipt(
+      raw,
+      seals.get('/run/proceed/qualification-private/wrapper-seal.json'),
+    );
+    assert.equal(raw.length > 0, partial);
+    if (partial)
+      assert.deepEqual(
+        raw
+          .toString()
+          .trim()
+          .split('\n')
+          .map((s) => JSON.parse(s).phase),
+        ['prepare-started', 'prepare-returned', 'wait-started'],
+      );
+  }
 });
 
 test('integrated maintained entry executes registered calls, both navigation fences, current choice cells and reverse original results', async () => {
@@ -866,8 +1119,14 @@ test('integrated maintained entry executes registered calls, both navigation fen
   const enters = writes.filter((s) => s === '\r' || s === 'approved\r').length;
   assert.equal(enters, 14, 'actual maintained scenario ledger');
   assert.deepEqual(
-    Object.fromEntries([['ctrlG', '\x07'], ['down', '\x1b[B'], ['up', '\x1b[A'], ['escape', '\x1b']]
-      .map(([name, bytes]) => [name, writes.filter((s) => s === bytes).length])),
+    Object.fromEntries(
+      [
+        ['ctrlG', '\x07'],
+        ['down', '\x1b[B'],
+        ['up', '\x1b[A'],
+        ['escape', '\x1b'],
+      ].map(([name, bytes]) => [name, writes.filter((s) => s === bytes).length]),
+    ),
     { ctrlG: 5, down: 9, up: 3, escape: 2 },
     'scenario keys exclude outer enrollment Escape/Ctrl+E and owned exit',
   );

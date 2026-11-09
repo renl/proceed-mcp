@@ -1,6 +1,7 @@
 // Disposable trusted server plugin. Never packaged/imported by production.
 import * as Plugin from '@opencode/plugin/promise/plugin';
-import { open } from 'node:fs/promises';
+import { open, writeFile } from 'node:fs/promises';
+import { privateCaptureWriter } from '/payload/tests/support/harness-transparent-capture.mjs';
 import {
   invokeRegisteredProceed,
   wrapperCommand,
@@ -15,10 +16,15 @@ export default Plugin.define({
     const file = await open('/run/proceed/qualification-private/wrapper.jsonl', 'wx', 0o600);
     const controller = new AbortController();
     const active = new Set();
+    const writer = privateCaptureWriter();
     let writes = Promise.resolve();
     const record = (event) => {
-      const pending = writes.then(() => file.writeFile(`${JSON.stringify(event)}\n`));
-      writes = pending.catch(() => {});
+      const pending = writes.then(async () => {
+        const bytes = Buffer.from(`${JSON.stringify(event)}\n`);
+        await file.writeFile(bytes);
+        writer.written(bytes);
+      });
+      writes = pending.catch(() => writer.failed());
       return pending;
     };
     let registration;
@@ -41,6 +47,11 @@ export default Plugin.define({
     } catch (error) {
       controller.abort();
       await file.close();
+      await writeFile(
+        '/run/proceed/qualification-private/wrapper-seal.json',
+        JSON.stringify(writer.seal()),
+        { flag: 'wx', mode: 0o600 },
+      );
       throw error;
     }
     const timer = setTimeout(
@@ -54,6 +65,11 @@ export default Plugin.define({
       await Promise.allSettled([...active]);
       await writes;
       await file.close();
+      await writeFile(
+        '/run/proceed/qualification-private/wrapper-seal.json',
+        JSON.stringify(writer.seal()),
+        { flag: 'wx', mode: 0o600 },
+      );
     };
   },
 });
