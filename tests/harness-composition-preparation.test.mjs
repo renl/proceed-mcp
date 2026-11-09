@@ -1088,6 +1088,26 @@ test('actual navigation host entry dispatches only its maintained mode, never pr
   assert.match(nav, /ready: \(onAdmit\) =>[\s\S]*admitReady\(/);
   assert.match(nav, /prePickerFrames = compositionSourceFrame\(transcript.toString\(\)\).frames/);
   assert.match(nav, /current.frames > \(previousFrames \|\| prePickerFrames\)/);
+  const progressStart = nav.indexOf('progress: (stage) =>');
+  const progressEnd = nav.indexOf('awaitUpdate:', progressStart);
+  const phases = [];
+  const mapped = runInNewContext(
+    '({' + nav.slice(progressStart, progressEnd) + '}).progress',
+    {
+      progress: (phase) => phases.push(phase),
+    },
+    { timeout: 100 },
+  );
+  for (const stage of ['readiness', 'initial', 'moved', 'identity', 'dismissal', 'exit'])
+    mapped('navigation-' + stage);
+  assert.deepEqual(phases, [
+    'rendered-host-and-product-registration',
+    'rendered-product-session-picker',
+    'rendered-product-session-picker',
+    'rendered-product-session-picker',
+    'rendered-product-picker-dismissal',
+    'exact-product-PluginCleanup',
+  ]);
   assert.match(nav, /readExecutionBinding: readFixed/);
   assert.match(nav, /deadline: navigationEnd/);
   assert.doesNotMatch(

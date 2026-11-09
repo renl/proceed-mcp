@@ -947,10 +947,20 @@ try {
               }),
             now: () => performance.now(),
             deadline: navigationEnd,
-            progress,
+            progress: (stage) =>
+              progress(
+                {
+                  'navigation-readiness': 'rendered-host-and-product-registration',
+                  'navigation-initial': 'rendered-product-session-picker',
+                  'navigation-moved': 'rendered-product-session-picker',
+                  'navigation-identity': 'rendered-product-session-picker',
+                  'navigation-dismissal': 'rendered-product-picker-dismissal',
+                  'navigation-exit': 'exact-product-PluginCleanup',
+                }[stage],
+              ),
             awaitUpdate: async (previousFrames) =>
               wait(
-                'navigation-completed-update',
+                'rendered-product-session-picker',
                 () => {
                   const { raw } = boundSnapshot(null);
                   const current = compositionSourceFrame(
@@ -966,7 +976,7 @@ try {
               ),
             awaitDismissal: async (previous) =>
               wait(
-                'navigation-completed-dismissal',
+                'rendered-product-picker-dismissal',
                 () => {
                   const state = boundSnapshot(previous);
                   return productPickerDismissal(state.raw, state.binding, previous, state.hostFrame)
