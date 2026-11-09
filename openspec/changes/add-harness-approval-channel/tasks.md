@@ -10,6 +10,8 @@ Continuation remains incomplete, not a review-ready integrated candidate. The ex
 
 ### Corrected criterion evidence
 
+Selected correction commit `ed16cbbe1b1c6b2ab158587d124803105ba09616` contains exactly this tasks file and the three executable controls below. Scoped format/check, selected whitespace and telemetry-disabled `openspec validate add-harness-approval-channel --strict` PASS, exit 0 within 30000 ms. This evidence finalization is tasks-only. No executable, production, dependency, configuration or baseline input changed after the final affected native execution. This is criterion-correction evidence with an exact unfinished wiring blocker, not a new integrated checkpoint or complete review candidate.
+
 Entry HEAD/tasks freeze `0b80fab6e6aaf81ed7dd2cd1938fbaf4033a73b1`, discrepancy `9f2bfff34456430912f5c5494a2b643f4479e04c`, production `5c101bc2d68fdd3f61cd6863fbfa92e2a02f947a`. Entry index was empty. Only README/status overlays were dirty, and both remain untouched and unselected. Selected changes are this tasks file and the three test/support inputs listed below. Production, design/specs, runner entrypoints, resource/transfer budgets, image and isolation remain unchanged.
 
 Final affected native commands, each within a 30000 ms PowerShell command bound on Windows:
