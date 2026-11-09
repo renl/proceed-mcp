@@ -105,30 +105,37 @@ const statusCases = [
   ['eligible', { state: 'eligible', reason: null }],
 ];
 
-for (const [name, channel] of statusCases) {
-  test(`pending ${name}: MCP keeps the exact declared eligibility in both projections`, async () => {
-    const body = pendingView(channel);
-    const executor = createToolExecutor({
-      client: { request: async () => ({ status: 200, body }) },
-      registration: { async ensure() {}, close() {} },
-    });
-    try {
-      const result = await executor.execute('get_approval', {
-        request_id: body.request_id,
-        request_capability: `cap_${'b'.repeat(64)}`,
+for (const harnessId of [null, 'different-observer']) {
+  for (const [name, channel] of statusCases) {
+    test(`pending ${name}, observer ${harnessId}: MCP keeps the exact declared eligibility in both projections`, async () => {
+      const body = pendingView(channel);
+      const executor = createToolExecutor({
+        harnessId,
+        client: { request: async () => ({ status: 200, body }) },
+        registration: { async ensure() {}, close() {} },
       });
-      assert.equal(result.isError, false);
-      assert.deepEqual(result.structuredContent.harness_channel, channel);
-      assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent);
-      assert.ok(!JSON.stringify(result).includes(`cap_${'b'.repeat(64)}`));
-    } finally {
-      await executor.close();
-    }
-  });
+      try {
+        const result = await executor.execute('get_approval', {
+          request_id: body.request_id,
+          request_capability: `cap_${'b'.repeat(64)}`,
+        });
+        assert.equal(result.isError, false);
+        assert.deepEqual(result.structuredContent.harness_channel, channel);
+        assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent);
+        assert.ok(!JSON.stringify(result).includes(`cap_${'b'.repeat(64)}`));
+      } finally {
+        await executor.close();
+      }
+    });
+  }
 }
 
 for (const [name, channel] of [
   ['missing', undefined],
+  ['null', null],
+  ['array', []],
+  ['extra authority field', { state: 'eligible', reason: null, human: true }],
+  ['missing reason', { state: 'eligible' }],
   ['unknown state', { state: 'displayed', reason: null }],
   ['unavailable without reason', { state: 'unavailable', reason: null }],
   ['eligible with refusal reason', { state: 'eligible', reason: 'OPERATOR_NOT_ENROLLED' }],
@@ -149,6 +156,7 @@ for (const [name, channel] of [
       });
       assert.equal(result.isError, true);
       assert.equal(result.structuredContent.error.code, 'BROKER_UNAVAILABLE');
+      assert.ok(!JSON.stringify(result).includes(body.action), 'invalid body is not forwarded');
     } finally {
       await executor.close();
     }
@@ -204,4 +212,81 @@ test('pending status reflects enrollment then revocation without changing the re
     state: 'unavailable',
     reason: 'OPERATOR_NOT_ENROLLED',
   });
+});
+
+for (const channel of [
+  undefined,
+  { state: 'eligible', reason: null },
+  { state: 'closed', reason: 'HOST_NOT_CONFIGURED' },
+  { state: 'closed', reason: null, key_id: 'not-authority' },
+]) {
+  test(`terminal contradictory/malformed status ${JSON.stringify(channel)} refuses the body`, async () => {
+    const body = {
+      ...pendingView(channel),
+      resolution: 'cancelled',
+      decision_id: `dec_${'d'.repeat(32)}`,
+      resolved_at: '2026-11-09T00:01:00Z',
+      delivery_state: 'unavailable',
+    };
+    if (channel === undefined) delete body.harness_channel;
+    const executor = createToolExecutor({
+      client: { request: async () => ({ status: 200, body }) },
+      registration: { async ensure() {}, close() {} },
+    });
+    try {
+      const result = await executor.execute('cancel_approval', {
+        request_id: body.request_id,
+        request_capability: `cap_${'b'.repeat(64)}`,
+      });
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent.error.code, 'BROKER_UNAVAILABLE');
+      assert.ok(!JSON.stringify(result).includes(body.action));
+    } finally {
+      await executor.close();
+    }
+  });
+}
+
+test('original waiting result copies closed broker status, not current observer configuration', async () => {
+  const pending = pendingView({ state: 'eligible', reason: null });
+  const terminal = {
+    ...pending,
+    resolution: 'approved',
+    resolved_at: '2026-11-09T00:01:00Z',
+    decision_id: `dec_${'d'.repeat(32)}`,
+    delivery_state: 'pending',
+    harness_channel: { state: 'closed', reason: null },
+  };
+  let polls = 0;
+  const executor = createToolExecutor({
+    harnessId: null,
+    client: { request: async () => ({ status: 201, body: pending }) },
+    waitClient: {
+      request: async () => {
+        polls++;
+        return { status: 200, body: terminal };
+      },
+    },
+    registration: {
+      async ensure() {
+        return { registration_id: `reg_${'e'.repeat(32)}`, registration_secret: 'f'.repeat(64) };
+      },
+      close() {},
+    },
+  });
+  try {
+    const result = await executor.execute('request_approval', {
+      request_handle: pending.request_handle,
+      request_capability: `cap_${'b'.repeat(64)}`,
+      client_request_id: pending.client_request_id,
+      action: pending.action,
+      context: pending.context,
+    });
+    assert.equal(result.isError, false);
+    assert.equal(polls, 1);
+    assert.deepEqual(result.structuredContent.harness_channel, terminal.harness_channel);
+    assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent);
+  } finally {
+    await executor.close();
+  }
 });

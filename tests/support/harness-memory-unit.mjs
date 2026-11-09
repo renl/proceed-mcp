@@ -47,9 +47,19 @@ export async function memoryHarness(t, { enrolled = true } = {}) {
       transactions.push({ mutations: structuredClone(mutations) });
     },
   };
-  const make = async () => {
+  const make = async (history = transactions) => {
     const core = createPortableBroker({
-      journal,
+      journal:
+        history === transactions
+          ? journal
+          : {
+              ...journal,
+              recover: async () => ({
+                transactions: structuredClone(history),
+                validLength: 0,
+                fileBytes: 0,
+              }),
+            },
       owners: [{ owner_id: scope.ownerId, label: 'Unit owner' }],
       port: 1,
       clock: () => Date.now(),
@@ -88,10 +98,11 @@ export async function memoryHarness(t, { enrolled = true } = {}) {
     );
   };
   if (enrolled) await enroll();
-  const create = async (sessionId = scope.sessionId, route = true) => {
+  const create = async (sessionId = scope.sessionId, route = true, hostConfigured = true) => {
     const harnessRoute = { harnessId: scope.harnessId, sessionId };
     const authority = await core.reserveHandle({
       ownerId: scope.ownerId,
+      ...(hostConfigured === undefined ? {} : { hostConfigured }),
       ...(route ? { harnessRoute } : {}),
     });
     const input = {
