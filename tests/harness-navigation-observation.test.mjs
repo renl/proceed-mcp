@@ -659,7 +659,7 @@ test('actual composition readers cannot revive invalidation during either final 
               run: io.binding.run,
               setup: io.binding.setup,
               readLive: () => {
-                if (armed) samples++;
+                samples++;
                 if (armed && boundary === 'live') invalidate();
                 return io.sample().live;
               },
@@ -692,6 +692,7 @@ test('actual composition readers cannot revive invalidation during either final 
             return true;
           },
         });
+        samples = 0;
         armed = true;
         const admit = () =>
           second ? observer.openQuestion() : observer.pickerEnter(productSnapshot[1]);
@@ -787,8 +788,8 @@ test('actual composition final readers fail closed on state changes, deadline, e
             run: io.binding.run,
             setup: io.binding.setup,
             readLive: () => {
+              samples++;
               if (armed) {
-                samples++;
                 if (boundary === 'throw-live') throw Error('private-reader-detail');
                 if (boundary === 'dispose') c.state.live.live = false;
                 if (boundary === 'setup') c.state.live.generation = 'replacement';
@@ -815,6 +816,7 @@ test('actual composition final readers fail closed on state changes, deadline, e
         c.identity();
         observer.identity();
       }
+      samples = 0;
       armed = true;
       const admit = () =>
         second ? observer.openQuestion() : observer.pickerEnter(productSnapshot[1]);
@@ -825,6 +827,7 @@ test('actual composition final readers fail closed on state changes, deadline, e
       c.setTick(1);
       assert.throws(admit, /navigation admission refused/);
       assert.deepEqual(c.writes, second ? ['Down', 'Enter'] : ['Down']);
+      assert.equal(samples, 1, 'retry does not acquire another sample');
     }
   }
 });
