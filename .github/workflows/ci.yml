@@ -31,3 +31,11 @@ jobs:
         run: |
           node --test --test-reporter=tap tests/portable-execution-cancel.test.mjs tests/portable-wait-unit.test.mjs
         timeout-minutes: 1
+      - shell: bash
+        run: |
+          node --experimental-test-module-mocks --test tests/startup-token-environment.test.mjs
+        timeout-minutes: 1
+      - shell: bash
+        run: |
+          node --experimental-vm-modules --test tests/startup-token-helper-environment.test.mjs
+        timeout-minutes: 1

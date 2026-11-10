@@ -11,7 +11,7 @@ const FAILURES = new Map([
     {
       code: 'BROKER_UNAVAILABLE',
       message:
-        'the local broker uses an unsupported local channel; stop it through its own Ctrl+C or operator interface, then restart it with "proceed-mcp serve --secure-local" or provision the automatic-startup token file',
+        'the local broker uses an unsupported local channel; stop it through its own Ctrl+C or operator interface, then restart it with "proceed-mcp serve --secure-local" or supply the token privately on the next automatic launch, or provision the automatic-startup token file',
     },
   ],
   [
@@ -19,7 +19,7 @@ const FAILURES = new Map([
     {
       code: 'BROKER_UNAVAILABLE',
       message:
-        'the automatic-startup Telegram credential is missing or unusable; run "proceed-mcp telegram provision --token-stdin" or select the correct safe file',
+        'the automatic-startup Telegram credential is missing or unusable; supply PROCEED_TELEGRAM_BOT_TOKEN privately for the next launch, or run "proceed-mcp telegram provision --token-stdin" and select the correct safe file',
     },
   ],
   [
