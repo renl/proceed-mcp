@@ -81,7 +81,9 @@ const KNOWN_EXECUTION_POLICIES = new Set([
 
 // Fixed metadata-only query. Paths arrive only through PROCEED_ACL_TARGETS and
 // are never interpolated into this text. It reports observations; it never
-// reports or computes safety and never touches content.
+// reports or computes safety and never touches content. The DACL is reported
+// from the security descriptor bytes in order, not from a typed rule view that
+// can omit or flatten entries.
 const WINDOWS_METADATA_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   '$accountSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
@@ -111,33 +113,54 @@ const WINDOWS_METADATA_SCRIPT = [
   '  try {',
   '    $header = $acl.GetSecurityDescriptorBinaryForm()',
   '    $control = [uint32]([System.BitConverter]::ToUInt16($header, 2))',
-  '    $sddl = [string]$acl.Sddl',
-  '    $dacl = "present"',
-  "    if ($sddl -notmatch 'D:') { $dacl = 'absent' } elseif ($sddl -match 'D:NO_ACCESS_CONTROL') { $dacl = 'null' }",
   '    $ownerSid = $null',
   '    try { $ownerSid = (New-Object System.Security.Principal.NTAccount($acl.Owner)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $ownerSid = $null }',
   '    $complete = ($null -ne $ownerSid)',
   '    $aces = New-Object System.Collections.ArrayList',
-  '    foreach ($rule in $acl.Access) {',
+  // The descriptor bytes this query already holds carry the complete DACL. The
+  // typed $acl.Access projection omits entries it cannot map to a file-system
+  // rule and can flatten callback forms, so rights in those forms would never
+  // reach the refusal policy. Every raw entry is reported in descriptor order.
+  '    $descriptor = New-Object System.Security.AccessControl.RawSecurityDescriptor($header, 0)',
+  '    $rawAcl = $descriptor.DiscretionaryAcl',
+  '    $dacl = "present"',
+  '    if (($control -band 4) -eq 0) { $dacl = "absent" }',
+  '    if ($dacl -eq "present" -and $null -eq $rawAcl) { $dacl = "null" }',
+  '    if ($dacl -eq "absent" -and $null -ne $rawAcl) { throw "unsupported security descriptor" }',
+  '    $count = 0',
+  '    $declared = 0',
+  '    if ($null -ne $rawAcl) {',
+  '      $count = [int]$rawAcl.Count',
+  // The serialized ACL states its own entry count, so a list that omits,
+  // repeats or reorders entries cannot pass as a complete observation.
+  '      $aclBytes = New-Object -TypeName byte[] -ArgumentList ([int]$rawAcl.BinaryLength)',
+  '      $rawAcl.GetBinaryForm($aclBytes, 0)',
+  '      $declared = [int]([System.BitConverter]::ToUInt16($aclBytes, 4))',
+  '    }',
+  '    if ($count -ne $declared) { throw "unsupported access control list accounting" }',
+  '    for ($index = 0; $index -lt $count; $index += 1) {',
+  '      $ace = $rawAcl[$index]',
   '      $type = "unknown"',
   '      $sid = $null',
   '      $mask = $null',
-  '      $flags = 0',
-  '      if ($rule -is [System.Security.AccessControl.FileSystemAccessRule]) {',
-  '        if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) { $type = "allow" }',
-  '        elseif ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Deny) { $type = "deny" }',
-  '        try { $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $sid = $null }',
-  '        $rights = [int64]$rule.FileSystemRights',
-  // Widen to a signed 64-bit integer before masking so an access mask whose
+  '      $flags = [int]$ace.AceFlags',
+  // Ordinary single-SID allow/deny entries keep their identity and full 32-bit
+  // mask. Object and conditional (callback) entries are reported as their own
+  // forms so the refusal policy sees them; any other form stays unknown.
+  '      if ($ace -is [System.Security.AccessControl.CommonAce]) {',
+  '        if ($ace.AceType -eq [System.Security.AccessControl.AceType]::AccessAllowed) { $type = "allow" }',
+  '        elseif ($ace.AceType -eq [System.Security.AccessControl.AceType]::AccessDenied) { $type = "deny" }',
+  '      } elseif ($ace -is [System.Security.AccessControl.ObjectAce]) { $type = "object" }',
+  '      elseif ($ace -is [System.Security.AccessControl.CustomAce]) {',
+  '        if ($ace.AceType -ge 9 -and $ace.AceType -le 12) { $type = "conditional" }',
+  '      }',
+  '      if ($type -eq "allow" -or $type -eq "deny") {',
+  '        $sid = [string]$ace.SecurityIdentifier.Value',
+  // Widen the signed access mask to 64 bits before masking so a mask whose
   // high bit is set keeps all 32 bits instead of failing or narrowing.
-  '        if ($rights -lt -2147483648 -or $rights -gt 4294967295) { throw "unsupported access mask" }',
-  '        $mask = [uint32]($rights -band 4294967295)',
-  '        if (($rule.InheritanceFlags -band [System.Security.AccessControl.InheritanceFlags]::ObjectInherit) -ne 0) { $flags = $flags -bor 1 }',
-  '        if (($rule.InheritanceFlags -band [System.Security.AccessControl.InheritanceFlags]::ContainerInherit) -ne 0) { $flags = $flags -bor 2 }',
-  '        if (($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::NoPropagateInherit) -ne 0) { $flags = $flags -bor 4 }',
-  '        if (($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { $flags = $flags -bor 8 }',
-  '        if ($rule.IsInherited) { $flags = $flags -bor 16 }',
-  '        if ($null -eq $sid) { $complete = $false }',
+  '        if ($ace.AccessMask -isnot [int]) { throw "unsupported access mask" }',
+  '        $mask = [uint32]([int64]$ace.AccessMask -band [int64]4294967295)',
+  '        if ($sid -eq "") { $sid = $null; $complete = $false }',
   '      }',
   '      [void]$aces.Add([pscustomobject]@{ type = $type; sid = $sid; mask = $mask; flags = $flags })',
   '    }',
