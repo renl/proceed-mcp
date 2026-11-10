@@ -7,17 +7,18 @@ Reject, or Respond with instructions, and the waiting MCP call receives your dec
 explicit Approve grants approval. The server records the outcome. It does not execute the action.
 
 This guide is for operators connecting a local MCP client to Telegram approval, the preview.2
-harness channel, or the preview.3 private launch-environment startup route.
+harness channel, or this source's private launch-environment startup route.
 
 > **Version status:** `@meshimize/proceed-mcp@0.1.0-preview.1` is published on npm and listed in the
 > official MCP Registry. It requires a manual foreground broker, does **not** include automatic
-> startup, and has no harness channel. Version `0.1.0-preview.2` is published with automatic startup
-> and the harness channel, but its automatic startup uses the protected token file only. The private
-> launch-environment cold-start route is part of `0.1.0-preview.3`. This guide describes that
-> implementation and its remaining verification limits. It does not establish npm publication,
-> installation or live first-use qualification for preview.3, so check the npm package page for
-> exact version availability before installing. MCP Events, automatic continuation after a timeout,
-> `doctor`, and delivery retry remain unavailable.
+> startup, and has no harness channel. `0.1.0-preview.2` is published with automatic startup and the
+> harness channel, but its automatic startup uses the protected token file only. This source
+> identifies itself as `0.1.0-preview.3` and adds the private launch-environment token route plus
+> the Windows state and key protection correction described below. A public npm metadata reading on
+> 2026-11-10 reported `latest` = 0.1.0-preview.1 and `preview` = 0.1.0-preview.2, so an unqualified
+> install resolves to preview.1. Check the npm package page for the versions currently served, and
+> install an exact version. MCP Events, automatic continuation after a timeout, `doctor`, and
+> delivery retry remain unavailable.
 
 The [harness channel](#harness-channel-preview2-and-later) is part of `0.1.0-preview.2` and later. It
 is not in the published preview.1 package. It describes source behavior with the verification limits
@@ -25,7 +26,8 @@ below, not live harness behavior or a release-ready result.
 
 Automatic startup in `0.1.0-preview.3` also accepts a token supplied through a private launch
 environment, as an alternative to the protected token file. That environment route is part of the
-preview.3 implementation described here, with the verification limits below.
+preview.3 implementation described here, with the verification limits below. On Windows it is the
+only supported credential source, because token-file provisioning and loading are refused there.
 
 ## Distribution
 
@@ -37,11 +39,12 @@ adapter and the broker run on your machine. The broker listens only on `127.0.0.
 - npm: [@meshimize/proceed-mcp](https://www.npmjs.com/package/@meshimize/proceed-mcp)
 - MCP Registry: [io.github.renl/proceed-mcp](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.renl%2Fproceed-mcp)
 
-The first public version is `0.1.0-preview.1`. At its publication, both the `preview` and `latest`
-dist-tags pointed to it, so pin the exact version rather than relying on either tag. Check the
-[npm package page](https://www.npmjs.com/package/@meshimize/proceed-mcp) for whether
-`0.1.0-preview.3` or a later version is available before installing. Publishing automation is
-planned but not implemented.
+The first public version is `0.1.0-preview.1`. The `latest` npm tag resolves to it, while the
+`preview` tag resolves to `0.1.0-preview.2` in the public metadata reading above. Pin the exact
+version rather than relying on a tag, and check the
+[npm package page](https://www.npmjs.com/package/@meshimize/proceed-mcp) for what the registry
+currently serves before installing. `@0.1.0-preview.3` is a valid npm spec only when that exact
+version is served. Publishing automation is planned but not implemented.
 
 ## Requirements
 
@@ -49,18 +52,53 @@ planned but not implemented.
 - One dedicated Telegram bot and one private chat with that bot. Do not share the bot with another
   poller or a webhook.
 - The broker and the MCP adapter must run on the same machine. The human may be remote.
-- On Windows, `powershell.exe` and `icacls` must be available for the owner-only ACL check. On
-  POSIX, the state directory must support owner-only mode bits.
-- No build tool, native addon, or postinstall script is required.
+- On Windows 10 or 11 desktop, use the standard Node runtime and the inbox Windows PowerShell 5.1
+  and `icacls.exe` from `%SystemRoot%\System32`. Dedicated state, control and owner credentials, the
+  channel key and the operator key must be owned by your current Windows account on a local fixed
+  NTFS volume with persistent ACLs, at drive-qualified absolute local paths. Their complete ACL must
+  grant that account only. Parent folders keep their ordinary Windows permissions: read, list,
+  traverse and create-only entries for other principals are not refused by themselves, while
+  ownership, security-descriptor, delete, replacement and selected-object modification rights there
+  stay limited to your account, Windows system, administrators and TrustedInstaller. A create-only
+  right on a parent never permits replacing an already protected child, and an ancestor entry whose
+  effect cannot be fully interpreted is refused. Network, removable, UNC and device paths, any
+  reparse point, alternate data streams and ambiguous metadata are refused. Protection checking uses
+  only that system query and `icacls`. The query must resolve from the trusted Windows installation;
+  a missing, denied or invalid tool path refuses. The product ships no separate helper executable,
+  compiler, code signer or PowerShell test harness for it.
+- On POSIX, the state directory must support owner-only mode bits.
+- No build tool, native addon, compiler, code signer, or postinstall script is required.
 
-Recorded synthetic startup checks use Ubuntu 24.04 with Node 24.22.2. Installed-package and live
-Telegram first-use verification remain pending for preview.3. Windows protected provisioning,
-detached startup and helper cleanup qualification also remain outstanding. Preview.3 does not change
-these protection or Windows qualification limits, or repair the separate Windows state, key or
-token-file protection defects.
-Protection and secure-channel checks refuse operation when they cannot establish the required safety.
+Automated checks for this source are normal JavaScript unit tests that run on Linux. They exercise
+the query decoding and the admission decisions, not Windows itself. An earlier attempt to query
+Windows volume-root metadata returned the unavailable classification, and that cause is still
+unclassified. Native Windows metadata and ACL enforcement, installed-package startup and live
+Telegram or TUI first use therefore remain unverified. Nothing in this guide establishes publication,
+installation or working runtime behavior for that version. Protection and secure-channel checks
+refuse operation when they cannot establish the required safety. A refusal leaves the feature refused
+or disabled. Do not bypass it, loosen permissions, restore an automatic start outside the product, or
+delete a preserved ownership record or state. After an authorized deployment, check ordinary use as
+described under [Manual checks after deployment](#manual-checks-after-deployment).
+
+### Manual checks after deployment
+
+These are ordinary-use checks for the owner after an authorized installation. They are not an
+interim test gate, and a check that cannot be run stays unverified.
+
+1. Install the exact released version globally, then run `proceed-mcp --help`.
+2. Create state and an owner outside the installation path, supply the Telegram token only in the
+   launch environment, and pair the private chat.
+3. Connect the MCP client and complete one harmless Telegram approval as in
+   [Optional approval example](#optional-approval-example).
+4. On Windows, run the same check through the launch host with the token only in that host's own
+   environment, then complete one harmless TUI decision.
+5. Stop the broker or observe a protection refusal, and confirm that state, keys and any preserved
+   ownership record were kept rather than repaired.
 
 ## Install published preview.1 (manual broker only)
+
+This section covers only the published preview.1 manual-broker behavior. For preview.2 or preview.3
+with automatic startup, use [Install a released version](#install-a-released-version) below.
 
 Install the exact preview.1 version globally:
 
@@ -91,135 +129,113 @@ npx --yes --package @meshimize/proceed-mcp@0.1.0-preview.1 -- proceed-mcp mcp --
 Keep both broker and adapter on preview.1 for this legacy HTTP mode. The new provisioning,
 `--secure-local` and `stop` commands below are not available in preview.1.
 
-## Recommended durable installation location (Windows)
+## Install a released version
 
-The commands above cover a one-off run and a global install of published preview.1. For a durable
-operator installation on Windows, keep each release in its own versioned prefix under
-`%LOCALAPPDATA%\proceed-mcp\releases\`, and point both the MCP adapter and the TUI plugin at the
-package that npm places inside that prefix. One shared package root keeps the adapter and the plugin
-on the same version.
+Install the exact released version with the normal global npm command:
 
-This layout is a recommendation for operator storage. It does not change application defaults, the
-state selection order, or the protection requirements in this guide. A package kept on disk is not a
-system service, a login-startup item, or a reboot-surviving installation, and it does not start the
-broker by itself. The examples use `0.1.0-preview.3`, which includes the private launch-environment
-route. A preview.2 installation remains valid for file-based automatic startup and the harness
-channel, and it does not gain the automatic-startup environment route. For a preview.2
-installation, use the same layout with `0.1.0-preview.2` in place of `0.1.0-preview.3`. Windows
-protection and helper qualification remain outstanding, as described under [Requirements](#requirements).
-
-### Paths for the 0.1.0-preview.3 release
-
-Use `$env:LOCALAPPDATA` in PowerShell to build the prefix and package root rather than a hard-coded
-profile path.
-
-```powershell
-$prefix = "$env:LOCALAPPDATA\proceed-mcp\releases\0.1.0-preview.3"
-$packageRoot = "$prefix\node_modules\@meshimize\proceed-mcp"
+```console
+npm install --global @meshimize/proceed-mcp@<released-version>
+proceed-mcp --help
 ```
 
-| Purpose                         | Path                                                  |
-| ------------------------------- | ----------------------------------------------------- |
-| Install prefix (container)      | `%LOCALAPPDATA%\proceed-mcp\releases\0.1.0-preview.3` |
-| Package root                    | `<prefix>\node_modules\@meshimize\proceed-mcp`        |
-| CLI entry                       | `<package root>\bin\proceed-mcp.js`                   |
-| TUI plugin `package` value      | `<package root>`                                      |
-| Optional new-installation state | `%LOCALAPPDATA%\proceed-mcp\state`                    |
-| Optional operator key file      | `%LOCALAPPDATA%\proceed-mcp\operator\operator.key`    |
-| Optional backup location        | `%LOCALAPPDATA%\proceed-mcp\backups`                  |
+Replace `<released-version>` with an exact version such as `0.1.0-preview.1` or
+`0.1.0-preview.2`, or `0.1.0-preview.3` only when the registry serves it. An unqualified install
+follows the npm tags, which resolved to preview.1 in the metadata reading above, so prefer the
+explicit version.
 
-The prefix is the install container, not the package root. npm places the scoped package under
-`node_modules` inside that prefix, so the CLI entry and the TUI `package` value both come from the
-package root.
+This install writes the package into the npm global prefix. Proceed's runtime protection checks
+apply to state, keys and credentials when they are used, so they do not block or weaken a normal
+global install. npm also places the package's own `proceed-mcp` shim on `PATH`. Do not assume an MCP
+host resolves or executes that `.cmd` wrapper. Use the absolute Node entry point below instead.
 
-### Install into the prefix
+If the version you need is not served by the registry, install a vetted local tarball for it instead:
+`npm install --global <path-to-package.tgz>`. That is still an ordinary npm installation, and
+`--ignore-scripts` remains optional because these previews need no build or postinstall step.
 
-Install a vetted local tarball for the exact version:
+A preview.2 installation remains valid for file-based automatic startup and the harness channel.
+This source's preview.3 adds the environment route and the Windows protection correction. On
+Windows, the environment route is the supported one.
 
-```powershell
-npm install --prefix $prefix --ignore-scripts --no-save C:\path\to\meshimize-proceed-mcp-0.1.0-preview.3.tgz
+### Find the installed package root
+
+Ask npm where its global packages live:
+
+```console
+npm root --global
 ```
 
-Alternatively, install the exact public package spec only when that version is actually available on
-npm:
+The package root is `<npm-global-root>/@meshimize/proceed-mcp`, where `<npm-global-root>` is the
+directory that command prints. Point both the MCP adapter and the TUI plugin at that same package
+root so both run the same installed release. Do not point a durable MCP command or the TUI plugin at
+a transient `npx` cache path. `npx` suits the one-off published preview.1 command above, not a
+stable package reference.
 
-```powershell
-npm install --prefix $prefix --ignore-scripts --no-save @meshimize/proceed-mcp@0.1.0-preview.3
-```
-
-Check the [npm package page](https://www.npmjs.com/package/@meshimize/proceed-mcp) before relying on
-the public spec, as described under [Distribution](#distribution). `--ignore-scripts` is safe here
-because these preview releases require no build or postinstall step. `--no-save` leaves saved
-dependency metadata unchanged. Do not point a durable MCP command or TUI plugin at a transient
-`npx` cache path. `npx` suits the one-off published preview.1 command above, not a stable package
-reference.
-
-### Reference one package root from both configurations
-
-OpenCode does not expand shell variables inside `opencode.jsonc` or `cli.json`. Write fully expanded
-absolute paths in both files, with escaped backslashes or forward slashes. `<account>` below stands
-for your Windows profile directory name, where `%LOCALAPPDATA%` normally expands to
-`C:\Users\<account>\AppData\Local`. Read the exact value from `$env:LOCALAPPDATA`.
-
-MCP command array:
+MCP command array, with the Node entry inside the installed package:
 
 ```jsonc
 "command": [
   "node",
-  "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\releases\\0.1.0-preview.3\\node_modules\\@meshimize\\proceed-mcp\\bin\\proceed-mcp.js",
+  "<npm-global-root>/@meshimize/proceed-mcp/bin/proceed-mcp.js",
   "mcp",
   "--owner",
   "<owner-id>",
   "--state-dir",
-  "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\state",
+  "<absolute-state-dir>",
   "--harness-id",
   "local-opencode"
 ],
 ```
 
-TUI plugin entry in `cli.json`:
+TUI plugin entry in the global `cli.json`:
 
 ```json
 {
-  "package": "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\releases\\0.1.0-preview.3\\node_modules\\@meshimize\\proceed-mcp",
+  "package": "<npm-global-root>/@meshimize/proceed-mcp",
   "options": {
-    "state_dir": "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\state",
+    "state_dir": "<absolute-state-dir>",
     "harness_id": "local-opencode",
     "owner_id": "<owner-id>",
-    "operator_key_file": "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\operator\\operator.key"
+    "operator_key_file": "<absolute-protected-operator-key-file>"
   }
 }
 ```
 
-Both values come from the same package root in the path table, so the adapter and the TUI plugin run
-the same installed release. Keep the other required options and the matching harness ID, owner and
-state from [Connect an MCP client](#6-connect-an-mcp-client).
+Replace the placeholders, including the owner ID and state directory, and keep the matching harness
+ID. Both values come from the same installed package root, so the adapter and the plugin run the
+same release. OpenCode does not expand shell variables inside `opencode.jsonc` or `cli.json`, so
+write fully expanded absolute paths. On Windows, escape backslashes or use forward slashes in both
+JSON files.
 
-### Keep state, the operator key and backups separate
+Keep the state directory, the operator key file and any backups outside the npm installation. An
+upgrade replaces files under the global prefix, so state or keys placed there could be removed. An
+existing installation keeps its current state directory and operator key file when upgrading, and
+this guide implies no migration. Keep the operator key file in a dedicated protected directory
+outside repositories, product state and MCP configuration, as described under
+[Trust and protected operator key](#trust-and-protected-operator-key). If you omit `--state-dir`,
+state selection still ends at `<home>/.proceed-mcp` as described under
+[Preview.2 and preview.3 commands](#preview2-and-preview3-commands).
 
-The state, operator key and backup paths in the table are optional examples for a new installation.
-They do not replace the documented default. If you omit `--state-dir`, state selection still ends at
-`<home>/.proceed-mcp` as described under
-[Preview.2 and preview.3 commands](#preview2-and-preview3-commands). An existing
-installation should keep its current state directory and operator key file when upgrading, and this
-layout implies no migration.
+### Optional: a versioned prefix for pinned versions
 
-Keep the operator key file in a dedicated protected directory outside repositories, product state
-and MCP configuration, as described under
-[Trust and protected operator key](#trust-and-protected-operator-key). The same protected-file and
-owner-only requirements apply to these paths.
+A versioned prefix is optional. Use it only when you want several versions installed side by side
+or a pinned rollback target:
+
+```console
+npm install --prefix <prefix-directory> --no-save @meshimize/proceed-mcp@<released-version>
+```
+
+This is an ordinary npm prefix install, not a custom installer or a separate distribution channel.
+The package root is `<prefix-directory>/node_modules/@meshimize/proceed-mcp`, which you reference
+from the same two configuration places. `--no-save` leaves saved dependency metadata unchanged, and
+`--ignore-scripts` remains optional because these previews require no build or postinstall step. The
+installed copy is not a system service, a login-startup item or a reboot-surviving installation, and
+it does not start the broker by itself. Use a local directory you control, keep state, keys and
+backups outside it, and remove an old prefix only after both integrations reference the new one.
 
 Back up only while the broker is cleanly stopped. Run
 `proceed-mcp stop --state-dir <absolute-state-dir>`, wait for the confirmed stop, then copy the
 entire state directory into the backup location. An unconfirmed stop or a timeout is not a safe
 backup point.
-
-### Upgrade by adding a release prefix
-
-Install the next version into its own versioned prefix, then change the CLI entry path and the TUI
-`package` value together to the new package root. Keep the existing state directory and operator key
-file. Remove an old release directory only after both integrations reference the new one and you no
-longer need it.
 
 ## One-time setup for preview.2 and preview.3
 
@@ -229,9 +245,9 @@ only the protected token file for automatic startup. Preview.3 adds the private 
 token route in step 4.
 Use the matching preview.2 or preview.3 CLI for every step, not the preview.1 command. From the
 source checkout, replace `proceed-mcp` in the commands below with `node bin/proceed-mcp.js`. A
-package installed from a local build can use its own `proceed-mcp` command. For a durable Windows
-layout shared by the MCP adapter and the TUI plugin, see
-[Recommended durable installation location](#recommended-durable-installation-location-windows).
+package installed from a local build can use its own `proceed-mcp` command. For one installed
+package root shared by the MCP adapter and the TUI plugin, see
+[Install a released version](#install-a-released-version).
 The package, lockfile and Registry metadata identify this source tree as `0.1.0-preview.3`.
 Check the npm package page for exact availability. Publication and MCP Registry listing are
 separate operations.
@@ -251,7 +267,10 @@ requirement for automatic startup.
 
 ### 1. Create protected state
 
-Choose an absolute directory that is empty or does not exist yet. Keep it outside the repository.
+Choose an absolute directory that is empty or does not exist yet. Keep it outside the repository and
+outside the npm installation, and use the same path from both the MCP adapter and the TUI plugin. On
+Windows, use a local fixed NTFS location owned by your account, as described under
+[Requirements](#requirements).
 
 ```console
 proceed-mcp init --state-dir <absolute-state-dir>
@@ -281,14 +300,19 @@ Telegram processing stops with a diagnostic. Repair the bot and restart the brok
 
 ### 4. Choose a broker credential source
 
-Automatic cold startup in `0.1.0-preview.3` accepts either a token supplied through a private launch
-environment or the existing protected token file. The environment route is not available in
-published preview.2, which uses the protected token file for automatic startup. Use one source for
-each broker start. Selection order is an explicit `--telegram-token-file`, then a nonempty
+Automatic cold startup in this source's `0.1.0-preview.3` accepts either a token supplied through a
+private launch environment or the existing protected token file. The environment route is not
+available in published preview.2, which uses the protected token file for automatic startup. Use one
+source for each broker start. Selection order is an explicit `--telegram-token-file`, then a nonempty
 `PROCEED_TELEGRAM_BOT_TOKEN` in the launch environment, then the default token file. A selected
 source that fails does not fall back to a lower-priority one. Reusing a matching healthy secure
 broker needs no token source. Selection and validation happen only when the broker must be started,
 so an unusable value does not block reuse.
+
+On Windows, only the environment route is supported. Token-file provisioning and loading are refused
+with `TELEGRAM_CREDENTIAL_UNSUPPORTED` and CLI exit code 3 before any token input is read or file
+content is opened. An explicitly selected `--telegram-token-file` still wins over the environment and
+then fails without falling back, so use environment mode with no file option.
 
 #### Environment route
 
@@ -324,8 +348,10 @@ and this guide makes no same-account isolation claim.
 #### Protected file route
 
 Provisioning is optional when the environment route supplies the token. To use the file route, run
-provisioning yourself in a trusted local shell, not through an agent or MCP tool. Pipe one token
-from an operator-controlled secret source into this command's stdin:
+provisioning yourself in a trusted local shell, not through an agent or MCP tool. This route is
+POSIX-only in this source. On Windows, both provisioning and loading refuse as described above, so
+use the environment route. Pipe one token from an operator-controlled secret source into this
+command's stdin:
 
 ```console
 proceed-mcp telegram provision --token-stdin --state-dir <absolute-state-dir>
@@ -421,10 +447,11 @@ Replace `<owner-id>` and the state path. On Windows, escape backslashes or use f
 the JSON string. `codemode: false` exposes the tools directly. OpenCode reloads MCP configuration
 after a save. Check the connection with `opencode mcp list`.
 
-This example selects the preview.3 package by absolute path. Use an absolute Node executable path too
-if your client cannot resolve `node`. If you installed the package from a local build, start the
-`command` array with its `proceed-mcp` executable and keep the same arguments. Do not substitute the
-published preview.1 npx command and expect automatic startup.
+This example selects the package by absolute path. For an installed release, use the package root from
+[Find the installed package root](#find-the-installed-package-root). Use an absolute Node executable
+path too if your client cannot resolve `node`. If you installed the package from a local build, start
+the `command` array with its `proceed-mcp` executable and keep the same arguments. Do not substitute
+the published preview.1 npx command and expect automatic startup.
 
 With this server name, OpenCode exposes the tools as `proceed_prepare_approval`,
 `proceed_request_approval`, `proceed_get_approval`, `proceed_cancel_approval`, and
@@ -492,7 +519,10 @@ This create-only command refuses an existing destination and reports only its pa
 `key_id` fingerprint. It neither enrolls the key nor approves work. Let the command create the
 protected file. Do not copy its contents into arguments, messages, environment variables, host
 storage or configuration. The configuration below contains only the file path. Unsafe or
-unverifiable protection is refused, not repaired automatically.
+unverifiable protection is refused, not repaired automatically. On Windows, the key file and its
+folders are admitted under the same current-account, complete-ACL, reparse and local-volume checks as
+the state, so keep it on supported local storage. Those checks are implemented here but not verified
+at runtime, as described under [Requirements](#requirements).
 
 ### Load the packaged TUI entry from the checkout
 
@@ -521,8 +551,8 @@ and [CLI settings reference](https://opencode.ai/v2/docs/cli/config).
 Replace every path and the owner ID. The package directory's `package.json` exports `./tui` as
 `src/harness/tui-entry.js`. OpenCode discovers and loads that packaged entry, not a copied source
 file or a server plugin. Load the package path you actually installed; this setup uses the checkout
-path. A durable Windows installation uses the package root from
-[Recommended durable installation location](#recommended-durable-installation-location-windows).
+path. An installed package uses the same package root as the adapter, as described under
+[Find the installed package root](#find-the-installed-package-root).
 The plugin accepts exactly the four options shown. Both IDs must match `[a-z0-9_-]{1,64}`.
 Choose one harness ID for this local OpenCode service installation, not a shared ID across services.
 
@@ -643,7 +673,8 @@ Choose the setup for your runtime before trying the skill:
   [One-time setup for preview.2 and preview.3](#one-time-setup-for-preview2-and-preview3) using the
   matching CLI, not the published preview.1 command. Published preview.2 supports only the
   [protected file route](#protected-file-route) for automatic startup. Preview.3 also supports
-  the [environment route](#environment-route). For empty state, complete all six steps, including
+  the [environment route](#environment-route), and on Windows that environment route is the only
+  supported one. For empty state, complete all six steps, including
   [adding an owner](#2-add-one-owner),
   [choosing a credential source](#4-choose-a-broker-credential-source),
   [pairing the private chat](#5-pair-the-private-chat), and
@@ -819,10 +850,11 @@ proceed-mcp serve --secure-local --state-dir <absolute-state-dir>
 
 Leave that terminal open. Preview.2 and preview.3 clients reuse this secure broker without a
 token file.
-Alternatively, `serve --telegram-token-file <absolute-file> --state-dir <absolute-state-dir>` runs
-secure foreground mode with an already provisioned file. Do not combine a file option with a
-nonempty environment token. Without either new option, `serve` retains legacy HTTP/environment
-mode for old clients only, not secure reuse by upgraded clients.
+On POSIX, `serve --telegram-token-file <absolute-file> --state-dir <absolute-state-dir>` also runs
+secure foreground mode with an already provisioned file. Windows refuses that file option; use the
+environment form above. Do not combine a file option with a nonempty environment token. Without
+either new option, `serve` retains legacy HTTP/environment mode for old clients only, not secure
+reuse by upgraded clients.
 
 A foreground broker without a token can become locally ready but cannot process Telegram approval.
 If Telegram rejects the token or reports another consumer, repair the cause, stop the broker and
@@ -834,7 +866,7 @@ restart it through the chosen mode.
 | ---------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `init --state-dir <dir>`                             | Create protected empty state. Refuses to overwrite existing state.              |
 | `owner add <id> --label <label> --state-dir <dir>`   | Add an immutable owner and its credential. Requires a stopped broker.           |
-| `telegram provision --token-stdin --state-dir <dir>` | Create the separate protected token file from non-TTY stdin.                    |
+| `telegram provision --token-stdin --state-dir <dir>` | Create the separate protected token file from non-TTY stdin (POSIX only).       |
 | `serve --state-dir <dir> [--secure-local]`           | Run foreground environment mode. The flag selects the secure channel.           |
 | `pair --state-dir <dir>`                             | Start or reuse the secure broker and obtain a one-use five-minute pairing code. |
 | `mcp --owner <id> --state-dir <dir>`                 | Run the stdio adapter and start or reuse the secure shared broker.              |
@@ -849,8 +881,9 @@ mode.
 `telegram provision`, `pair`, `mcp` and `serve` accept `--telegram-token-file <absolute-file>`.
 For `serve`, this selects secure file mode. In preview.3, for automatic `pair` and `mcp` startup,
 an explicit file option wins over a nonempty `PROCEED_TELEGRAM_BOT_TOKEN` in the launch environment,
-which wins over the default file. `status` does not start a stopped broker. State selection is
-`--state-dir`, then `PROCEED_STATE_DIR`, then `<home>/.proceed-mcp`.
+which wins over the default file. On Windows, every token-file operation refuses, so an explicitly
+selected file fails without environment fallback. `status` does not start a stopped broker. State
+selection is `--state-dir`, then `PROCEED_STATE_DIR`, then `<home>/.proceed-mcp`.
 
 Exit codes are `0` for completion, `2` for invalid arguments or configuration, `3` for an unavailable
 prerequisite, and `4` for a storage or integrity failure. Diagnostics go to stderr. MCP stdout
@@ -866,10 +899,14 @@ carries protocol frames only.
 | `journal.log`                        | Append-only transaction journal for durable product state.                     |
 | `broker.lock`                        | Running-instance ownership record. Secure mode includes a private channel key. |
 
-The state directory and its files are restricted to the current OS account. `init`, `owner add`, and
-`serve` verify that protection and fail rather than continue if it cannot be established. The
-Windows check uses an owner-restricted ACL through PowerShell and `icacls`. POSIX uses owner-only
-mode bits.
+The state directory and its files are restricted to the current OS account. `init`, `owner add`,
+`serve` and the automatic startup path verify that protection and fail rather than continue if it
+cannot be established. On Windows, admission reads the owner, the complete access-control list, the
+reparse attributes, the object type and the volume metadata through the fixed system Windows
+PowerShell 5.1 query, then applies the policy in JavaScript. `icacls.exe` is used only to protect a
+newly created empty directory. Missing, unavailable or partial metadata refuses with
+`PROTECTION_UNAVAILABLE` or `PROTECTION_UNVERIFIED` and is never treated as account-only
+protection. POSIX uses owner-only mode bits.
 
 The journal stores request text, response text, pairing identifiers, decisions, timestamps, and
 delivery state. Treat the state directory as sensitive local data. Back up a stopped broker's entire
@@ -924,8 +961,15 @@ stale-lock recovery.
   tool output. A selected source that fails does not fall back to another.
 - `TELEGRAM_CREDENTIAL_EXISTS`: provisioning is create-only. Choose another dedicated safe
   destination and use its file option consistently. No overwrite is performed.
-- `PROTECTION_UNVERIFIED`: use dedicated protected storage or explicitly repair its protection.
-  Do not weaken checks or move the token into product state or MCP settings.
+- `TELEGRAM_CREDENTIAL_UNSUPPORTED`: a Windows token-file operation was requested. Use the
+  environment route with no file option, or secure foreground mode. No token input is read.
+- `PROTECTION_UNVERIFIED`: the owner, access-control list, ancestry, volume or path form is unsafe or
+  incomplete. Choose a new dedicated local NTFS location owned by your account, or assess the
+  existing storage offline. Do not weaken checks, loosen permissions, or move the token into product
+  state or MCP settings.
+- `PROTECTION_UNAVAILABLE`: the system metadata query or a supported prerequisite is missing, denied,
+  timed out or overflowed. Use the supported Windows and Node runtime on local fixed NTFS storage.
+  Do not bypass, disable or script around the check.
 - `BROKER_INSTANCE_CONFLICT`: verify the state and port. Stop a conflicting service through its own
   interface. For a legacy broker, use its foreground Ctrl+C, then secure foreground mode or a new
   automatic start with the selected credential source. Do not delete its lock.
@@ -956,6 +1000,11 @@ stale-lock recovery.
 - OpenCode V2 is the first validation harness. Other harnesses are not tested. The generic stdio
   command is available, but no multi-harness compatibility is claimed.
 - Requires Node.js 24 or newer and the state-directory protections described above.
+- Windows supports the environment-token route only. Windows token-file provisioning and loading are
+  refused, and an explicitly selected file fails without environment fallback.
+- Windows admission is implemented in this source but not verified at runtime. A check that cannot
+  establish the required protection refuses, and the affected feature stays refused or disabled.
+  There is no bypass, permission loosening or automatic stale-state restore.
 - `doctor` is not implemented. `retry` reports unavailable.
 
 ## License
