@@ -27,6 +27,39 @@ export function splitPath(file) {
   };
 }
 
+const WINDOWS_RESERVED_NAMES = new Set([
+  'con',
+  'prn',
+  'aux',
+  'nul',
+  ...Array.from({ length: 9 }, (_, index) => `com${index + 1}`),
+  ...Array.from({ length: 9 }, (_, index) => `lpt${index + 1}`),
+]);
+
+// Windows destination syntax, shared by the credential, operator-key and query
+// targets so one rule cannot drift from another. A syntax-only decision: no
+// filesystem or network is consulted. Returns a secret-free reason or null.
+export function windowsAbsolutePathProblem(value) {
+  if (typeof value !== 'string' || value === '') return 'must be one local filesystem path';
+  if (/[\u0000-\u001f]/.test(value)) return 'must not contain control characters';
+  if (value.startsWith('\\') || value.startsWith('/')) {
+    return 'must not name a network share or device path';
+  }
+  if (!/^[a-zA-Z]:[\\/]/.test(value)) return 'must be an absolute drive-qualified path';
+  const rest = value.slice(2);
+  if (rest.includes(':')) return 'must not name an alternate data stream';
+  for (const part of rest.split(/[\\/]/)) {
+    if (part === '') continue;
+    if (part === '.' || part === '..') return 'must not contain relative path components';
+    if (/[<>"|?*]/.test(part)) return 'must not contain reserved characters';
+    if (/[. ]$/.test(part)) return 'must not end a path component with a dot or space';
+    if (WINDOWS_RESERVED_NAMES.has(part.split('.')[0].toLowerCase())) {
+      return 'must not name a reserved device';
+    }
+  }
+  return null;
+}
+
 // An ancestor must not let an untrusted account replace the protected entry. A
 // directory without group/other write permission protects its children. A
 // writable system ancestor such as a temporary or shared root protects them only
@@ -89,9 +122,12 @@ export async function assertProtectedAncestors(file, { allowMissingTail = false,
 // `true` only when the destination still resolves to the exact object this
 // attempt created. A missing or uninspectable destination, or a different
 // device/inode, is not proof of ownership over the current entry, so a
-// replacement and an uncertain object are both preserved.
+// replacement and an uncertain object are both preserved. Windows file
+// identity cannot prove this attempt still holds the entry it created, so an
+// uncertain Windows destination is preserved rather than deleted.
 export async function removeExactCreated(file, created) {
   if (created === null) return false;
+  if (!posix()) return false;
   let current;
   try {
     current = await lstat(file);

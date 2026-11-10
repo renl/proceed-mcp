@@ -15,6 +15,7 @@ import { dirname } from 'node:path';
 import { blockedPrerequisite, storageFailure } from '../errors.js';
 import { utcTimestamp } from '../util/values.js';
 import { assertProtectedAncestors, removeExactCreated } from './path-trust.js';
+import { verifyWindowsProtection } from './protection.js';
 
 const POSIX_FILE_MODE = 0o600;
 const CHANNEL_PROTOCOL = 'tls-psk-v1';
@@ -87,8 +88,16 @@ export async function acquireStateOwnership({ lockFile, port, channel }) {
   if (problem !== null) throw storageFailure(problem, 'PROTECTION_UNVERIFIED');
   // The secure record carries a secret, so its whole path is trusted before the
   // exclusive create: a redirected or replaceable ancestry refuses first and no
-  // record is created at all.
-  if (channel !== undefined) await assertRecordPath(lockFile, recordPathFailure);
+  // record is created at all. Windows admission applies the same rule to the
+  // owner, ACL, type and volume evidence of that ancestry.
+  if (channel !== undefined) {
+    await assertRecordPath(lockFile, recordPathFailure);
+    await verifyWindowsProtection([lockFile], {
+      allowMissingTail: true,
+      fail: () =>
+        conflictRecord('the secure broker ownership record cannot be verified as protected'),
+    });
+  }
   const instance = randomBytes(16).toString('hex');
   const contents = formatOwnershipRecord({
     pid: process.pid,
@@ -122,14 +131,26 @@ export async function acquireStateOwnership({ lockFile, port, channel }) {
     created = await handle.stat();
     if (channel !== undefined) {
       // The secret key is written only after the record and its directory are
-      // verified owner-only, and the complete record is flushed before return.
+      // verified owner-only, and the empty record this attempt created is
+      // admitted before its first byte.
       if (process.platform !== 'win32') await handle.chmod(POSIX_FILE_MODE);
       created = await handle.stat();
       assertOwnerOnlyRecord(created);
+      await verifyWindowsProtection([lockFile], {
+        fail: () =>
+          conflictRecord('the secure broker ownership record cannot be verified as protected'),
+      });
     }
     await handle.writeFile(contents, 'utf8');
     await handle.sync();
-    if (channel !== undefined) assertOwnerOnlyRecord(await handle.stat());
+    if (channel !== undefined) {
+      assertOwnerOnlyRecord(await handle.stat());
+      // Re-observe the flushed record before the key is treated as published.
+      await verifyWindowsProtection([lockFile], {
+        fail: () =>
+          conflictRecord('the secure broker ownership record cannot be verified as protected'),
+      });
+    }
   } catch (cause) {
     await handle.close().catch(() => {});
     // The exclusive create proved this attempt owned the object it opened, but
@@ -153,9 +174,16 @@ export async function acquireStateOwnership({ lockFile, port, channel }) {
     instance,
     contents,
     bytes: Buffer.from(contents),
-    // Callers invoke this only after journal activity has stopped. A record
-    // that no longer holds these exact bytes is preserved untouched.
+    // Callers invoke this only after journal activity has stopped. A record that
+    // no longer holds these exact bytes, or whose protection can no longer be
+    // verified, is preserved untouched.
     async release() {
+      try {
+        await verifyWindowsProtection([lockFile]);
+      } catch {
+        // Unverifiable protection is an uncertain release, so the record stays.
+        return false;
+      }
       let current;
       try {
         current = await readFile(lockFile, 'utf8');
@@ -168,6 +196,14 @@ export async function acquireStateOwnership({ lockFile, port, channel }) {
         );
       }
       if (current !== contents) return false;
+      // Release deletes the record, so its protection is re-observed after the
+      // exact-byte comparison and before the removal: a failed recheck leaves
+      // the record in place as an uncertain release.
+      try {
+        await verifyWindowsProtection([lockFile]);
+      } catch {
+        return false;
+      }
       try {
         await unlink(lockFile);
       } catch (cause) {
@@ -237,6 +273,12 @@ export async function readSecureOwnership(lockFile) {
   if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) {
     throw conflictRecord('the broker ownership record is not protected');
   }
+  // Windows: the record's owner, ACL, type and volume are admitted before any
+  // key byte is opened. A refusal keeps the existing conflict classification so
+  // a protected record is never reported as a retryable reachability failure.
+  await verifyWindowsProtection([lockFile], {
+    fail: () => conflictRecord('the broker ownership record cannot be verified as protected'),
+  });
 
   let bytes;
   try {
@@ -262,6 +304,11 @@ export async function readSecureOwnership(lockFile) {
   if (bytes.length > MAX_RECORD_BYTES) {
     throw conflictRecord('the broker ownership record is too large');
   }
+  // The key bytes are private authority only while the object that produced them
+  // is still admitted: a failed re-observation discards the read result.
+  await verifyWindowsProtection([lockFile], {
+    fail: () => conflictRecord('the broker ownership record cannot be verified as protected'),
+  });
 
   let record;
   try {

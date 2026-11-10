@@ -39,3 +39,7 @@ jobs:
         run: |
           node --experimental-vm-modules --test tests/startup-token-helper-environment.test.mjs
         timeout-minutes: 1
+      - shell: bash
+        run: |
+          node --experimental-test-module-mocks --test tests/windows-storage-node-unit.test.mjs
+        timeout-minutes: 1

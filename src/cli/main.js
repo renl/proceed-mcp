@@ -39,6 +39,7 @@ import { createOperatorKeyFile, validateOperatorKeyFileOption } from '../harness
 import { harnessIdProblem } from '../harness/identifiers.js';
 import { startPortableRuntime } from '../broker/portable-runtime.js';
 import {
+  assertWindowsFileCredentialSupported,
   defaultCredentialFile,
   loadCredentialFile,
   provisionCredentialFile,
@@ -478,6 +479,9 @@ async function runProvision(argv, { stdout, stdin, env }) {
   await loadPortableConfiguration(paths);
   const file =
     requested === undefined ? defaultCredentialFile({ stateDir: paths.stateDir }) : requested;
+  // An unsupported Windows token-file route refuses before any secret input is
+  // consumed, and it never falls back to another source.
+  assertWindowsFileCredentialSupported('provision');
   const token = await readTokenFromStdin(stdin);
   await provisionCredentialFile({ file, stateDir: paths.stateDir, token });
   stdout.write(
