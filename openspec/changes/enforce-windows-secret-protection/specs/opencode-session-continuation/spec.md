@@ -1,104 +1,91 @@
 # Spec Delta
 
-Parent: [approved proposal](../../proposal.md). Baseline: [current capability](../../../../specs/opencode-session-continuation/spec.md).
+Parent: [proposal](../../proposal.md). Baseline: [current capability](../../../../specs/opencode-session-continuation/spec.md). Read next: [design](../../design.md).
 
 ## Direction Check
 
-Subject: Windows users' credentials and approval state. Desired outcome: working protected provisioning and loading.
-Threat/problem: skipped protection checks and unsafe path assumptions. Successful setup and fail-closed refusal address that threat without weakening protection.
+Subject: Windows environment-mode users' approval state and operator credentials. Desired outcome: working on-demand startup and trusted TUI setup with required protection.
+Threat/problem: skipped owner/ACL checks and assumed safe ancestry. Protected success and fail-closed refusal preserve the existing trusted-local-account boundary against ordinary other-account access.
 
 ## ADDED Requirements
 
-### Requirement: Windows protected setup and credential loading work
+### Requirement: Windows environment startup and trusted TUI setup work
 
-On Windows with documented prerequisites and safe storage, supported setup MUST establish protected state and provision the separate owner-only Telegram credential. Subsequent cold broker startup MUST load that credential after verifying protection. Both default and explicitly selected supported credential locations MUST work. Refusing every Windows operation MUST NOT satisfy this requirement.
+With documented prerequisites and safe storage, Windows setup MUST establish protected state, control and owner credentials, the confidential-channel key and the operator key required by the existing trusted TUI enrollment path. Normal MCP startup MUST support the privately supplied environment-token route without a Telegram token file or separate broker terminal. Refusing every Windows operation MUST NOT satisfy this requirement. Existing token-source precedence, confidentiality, non-persistence, helper environment filtering and trusted-human authority requirements MUST remain effective.
 
-#### Scenario: Complete Windows setup and first approval from empty state
+#### Scenario: Complete Windows environment setup and first approval
 
-- **GIVEN** a clean Windows installation with documented external prerequisites and safe storage
-- **AND** no pairing, requests or decisions exist
-- **WHEN** the operator uses supported setup to create protected state, a transport principal, the separate broker-only token file and operator-authorized private pairing
-- **AND** normal MCP startup is followed by `prepare_approval` and `request_approval` using the returned private authority
-- **AND** the paired human explicitly approves while the waiting call remains active
-- **THEN** the matching explicit approval returns on that original call without a separate broker terminal or manual stored-data editing
-- **AND** setup and startup alone create no approval.
+- **GIVEN** a clean Windows installation with documented prerequisites and no configuration, pairing, requests or decisions
+- **WHEN** supported setup creates protected state, a transport principal and operator-authorized private pairing without manual stored-data edits
+- **AND** the trusted launch environment privately supplies a valid token, with no explicit token-file selection and no token file
+- **AND** normal MCP use calls `prepare_approval`, then `request_approval` with its returned private authority, and the paired human approves while the call remains active
+- **THEN** the waiting call returns the matching explicit approval without a separate broker terminal
+- **AND** the product neither persists the token nor requires `doctor`, delivery retry, a proprietary host API or manual stored-data editing
+- **AND** setup and startup alone create no request or approval.
 
-#### Scenario: Load a safely provisioned Windows credential
+#### Scenario: Protected operator setup supports trusted TUI use
 
-- **GIVEN** supported provisioning succeeded at either the default or an explicitly selected supported Windows credential location
-- **AND** configured state is safely stopped and its protection remains valid
-- **WHEN** normal MCP startup requires cold broker startup
-- **THEN** verified owner-only protection permits broker startup to load the credential and become ready
-- **AND** the adapter neither loads nor receives the Telegram token
-- **AND** local readiness alone does not claim Telegram availability, pairing, human receipt or confirmed outcome delivery.
+- **GIVEN** safe Windows storage and an operator configuring the existing trusted TUI interaction
+- **WHEN** supported enrollment creates the operator key and the configured TUI connects
+- **THEN** the key and local channel satisfy existing protection and authenticated confidential admission requirements
+- **AND** existing request-bound human decisions work without changing pairing, principal boundaries or decision authority.
 
-### Requirement: Windows path admission binds protection to the object used
+### Requirement: Windows state and credential admission verifies required protection
 
-Windows credential operations and necessary affected state admission MUST verify safe path ancestry and object identity. Protection verified for one object MUST NOT authorize a substituted object. Redirected paths, including reparse points, MUST NOT bypass owner-only protection or storage separation. If safety or identity cannot be established through use, the operation MUST refuse before reading or writing secrets or disclosing private authority.
+Windows setup and admission MUST verify required ownership, ACLs, safe ancestry and redirected-path protection for affected state, control/owner credentials, channel keys and operator keys. Unsafe or unverifiable protection MUST cause refusal before secret reads, secret writes, private-authority disclosure or readiness through affected storage. Missing, null, empty or unreadable ACL evidence MUST NOT count as verified owner-only protection. Diagnostics MUST be actionable and secret-free and MUST NOT claim protection that was not verified.
 
-#### Scenario: Unsafe ancestry or redirection prevents admission
+#### Scenario: Safe Windows storage is admitted
 
-- **GIVEN** a Windows credential or affected state has unsafe ancestry or a redirected path that could bypass required protection or separation
-- **WHEN** provisioning, loading or affected state admission is attempted
-- **THEN** the operation refuses before reading or writing secrets or disclosing private authority through that unsafe storage
-- **AND** it reports an actionable secret-free next step without claiming owner-only success.
+- **GIVEN** Windows state and required local credentials satisfy the applicable owner-only and ancestry protection requirements
+- **WHEN** supported setup or startup verifies that protection
+- **THEN** the operation can proceed without skipping Windows checks or weakening authenticated local access
+- **AND** local readiness alone does not claim Telegram availability, pairing, human receipt or confirmed delivery.
 
-#### Scenario: A checked object is replaced before use
+#### Scenario: Unsafe or unverifiable Windows storage is refused
 
-- **GIVEN** a Windows credential or affected state passed a protection assessment
-- **WHEN** an ancestor, path or object is replaced before use
-- **THEN** the earlier assessment does not authorize reading a substituted credential, writing secrets to substituted storage or admitting substituted state
-- **AND** uncertain identity produces an actionable secret-free refusal without a permissive fallback.
+- **GIVEN** affected Windows storage has an unsafe owner, ACL, ancestry or redirection, or required protection cannot be verified
+- **WHEN** setup, startup or trusted TUI access attempts to use it
+- **THEN** admission refuses before secret reads, secret writes, private-authority disclosure or readiness through that storage
+- **AND** no assumed-safe ancestor, empty permission result or unsupported check authorizes access.
 
-### Requirement: Windows protection admission preserves existing storage
+### Requirement: Windows protection correction preserves existing storage
 
-Windows provisioning MUST be create-only for credential files. Protection admission MUST NOT automatically repair unsafe storage, rewrite or migrate existing credentials, journal or pairing, or remove uncertain broker ownership records to succeed. Safe existing Windows state MUST remain usable without reinitialization or manual stored-data migration.
+Protection correction MUST NOT automatically repair unsafe storage, overwrite existing credential or key destinations, rewrite or migrate existing journal or pairing, or remove uncertain broker ownership records to succeed. Safe existing Windows state MUST remain usable without reinitialization or manual stored-data migration. Existing durable work, create-only credential/key behavior and POSIX file/environment safeguards MUST remain effective.
 
-#### Scenario: An existing credential destination is selected
+#### Scenario: Existing state or credential destination is encountered
 
-- **GIVEN** a Windows credential destination already exists, whether safely protected or not
-- **WHEN** provisioning targets it
-- **THEN** provisioning refuses without overwriting or repairing the existing file
-- **AND** guidance offers a supported safe next step without disclosing its contents.
-
-#### Scenario: Existing Windows state satisfies protection
-
-- **GIVEN** safely stopped Windows state with valid protection, pairing, pending requests and recorded decisions
-- **WHEN** the upgraded product admits that state and starts the broker
-- **THEN** existing state is usable without reinitialization or migration
-- **AND** pairing, request identities, pending work and unchanged recorded outcomes retain their existing authority, expiry and single-resolution semantics.
-
-#### Scenario: Existing Windows storage cannot be admitted safely
-
-- **GIVEN** existing Windows credentials or affected state cannot satisfy protection admission
-- **WHEN** provisioning or startup attempts to use that storage
-- **THEN** it refuses with an actionable secret-free next step
-- **AND** it does not rewrite credentials, journal or pairing, repair permissions automatically or delete uncertain ownership records to make admission succeed.
+- **GIVEN** existing Windows state, keys, credentials or an uncertain ownership record
+- **WHEN** setup or admission encounters them
+- **THEN** create-only operations refuse existing destinations without overwrite or automatic repair
+- **AND** admissible existing state retains pairing, pending work and recorded outcomes under existing expiry and single-resolution rules
+- **AND** unsafe or unverifiable storage is refused without rewriting durable work or deleting uncertain ownership records.
 
 ## MODIFIED Requirements
 
 ### Requirement: Credential provisioning and loading fail closed
 
-Provisioning and automatic credential loading MUST refuse unsafe ownership, permissions or paths,
-including symlinks or redirected paths that could bypass owner-only protection or the required storage
-separation. Missing, empty or unreadable credentials and unverifiable protection MUST produce an
-actionable failure for automatic startup, not approval or a claim of working Telegram approval.
+File provisioning and automatic file loading MUST refuse unsafe ownership, permissions or paths, including symlinks or redirected paths that could bypass owner-only protection or required storage separation. Missing, empty or unreadable selected credentials, invalid selected environment tokens and unverifiable file protection MUST produce an actionable failure for cold automatic startup, not approval or a claim of working Telegram approval. Failure MUST NOT prompt for a secret, obtain one from agent arguments or silently change sources.
 
-Windows ownership and permission checks MUST NOT be skipped or treated as successful when unavailable or unverifiable. Unsafe or unverifiable protection MUST cause refusal before secret reads, secret writes or private-authority disclosure through the affected storage. Diagnostics MUST NOT claim owner-only protection unless it was verified.
+Windows file protection checks MUST NOT be skipped. Windows Telegram token-file provisioning/loading MAY remain unsupported in this change and MUST refuse before secret reads or writes if required protection cannot be verified. Such refusal MUST NOT prevent the supported environment route when no file was explicitly selected, or weaken existing POSIX file behavior.
 
 #### Scenario: Automatic-startup credential is missing or unsafe
 
-- **GIVEN** the automatic-startup credential is missing, empty or unreadable, or its ownership,
-  permissions or path cannot be verified as safe, including unsafe symlink or redirected-path cases
+- **GIVEN** the selected file credential is missing, empty or unreadable, or its ownership, permissions or path cannot be verified as safe, including unsafe symlink or redirected-path cases
 - **WHEN** provisioning or automatic credential loading is attempted
-- **THEN** the operation refuses the unsafe storage or fails for the missing prerequisite with a
-  supported operator next step and no token disclosure
-- **AND** it does not weaken protection, load an unsafe token, claim working Telegram approval or
-  return a human decision.
+- **THEN** the operation refuses the unsafe storage or fails for the missing prerequisite with a supported operator next step and no token disclosure
+- **AND** it does not weaken protection, load an unsafe token, claim working Telegram approval or return a human decision.
 
-#### Scenario: Windows ownership or permission verification fails
+#### Scenario: No usable cold-start source is available
 
-- **GIVEN** Windows ownership or permissions are unsafe, or their required verification is unavailable or inconclusive
-- **WHEN** credential provisioning or loading is attempted
-- **THEN** it refuses before reading or writing secrets or disclosing private authority through the affected storage
-- **AND** its actionable secret-free diagnostic does not claim successful protection, Telegram operation, human approval or confirmed delivery.
+- **GIVEN** cold startup is needed and the environment token is absent or empty with no usable selected file, or a nonempty selected environment token is invalid
+- **WHEN** normal MCP startup attempts to start the broker
+- **THEN** startup fails with a supported next step to supply the token privately at launch or repair the selected file source
+- **AND** it neither prompts for a secret nor obtains one from agent arguments, discloses token values, falls back after selected-source failure or returns a human decision.
+
+#### Scenario: Windows file protection is unsupported or unverifiable
+
+- **GIVEN** Windows Telegram token-file protection is unsupported or cannot be verified
+- **WHEN** provisioning or selected-file loading is attempted
+- **THEN** it refuses before secret reads or writes with actionable secret-free guidance
+- **AND** an explicitly selected file does not fall back to the environment
+- **AND** environment-mode startup without explicit file selection requires no token-file provisioning or loading.

@@ -2,40 +2,41 @@
 
 ## Why
 
-Windows credential provisioning and loading currently skip required ownership and permission checks and assume safe path ancestry, leaving credentials and approval state without the protection already required by the product contract. Complete Windows support must make safe provisioning and loading work while refusing unsafe or unverifiable conditions, rather than treating refusal-only containment as completion.
+Windows protection checks currently skip ownership and permission verification or assume safe ancestry. Correct those defects so private launch-environment startup and trusted TUI setup can work without weakening the merged security contract. The existing metadata implementation is not yet a working correction.
 
 ### Direction Check
 
-Subject: Windows users' credentials and approval state. Desired outcome: working, protected Windows provisioning and loading.
-Threat/problem: skipped protection checks and assumed path safety. This correction enforces those checks on successful and refused operations without weakening the approved security boundary.
+Subject: Windows environment-mode users' approval state and operator credentials. Desired outcome: usable on-demand broker startup and trusted TUI setup with required protection.
+Threat/problem: skipped ownership/ACL checks and assumed safe ancestry. Successful protected setup and fail-closed admission address ordinary other-account access under the existing trusted-local-account boundary.
 
 ## What Changes
 
-- Complete Windows owner-only credential provisioning and broker-only loading, including the affected protected-state and path admission needed for those operations to be safe.
-- Require verified ownership, permissions, safe path ancestry and object identity for admitted credentials and affected state. A checked path must not authorize use of a different or substituted object.
-- Refuse unsafe or unverifiable protection with an actionable, secret-free next step. Do not bypass checks, relax protection, overwrite existing credentials or repair unsafe storage automatically.
-- Preserve credential separation, token confidentiality, existing durable work and all non-Windows safeguards. Keep secure foreground operation available without persistent token provisioning.
-- Deliver the complete correction in one independently landable PR from merged `main`. The first useful increment is working protected Windows setup and loading, not a refusal-only release or a separate helper foundation.
-- Prepare new release bytes as `0.1.0-preview.3`. Publication and installation remain separately authorized actions, not outcomes granted by this proposal. Never overwrite or reuse public preview.2.
+- Deliver working Windows environment-token startup with protected state, control and owner credentials, confidential-channel key and operator key. Verify required owner, access-control list (ACL), ancestry and redirected-path protection before secret use or readiness.
+- Keep the token private to the trusted launch host and Proceed startup processes that need it. Do not persist it or pass it to helpers that do not need it. Each fresh launch requires private supply again.
+- Refuse unsafe or unverifiable protection with actionable secret-free guidance. Preserve existing state, pairing, journal, create-only keys and uncertain ownership records. Do not repair unsafe storage automatically.
+- Supersede the prior unlanded promise of complete Windows Telegram token-file provisioning/loading with the user-selected environment route. Windows token-file operations may remain unsupported and must refuse if protection cannot be verified. They must never fall through to unsafe provisioning or loading.
+- Preserve merged POSIX file/environment behavior, credential-source precedence, secure foreground reuse, authenticated confidential admission and all approval authority boundaries.
+- Deliver one independently landable correction from current merged `main`. The first useful increment is protected Windows environment startup and trusted TUI setup, not a separately shipped foundation or refusal-only release.
 
 ### User Stories
 
-- As a Windows operator, I want supported setup to create protected credentials and approval state, so that I can use automatic broker startup without exposing private authority.
-- As a Windows operator, I want unsafe or unverifiable storage refused with a safe next step, so that startup cannot silently trade credential protection for availability.
+- As a Windows operator, I want to launch with a private environment token and protected local credentials, so that normal MCP use starts the broker on demand without storing the Telegram token.
+- As a Windows operator, I want supported trusted TUI setup and unsafe-storage refusal, so that local human decisions do not depend on exposed operator authority.
 
 ### Acceptance Outcomes
 
-1. **Clean first use:** Given an empty Windows installation with documented external prerequisites, supported setup creates protected state, a transport principal, a separate protected broker token file and operator-authorized pairing without manual stored-data edits. The initial state has no pairing, requests or decisions. After setup, normal MCP startup supports the first prepared approval request and returns its matching explicit human outcome on the active waiting call without a separate broker terminal. Setup alone creates no approval.
-2. **Working protected provisioning and loading:** Given safe Windows storage, the supported provisioning path succeeds and subsequent cold broker startup loads the credential only after required protection is verified. The token remains outside repositories, product state and MCP configuration, and only broker startup loads it. Both default and explicitly selected supported credential locations obey the same requirements.
-3. **Unsafe storage refusal:** Given unsafe ownership, permissions, ancestry, redirected paths or unverifiable object identity for the credential or affected state, provisioning or loading refuses before using unsafe private authority. Missing, empty or unreadable credentials also fail with a supported next step. Refusal neither discloses the token nor claims approval, successful Telegram operation or confirmed delivery.
-4. **No check/use substitution:** Given a path or object changes between protection assessment and use, the operation does not consume a substituted credential or admit substituted state under the earlier assessment. Uncertain identity fails closed, without a permissive fallback.
-5. **Privacy and preservation:** Provisioning and startup do not expose tokens in arguments, adapter environment, MCP configuration, outputs, diagnostics, logs, journals or request history. They do not read `.env` files, overwrite existing credential files, repair unsafe storage automatically, delete uncertain ownership records or alter existing pairing, pending requests or recorded decisions to make admission succeed.
-6. **Compatibility retained:** Safe existing Windows state can be used without reinitialization or manual stored-data migration. Existing non-Windows protection, authenticated confidential local admission, transport-principal separation and request authority remain effective. Secure foreground broker reuse still works without a persisted token or supplying that token to the adapter.
-7. **Honest limits:** Instructions describe the supported Windows prerequisites and safe setup path, including failures requiring operator action. Owner-only protection is not described as encryption, an OS credential store or isolation from same-account processes. Unit evidence is not represented as Windows boundary, installed-package or live first-use verification.
+1. **First useful action:** Given a clean Windows installation and documented prerequisites, supported setup creates protected state, a transport principal and operator-authorized private pairing without manual stored-data edits. Initially there are no pairing, requests or decisions. With a privately supplied launch token and no token file, normal MCP startup supports `prepare_approval` and `request_approval`, returning the paired human's matching explicit approval on the active call without a separate broker terminal. Setup alone creates no request or approval.
+2. **Trusted TUI:** Supported setup creates a protected operator key through the existing enrollment path. The configured trusted TUI can use it and the protected local channel for existing request-bound human decisions without changing enrollment, authority or decision semantics.
+3. **Protection before use:** Safe Windows storage permits setup and startup. Unsafe or unverifiable owners, ACLs, ancestry or redirected paths for affected state and credentials cause refusal before secret reads, writes, private-authority disclosure or readiness. Empty or missing permission evidence is not successful owner-only verification.
+4. **Privacy and source rules:** The product does not persist the environment token, read `.env` files, disclose secrets through arguments, configuration, outputs, logs or history, or leak the token to unnecessary helpers. Selected-source failure never silently changes sources. Windows token-file refusal does not block environment mode when no file was explicitly selected.
+5. **Preservation:** Safe existing state remains usable without reinitialization or manual migration. Pairing, journal, pending requests and recorded decisions retain existing semantics. Existing credentials and keys are not overwritten, unsafe storage is not repaired automatically, and uncertain locks are not removed to obtain startup.
+6. **Compatibility and truthful limits:** POSIX file/environment routes and secure foreground reuse remain supported. Local readiness does not imply Telegram availability, completed pairing, human receipt or confirmed delivery. Instructions disclose trusted-host token possession, fresh-launch supply and the existing same-account/admin limitation without claiming encryption, a credential vault or a new sandbox.
 
 ### Boundary and Exclusions
 
-Necessary affected state/path admission is included because credential protection cannot be valid when state selection, ancestry or object substitution bypasses it. Native permission bridging, unrelated platform redesign, new test frameworks, live harness testing and archive edits are excluded. Technical helper and native API choices belong in design, not this proposal. No privilege expansion or relaxed protection policy is authorized.
+The correction includes the state/control/owner/channel/operator-key admission necessary for the chosen environment route. It does not require a working Windows Telegram token-file mode, retained native handles, pinned ancestry, native storage I/O, exact native object identity or an unconditional check/use substitution guarantee. Those stronger unlanded draft outcomes are superseded, not merged security obligations. Prior planning remains in git history.
+
+No custom executable, runtime compilation, signing/build system, new storage engine, test framework, global policy/trust change or native permission bridge is authorized. Malicious same-account code and administrators remain outside the existing ordinary-other-account threat boundary. No merged security MUST is relaxed.
 
 ## Capabilities
 
@@ -45,13 +46,11 @@ None.
 
 ### Modified Capabilities
 
-- `opencode-session-continuation`: Make the existing credential provisioning/loading, protected-state admission and first-use requirements explicit for Windows, including safe ancestry, object identity and fail-closed verification. Preserve existing credential privacy, foreground compatibility, durable work and non-Windows safeguards. The retained capability name does not make OpenCode a core dependency.
+- `opencode-session-continuation`: working Windows environment startup and trusted TUI setup, with verified protected-state/credential admission and fail-closed Windows file handling. The retained capability name does not make OpenCode a core dependency.
 
 ## Impact
 
-- Affected behavior: Windows credential creation and broker loading, necessary protected-state/path admission, setup diagnostics and Windows setup guidance. Existing approval tool contracts and native harness permissions are unchanged.
-- Dependencies: the merged [current capability contract](../../specs/opencode-session-continuation/spec.md), particularly credential protection, startup admission and first-use requirements. This corrects the approved behavior established in the [historical startup design](../archive/2026-11-05-add-telegram-approval-opencode-v2/design.md). No unmerged parent change is required.
-- Downstream artifacts: a capability delta and design must translate these outcomes into an exact protection contract. The declared primary capability spec author is the product requirements owner, as recorded in the [project index](../../../AGENTS.md). Technical boundary and dependency choices remain with the architecture owner.
-- Nearest landing blocker: an exact Windows protection contract and runnable unit proof for successful protected provisioning/loading, unsafe and unverifiable admission, ancestry and object-substitution refusal, and retained safeguards. Existing official platform research is sufficient input and is not a new discovery prerequisite.
-- Verification constraint: only unit tests are authorized until deployment to the user's installation and public distribution. Independent review remains required. Windows boundary and live first-use proof remain unverified unless later performed under authorization. Candidate-specific merge and exposure decisions must state that residual risk rather than count unrun checks as passed.
-- Distribution: preview.2 is already public in npm and MCP Registry. Its Windows warning attempt is blocked pending owner authentication, not live. The correction targets fresh preview.3 bytes, with publication separately gated. Local disabled integrations and preserved runtime/recovery material are not changed by proposal authoring.
+- Dependencies: the [merged capability contract](../../specs/opencode-session-continuation/spec.md), particularly credential-source, privacy, fail-closed, protected-state and first-use requirements. No unmerged parent is required.
+- Next: reconcile [design](design.md) to this bounded outcome and its technical limits, then reconcile test/tasks criteria. Current code still needs owner, empty-ACL, ancestry, reparse and admission-order corrections.
+- Verification: only JavaScript/TypeScript unit tests runnable on Linux without PowerShell, Windows APIs, a native helper or compiler are authorized. Independent review remains required. User-skipped PowerShell test execution is SKIPPED, not passed. Native Windows, installed-package and live first-use proof remain UNRUN. Candidate-specific landing/exposure decisions must state residual risks.
+- Release: decide the new release version before the PR. Do not reuse published preview.2 bytes or inherit its publication authority. Publication, installation and activation remain separately gated. Local MCP/TUI remain disabled and the token absent. Proposal authoring changes no runtime or recovery material.
