@@ -34,7 +34,7 @@ None.
 
 The first useful increment is one independently landable change from merged `main`: complete supported setup from empty state and obtain the first Telegram decision through normal MCP startup using a launch-supplied token, without a token file or manual broker terminal. Binary acceptance outcomes are in the [capability delta](specs/opencode-session-continuation/spec.md).
 
-This change depends only on the [merged capability](../../specs/opencode-session-continuation/spec.md), not the separate active [Windows protection correction](../enforce-windows-secret-protection/proposal.md). It neither fixes nor waives Windows state/key protection defects, activates Windows use, nor promises blanket platform compatibility. The existing Windows worktree remains separate and preserved.
+This change depends only on the merged capability at repository-relative `openspec/specs/opencode-session-continuation/spec.md`, not the separate Windows protection correction change `enforce-windows-secret-protection`. It neither fixes nor waives Windows state/key protection defects, activates Windows use, nor promises blanket platform compatibility. The existing Windows worktree remains separate and preserved.
 
 Excluded: custom executables, signing systems, new secret providers or frameworks, global or user-wide token persistence, trusted-launcher construction, state/key protection redesign, authentication or decision-routing changes, deployment and publication.
 
@@ -42,4 +42,10 @@ Excluded: custom executables, signing systems, new secret providers or framework
 
 Automatic startup, credential-source selection, helper environment handling and setup/privacy guidance change. Broker authentication, transport principals, decision correlation, journal redaction, ownership and readiness safeguards remain unchanged. The trusted host may hold the token. The product controls only its own handling and launched helper environments, not unrelated parent processes.
 
-Verification remains scoped to JavaScript/TypeScript Node unit tests compatible with Linux and independent review. Unit evidence is not native, installed or live-runtime verification. Preview-version assignment occurs before the PR. Publishing requires separate authorization and does not inherit an earlier preview exception.
+Verification remains scoped to JavaScript/TypeScript Node unit tests compatible with Linux and independent review. Unit evidence is not native, installed or live-runtime verification. The assigned version is `0.1.0-preview.3`. Publishing requires separate authorization and does not inherit an earlier preview exception.
+
+## Current Approval Boundary
+
+The user explicitly approved the environment route and now directs "Finalize and merge" for PR #8 after owner review and green final unit CI. This current decision authorizes the narrow trusted-host/adapter environment exception described here. It does not establish that an earlier pre-implementation review occurred, and does not derive authority from an archived approval or the preview.2 publication exception.
+
+The current acceptance covers merge only with startup, real-process privacy, installed first use, live Telegram and restart/rotation checks still unrun, plus the manually checked target-race risk. Those checks remain UNVERIFIED, not passed. Candidate-specific conditions and review triggers belong in repository-relative `docs/status_log.md` and PR #8. Publication of preview.3 and local Windows activation remain separately unauthorized.
