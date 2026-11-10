@@ -50,6 +50,12 @@ Run from the assigned worktree, Node >=24, Windows or Linux. Shell timeout 30 se
 4. `node --experimental-test-module-mocks --test tests/startup-token-environment.test.mjs`
 5. `node --experimental-vm-modules --test tests/startup-token-helper-environment.test.mjs`
 
+### Validation configuration scope
+
+- [ ] Wire both new suites into the existing unit-only job in `.github/workflows/ci.yml`, using the exact unit commands in steps 4-5 above. Add bounded steps with the existing one-minute unit-step timeout. Keep both existing selected-unit commands and all previously selected unit files running. Retain workflow security, permissions, job/check identity, action pins, versions, triggers, `npm ci --ignore-scripts` and formatting before unit execution. No new CI framework, general all-test wildcard, integration, build, pack or release suites.
+
+This workflow file is the only additional implementation-owner VALIDATION CONFIG allowlist entry, solely for this routine unit-coverage wiring. The four-file JavaScript production allowlist below is unchanged. This does not change an upstream contract or require another Architect review. Linux proof remains UNRUN until actual CI executes the new suites and previous selected units on the candidate. Wiring alone is not a pass, feature verification or release proof.
+
 ## Checks and evidence
 
 Setup evidence, 2026-11-10: production remains exactly baseline `df2c8d0958676ba8465db8959d6299bd278125e0`. Planning checkpoint `f47458dc59ade0bd7dda76f570600a2a2e3375e8` contains only the five new change files. Root returned nondestructively to main and the assigned worktree HEAD was verified at that checkpoint before test authoring. Remote main matched the baseline at setup. Root coordination/operations/unknown files and every other worktree were preserved.
