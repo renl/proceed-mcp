@@ -1,6 +1,6 @@
 # Spec Delta
 
-Parent: [proposal](../../proposal.md). Baseline: [current capability](../../../../specs/opencode-session-continuation/spec.md). Read next: [design](../../design.md).
+Parent: [proposal](../../proposal.md). Baseline: repository-relative path `openspec/specs/opencode-session-continuation/spec.md`. Read next: [design](../../design.md).
 
 ## Direction Check
 
