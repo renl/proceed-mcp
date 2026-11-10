@@ -124,7 +124,11 @@ const WINDOWS_METADATA_SCRIPT = [
   '        if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) { $type = "allow" }',
   '        elseif ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Deny) { $type = "deny" }',
   '        try { $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $sid = $null }',
-  '        $mask = [uint32]$rule.FileSystemRights',
+  '        $rights = [int64]$rule.FileSystemRights',
+  // Widen to a signed 64-bit integer before masking so an access mask whose
+  // high bit is set keeps all 32 bits instead of failing or narrowing.
+  '        if ($rights -lt -2147483648 -or $rights -gt 4294967295) { throw "unsupported access mask" }',
+  '        $mask = [uint32]($rights -band 4294967295)',
   '        if (($rule.InheritanceFlags -band [System.Security.AccessControl.InheritanceFlags]::ObjectInherit) -ne 0) { $flags = $flags -bor 1 }',
   '        if (($rule.InheritanceFlags -band [System.Security.AccessControl.InheritanceFlags]::ContainerInherit) -ne 0) { $flags = $flags -bor 2 }',
   '        if (($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::NoPropagateInherit) -ne 0) { $flags = $flags -bor 4 }',
