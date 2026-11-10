@@ -23,7 +23,9 @@ import {
   posix,
   removeExactCreated,
   splitPath,
+  windowsAbsolutePathProblem,
 } from '../state/path-trust.js';
+import { verifyWindowsProtection } from '../state/protection.js';
 import { OPERATOR_KEY_PATTERN } from './identifiers.js';
 
 const POSIX_DIRECTORY_MODE = 0o700;
@@ -77,8 +79,9 @@ export function validateOperatorKeyFileOption(value) {
     if (value.startsWith('//')) {
       throw invalidArgument('--operator-key-file must not name a network share');
     }
-  } else if (value.startsWith('\\\\') || value.startsWith('//')) {
-    throw invalidArgument('--operator-key-file must not name a network share');
+  } else {
+    const problem = windowsAbsolutePathProblem(value);
+    if (problem !== null) throw invalidArgument(`--operator-key-file ${problem}`);
   }
   if (!isAbsolute(value)) {
     throw invalidArgument('--operator-key-file must be an absolute filesystem path');
@@ -230,6 +233,9 @@ export async function createOperatorKeyFile({ file, stateDir } = {}) {
     fail: keyPathFailure,
   });
   await assertLocation({ file, stateDir });
+  // Windows: the existing destination ancestry is admitted before any directory
+  // is created or the credential is opened.
+  await verifyWindowsProtection([file], { allowMissingTail: true });
 
   const { root, rest } = splitPath(file);
   let prefix = root;
@@ -274,10 +280,13 @@ export async function createOperatorKeyFile({ file, stateDir } = {}) {
     if (posix()) await handle.chmod(POSIX_FILE_MODE);
     created = await handle.stat();
     assertOwnerOnlyFile(created, 'the new operator credential file');
+    await verifyWindowsProtection([file]);
     key = generateOperatorKey();
     await handle.writeFile(`${key}\n`, 'utf8');
     await handle.sync();
     assertOwnerOnlyFile(await handle.stat(), 'the new operator credential file');
+    // Re-observe the flushed credential before key generation is reported done.
+    await verifyWindowsProtection([file]);
   } catch (cause) {
     await handle.close().catch(() => {});
     // The exclusive create proved this attempt owned the object it opened, but
@@ -343,6 +352,9 @@ export async function loadOperatorKeyFile({ file, stateDir } = {}) {
     fail: keyPathFailure,
   });
   await assertLocation({ file, stateDir });
+  // Windows: the key and its existing ancestry are admitted before the file is
+  // opened, and the same admission is re-observed before the key is returned.
+  await verifyWindowsProtection([file], { allowMissingTail: true });
 
   const before = await inspect(file);
   if (before === null) throw blockedPrerequisite(MISSING_KEY_GUIDANCE, 'OPERATOR_KEY_UNAVAILABLE');
@@ -394,6 +406,7 @@ export async function loadOperatorKeyFile({ file, stateDir } = {}) {
   }
   assertOwnerOnlyFile(after, 'the operator credential file');
   assertOwnerOnlyDirectory(await inspect(dirname(file)), 'the operator credential directory');
+  await verifyWindowsProtection([file]);
 
   const credential = parseOperatorKeyInput(bytes);
   return { credential, keyId: operatorKeyId(credential) };

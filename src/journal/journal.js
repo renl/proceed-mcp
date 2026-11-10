@@ -5,6 +5,7 @@
 import { open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { storageFailure } from '../errors.js';
+import { verifyWindowsProtection } from '../state/protection.js';
 import { utcTimestamp } from '../util/values.js';
 import {
   FILE_FORMAT_VERSION,
@@ -36,6 +37,10 @@ export class Journal {
   }
 
   static async open(filePath) {
+    // Windows: the journal and its existing ancestry are admitted before the
+    // file is opened for replay, truncation or append. A missing journal is this
+    // attempt's creation and is admitted through its parent.
+    await verifyWindowsProtection([filePath], { allowMissingTail: true });
     let handle;
     try {
       handle = await open(filePath, 'a', POSIX_FILE_MODE);
@@ -82,6 +87,9 @@ export class Journal {
     if (buffer.length === 0) {
       const header = createFileHeader();
       await this.#writeAndFlush(header);
+      // A journal this attempt had to initialise is re-observed after its header
+      // is durable, before any replay or append uses it.
+      await verifyWindowsProtection([this.filePath]);
       buffer = header;
     }
 
@@ -152,6 +160,10 @@ export class Journal {
   async ensureHarnessFormat() {
     if (this.#closed) throw storageFailure('the journal is closed', 'STORAGE_FAILURE');
     if (this.#formatVersion === HARNESS_FILE_FORMAT_VERSION) return false;
+
+    // The upgrade reads, replaces and reopens the file, so the same admission
+    // applies before any of those steps on Windows.
+    await verifyWindowsProtection([this.filePath]);
 
     let buffer;
     try {

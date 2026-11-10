@@ -15,6 +15,7 @@ import { dirname } from 'node:path';
 import { blockedPrerequisite, storageFailure } from '../errors.js';
 import { utcTimestamp } from '../util/values.js';
 import { assertProtectedAncestors, removeExactCreated } from './path-trust.js';
+import { verifyWindowsProtection } from './protection.js';
 
 const POSIX_FILE_MODE = 0o600;
 const CHANNEL_PROTOCOL = 'tls-psk-v1';
@@ -87,8 +88,16 @@ export async function acquireStateOwnership({ lockFile, port, channel }) {
   if (problem !== null) throw storageFailure(problem, 'PROTECTION_UNVERIFIED');
   // The secure record carries a secret, so its whole path is trusted before the
   // exclusive create: a redirected or replaceable ancestry refuses first and no
-  // record is created at all.
-  if (channel !== undefined) await assertRecordPath(lockFile, recordPathFailure);
+  // record is created at all. Windows admission applies the same rule to the
+  // owner, ACL, type and volume evidence of that ancestry.
+  if (channel !== undefined) {
+    await assertRecordPath(lockFile, recordPathFailure);
+    await verifyWindowsProtection([lockFile], {
+      allowMissingTail: true,
+      fail: () =>
+        conflictRecord('the secure broker ownership record cannot be verified as protected'),
+    });
+  }
   const instance = randomBytes(16).toString('hex');
   const contents = formatOwnershipRecord({
     pid: process.pid,
@@ -153,9 +162,16 @@ export async function acquireStateOwnership({ lockFile, port, channel }) {
     instance,
     contents,
     bytes: Buffer.from(contents),
-    // Callers invoke this only after journal activity has stopped. A record
-    // that no longer holds these exact bytes is preserved untouched.
+    // Callers invoke this only after journal activity has stopped. A record that
+    // no longer holds these exact bytes, or whose protection can no longer be
+    // verified, is preserved untouched.
     async release() {
+      try {
+        await verifyWindowsProtection([lockFile]);
+      } catch {
+        // Unverifiable protection is an uncertain release, so the record stays.
+        return false;
+      }
       let current;
       try {
         current = await readFile(lockFile, 'utf8');
@@ -237,6 +253,12 @@ export async function readSecureOwnership(lockFile) {
   if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) {
     throw conflictRecord('the broker ownership record is not protected');
   }
+  // Windows: the record's owner, ACL, type and volume are admitted before any
+  // key byte is opened. A refusal keeps the existing conflict classification so
+  // a protected record is never reported as a retryable reachability failure.
+  await verifyWindowsProtection([lockFile], {
+    fail: () => conflictRecord('the broker ownership record cannot be verified as protected'),
+  });
 
   let bytes;
   try {

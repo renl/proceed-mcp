@@ -23,6 +23,7 @@ import {
   posix,
   removeExactCreated,
   splitPath,
+  windowsAbsolutePathProblem,
 } from './path-trust.js';
 
 export const CREDENTIAL_DIRECTORY_NAME = '.proceed-mcp-credentials';
@@ -92,13 +93,29 @@ export function validateCredentialFileOption(value) {
     if (value.startsWith('//')) {
       throw invalidArgument('--telegram-token-file must not name a network share');
     }
-  } else if (value.startsWith('\\\\') || value.startsWith('//')) {
-    throw invalidArgument('--telegram-token-file must not name a network share');
+  } else {
+    const problem = windowsAbsolutePathProblem(value);
+    if (problem !== null) throw invalidArgument(`--telegram-token-file ${problem}`);
   }
   if (!isAbsolute(value)) {
     throw invalidArgument('--telegram-token-file must be an absolute filesystem path');
   }
   return value;
+}
+
+// Windows token-file provisioning and loading are not supportable in this
+// release: the required file protection cannot be verified there. The refusal
+// is a fixed, secret-free prerequisite failure before any secret is read or
+// written, and it never falls back to another source.
+const WINDOWS_FILE_ROUTE_GUIDANCE =
+  'Windows Telegram token-file provisioning and loading are not supported in this release; supply the token privately through PROCEED_TELEGRAM_BOT_TOKEN at launch, or use "serve --secure-local" for foreground reuse without a token file';
+
+export function assertWindowsFileCredentialSupported(operation) {
+  if (posix()) return;
+  throw blockedPrerequisite(
+    `${WINDOWS_FILE_ROUTE_GUIDANCE} (${operation})`,
+    'TELEGRAM_CREDENTIAL_UNSUPPORTED',
+  );
 }
 
 async function inspect(path) {
@@ -333,6 +350,7 @@ async function provisionInner({ file, stateDir, token }) {
   if (!isAbsolute(file)) {
     throw invalidArgument('the credential destination must be an absolute path');
   }
+  assertWindowsFileCredentialSupported('provision');
   await assertAncestors(file, { allowMissingTail: true });
   await assertLocation({ file, stateDir });
 
@@ -404,6 +422,7 @@ async function loadInner({ file, stateDir }) {
   if (!isAbsolute(file)) {
     throw invalidArgument('the credential destination must be an absolute path');
   }
+  assertWindowsFileCredentialSupported('load');
   if ((await inspect(dirname(file))) === null) {
     throw blockedPrerequisite(
       'the automatic-startup Telegram credential is missing; run "proceed-mcp telegram provision --token-stdin"',

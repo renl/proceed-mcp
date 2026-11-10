@@ -14,9 +14,17 @@ import { createFileHeader } from '../journal/framing.js';
 import { generateCredentialToken } from './credentials.js';
 import { writeFileAtomically } from './files.js';
 import { writeOwnerCredential } from './owner-credentials.js';
-import { createProtectedDirectory, verifyOwnerOnly } from './protection.js';
+import {
+  createProtectedDirectory,
+  verifyOwnerOnly,
+  verifyWindowsProtection,
+} from './protection.js';
 
 async function readConfigText(paths) {
+  // Windows: the configuration file and its existing ancestry are admitted
+  // before any configuration byte is read, so unsafe storage cannot select
+  // authority. A missing configuration is still reported as absent.
+  await verifyWindowsProtection([paths.configFile], { allowMissingTail: true });
   try {
     return await readFile(paths.configFile, 'utf8');
   } catch (cause) {
@@ -85,6 +93,9 @@ function processIsAlive(pid) {
 // A stopped broker is required before an origin binding is added: a running
 // broker owns the configuration it already loaded.
 async function assertBrokerStopped(paths) {
+  // The record may carry the channel key, so Windows admission precedes its
+  // content read; a missing record is an ordinary "no broker" answer.
+  await verifyWindowsProtection([paths.brokerLockFile], { allowMissingTail: true });
   let raw;
   try {
     raw = await readFile(paths.brokerLockFile, 'utf8');
@@ -135,17 +146,22 @@ async function assertBrokerOwnershipAbsent(paths) {
 }
 
 export async function initializeState(paths) {
-  if ((await readPortableConfigIfPresent(paths)) !== null) {
-    throw invalidArgument(
-      `state is already initialized at ${paths.stateDir}; init never overwrites existing state`,
-      'STATE_ALREADY_INITIALIZED',
-    );
-  }
+  // Windows: the state directory is admitted (a missing tail is this attempt's
+  // creation) before its contents are inspected. Emptiness is established
+  // before any existing configuration is parsed, and nothing is repaired.
+  await verifyWindowsProtection([paths.stateDir], { allowMissingTail: true });
 
   const existing = await directoryContents(paths.stateDir);
   if (existing !== null && existing.length > 0) {
     throw invalidArgument(
       `${paths.stateDir} already contains files; init never overwrites existing state`,
+      'STATE_ALREADY_INITIALIZED',
+    );
+  }
+
+  if ((await readPortableConfigIfPresent(paths)) !== null) {
+    throw invalidArgument(
+      `state is already initialized at ${paths.stateDir}; init never overwrites existing state`,
       'STATE_ALREADY_INITIALIZED',
     );
   }
