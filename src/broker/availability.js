@@ -117,29 +117,38 @@ async function attemptReadiness(record, token, timeoutMs, signal) {
   return { state: 'ready', record };
 }
 
-function launchEnvironment(environment) {
+// One child environment is constructed, never mutated. Every inherited token
+// spelling is removed first, compared case-insensitively so a Windows casing
+// variant cannot bypass file mode; only the selected environment token is added
+// back. The caller's environment object is left as it was.
+function launchEnvironment(environment, environmentToken = null) {
   const child = {};
   for (const [key, value] of Object.entries(environment)) {
-    if (key === TELEGRAM_TOKEN_ENV) continue;
+    if (key.toUpperCase() === TELEGRAM_TOKEN_ENV) continue;
     child[key] = value;
+  }
+  if (typeof environmentToken === 'string' && environmentToken !== '') {
+    child[TELEGRAM_TOKEN_ENV] = environmentToken;
   }
   return child;
 }
 
 // Launches the installed broker entry point from this same package using the
 // current runtime executable: no shell, no package download, no inferred path.
-// The child is detached with independent stdio, and an inherited Telegram token
-// is excluded from its environment rather than used as a credential source. The
-// remaining startup budget travels as one absolute instant so the child cannot
-// reset it by restarting its own clock origin.
+// The child is detached with independent stdio, and receives the explicit child
+// environment selected by the caller: an inherited Telegram token never stands in
+// as a credential source, and only an already selected environment token is
+// forwarded. The remaining startup budget travels as one absolute instant so the
+// child cannot reset it by restarting its own clock origin.
 export function spawnDetachedBroker({
   executable,
   args,
   environment = process.env,
+  environmentToken = null,
   cwd,
   deadlineAt = null,
 }) {
-  const childEnvironment = launchEnvironment(environment);
+  const childEnvironment = launchEnvironment(environment, environmentToken);
   if (typeof deadlineAt === 'number' && Number.isFinite(deadlineAt)) {
     childEnvironment[STARTUP_DEADLINE_ENV] = String(Math.round(deadlineAt));
   }

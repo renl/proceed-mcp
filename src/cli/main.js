@@ -58,6 +58,10 @@ import { parseArguments, requireOptions } from './args.js';
 const PACKAGE_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const TOKEN_FILE_OPTION = 'telegram-token-file';
 const STOP_BUDGET_MS = 30_000;
+// Automatic startup accepts one environment token shape: 1-4096 non-whitespace
+// ASCII bytes (0x21-0x7e). Unlike file or stdin input there is no line terminator
+// to remove, so the value is never trimmed, normalized or echoed.
+const MAX_ENVIRONMENT_TOKEN_BYTES = 4096;
 
 const USAGE = [
   'proceed-mcp - Telegram approval broker for OpenCode V2 sessions',
@@ -80,10 +84,15 @@ const USAGE = [
   'Origin URL (previous configuration schema only): http://127.0.0.1:<explicit-port>',
   'with no path, query, fragment or credentials.',
   '',
-  'The Telegram token is read from the environment, never from state or arguments.',
-  'For automatic startup, "telegram provision --token-stdin" writes the token once to a separate',
-  'owner-only credential file outside this repository and the state directory; only the broker reads it.',
-  'That file is not encrypted and other processes running as the same account can read it.',
+  'The Telegram token is never stored in state or passed in command arguments.',
+  'Automatic startup selects one source, in this order: --telegram-token-file, then a nonempty',
+  `private ${TELEGRAM_TOKEN_ENV} in the launch environment, then the default credential file.`,
+  'For the file route, "telegram provision --token-stdin" writes that file once, owner-only, outside',
+  'this repository and the state directory; only the broker reads it. That file is not encrypted and',
+  'other processes running as the same account can read it.',
+  'Environment mode needs the token supplied privately again for each fresh launch. Changing the',
+  'launch value does not change an already running broker: stop it and start its replacement through',
+  'the supported commands instead.',
   'For the trusted harness, "harness keygen" writes one create-only, owner-only operator credential',
   'outside this repository, the state directory and MCP configuration. It enrolls nothing and approves',
   'no work; the paired human confirms the matching public fingerprint in the private chat.',
@@ -190,7 +199,7 @@ function channelCliFailure(error) {
 
 function legacyUpgrade() {
   return blockedPrerequisite(
-    'the running broker uses the legacy local channel; stop it through its own Ctrl+C or operator interface, then restart with "serve --secure-local" or provision the token file for automatic startup (BROKER_INSTANCE_CONFLICT)',
+    'the running broker uses the legacy local channel; stop it through its own Ctrl+C or operator interface, then restart with "serve --secure-local" or supply the token privately on the next automatic launch, or provision the token file for automatic startup (BROKER_INSTANCE_CONFLICT)',
     'BROKER_INSTANCE_CONFLICT',
   );
 }
@@ -522,18 +531,60 @@ async function runHarnessCommand(argv, context) {
   return runHarnessKeygen(rest, context);
 }
 
+// Automatic startup selects a source only for an admitted cold launch: an absent
+// or exactly empty environment value is not a source and leaves the default file.
+function environmentTokenProblem() {
+  return blockedPrerequisite(
+    `the ${TELEGRAM_TOKEN_ENV} value is not a usable Telegram token; supply 1-4096 private non-whitespace ASCII bytes in ${TELEGRAM_TOKEN_ENV} for the next launch, or select a safe token file (TELEGRAM_CREDENTIAL_UNAVAILABLE)`,
+    'TELEGRAM_CREDENTIAL_UNAVAILABLE',
+  );
+}
+
+function environmentTokenFrom(env) {
+  const value = env[TELEGRAM_TOKEN_ENV];
+  if (value === undefined || value === '') return null;
+  if (typeof value !== 'string' || value.length > MAX_ENVIRONMENT_TOKEN_BYTES) {
+    throw environmentTokenProblem();
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x21 || code > 0x7e) throw environmentTokenProblem();
+  }
+  return value;
+}
+
 // Launch the installed broker entry point from this same package using the
-// current runtime executable and the selected nonsecret credential path. The
-// child is the only process that reads that file; automatic startup never selects
-// it from an inherited environment token, and it receives the caller's remaining
-// absolute startup budget instead of starting a fresh one.
-function launchAutomaticBroker({ paths, credentialFile, deadlineAt }) {
-  spawnDetachedBroker({
-    executable: packageEntryPoint(),
-    args: ['serve', '--telegram-token-file', credentialFile, '--state-dir', paths.stateDir],
-    cwd: PACKAGE_ROOT,
-    deadlineAt,
-  });
+// current runtime executable and one selected source. Selection happens only for
+// an admitted cold launch, so reusing a matching healthy broker loads, validates
+// or defaults nothing: an explicitly selected file wins, then a nonempty command
+// environment value, then the existing default file. A selected-source failure
+// never falls back, and only the selected environment value travels to the child,
+// never into arguments or a serialized launch description.
+function launchAutomaticBroker({ paths, file, env, deadlineAt }) {
+  const environmentToken = file === undefined ? environmentTokenFrom(env) : null;
+  const selectedFile =
+    file ??
+    (environmentToken === null ? defaultCredentialFile({ stateDir: paths.stateDir }) : null);
+  try {
+    spawnDetachedBroker({
+      executable: packageEntryPoint(),
+      args:
+        environmentToken === null
+          ? ['serve', '--telegram-token-file', selectedFile, '--state-dir', paths.stateDir]
+          : ['serve', '--secure-local', '--state-dir', paths.stateDir],
+      cwd: PACKAGE_ROOT,
+      environment: env,
+      environmentToken,
+      deadlineAt,
+    });
+  } catch {
+    // A synchronous launch failure becomes a fixed availability classification,
+    // never raw spawn arguments, options or an environment dump.
+    throw blockedPrerequisite(
+      'the broker could not be launched for automatic startup; inspect "proceed-mcp status" before a new attempt (BROKER_UNAVAILABLE)',
+      'BROKER_UNAVAILABLE',
+    );
+  }
 }
 
 async function runPair(argv, { stdout, env }) {
@@ -563,12 +614,7 @@ async function runPair(argv, { stdout, env }) {
     port: config.broker.port,
     token: control,
     budgetMs: remainingStartupBudget(attemptStart),
-    launch: ({ deadlineAt }) =>
-      launchAutomaticBroker({
-        paths,
-        credentialFile: file ?? defaultCredentialFile({ stateDir: paths.stateDir }),
-        deadlineAt,
-      }),
+    launch: ({ deadlineAt }) => launchAutomaticBroker({ paths, file, env, deadlineAt }),
   });
 
   let response;
@@ -640,7 +686,6 @@ async function runMcp(argv, { env }) {
     );
     return { file, paths, config, credential };
   });
-  const credentialFile = file ?? defaultCredentialFile({ stateDir: paths.stateDir });
   const controller = new AbortController();
   const availability = awaitSecureAvailability({
     lockFile: paths.brokerLockFile,
@@ -648,7 +693,7 @@ async function runMcp(argv, { env }) {
     token: credential,
     budgetMs: remainingStartupBudget(attemptStart),
     signal: controller.signal,
-    launch: ({ deadlineAt }) => launchAutomaticBroker({ paths, credentialFile, deadlineAt }),
+    launch: ({ deadlineAt }) => launchAutomaticBroker({ paths, file, env, deadlineAt }),
   });
   // A failed attempt is reported through broker-dependent calls, never as a
   // process crash during initialization.

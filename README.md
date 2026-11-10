@@ -6,19 +6,26 @@ Review your MCP agent's approval requests from Telegram or a trusted local harne
 Reject, or Respond with instructions, and the waiting MCP call receives your decision. Only an
 explicit Approve grants approval. The server records the outcome. It does not execute the action.
 
-This guide is for operators connecting a local MCP client to Telegram approval or the preview.2
-harness channel.
+This guide is for operators connecting a local MCP client to Telegram approval, the preview.2
+harness channel, or the preview.3 private launch-environment startup route.
 
 > **Version status:** `@meshimize/proceed-mcp@0.1.0-preview.1` is published on npm and listed in the
 > official MCP Registry. It requires a manual foreground broker, does **not** include automatic
-> startup, and has no harness channel. The sections below for automatic startup and the harness
-> channel describe version `0.1.0-preview.2`. Check the npm package page for whether that exact
-> version is available before installing, because publication is a separate operation. MCP Events,
-> automatic continuation after a timeout, `doctor`, and delivery retry remain unavailable.
+> startup, and has no harness channel. Version `0.1.0-preview.2` is published with automatic startup
+> and the harness channel, but its automatic startup uses the protected token file only. The private
+> launch-environment cold-start route is part of `0.1.0-preview.3`. This guide describes that
+> implementation and its remaining verification limits. It does not establish npm publication,
+> installation or live first-use qualification for preview.3, so check the npm package page for
+> exact version availability before installing. MCP Events, automatic continuation after a timeout,
+> `doctor`, and delivery retry remain unavailable.
 
-The [harness channel](#harness-channel-preview2) is part of the same `0.1.0-preview.2` version. It is
-not in the published preview.1 package. It describes source behavior with the verification limits
+The [harness channel](#harness-channel-preview2-and-later) is part of `0.1.0-preview.2` and later. It
+is not in the published preview.1 package. It describes source behavior with the verification limits
 below, not live harness behavior or a release-ready result.
+
+Automatic startup in `0.1.0-preview.3` also accepts a token supplied through a private launch
+environment, as an alternative to the protected token file. That environment route is part of the
+preview.3 implementation described here, with the verification limits below.
 
 ## Distribution
 
@@ -33,7 +40,7 @@ adapter and the broker run on your machine. The broker listens only on `127.0.0.
 The first public version is `0.1.0-preview.1`. At its publication, both the `preview` and `latest`
 dist-tags pointed to it, so pin the exact version rather than relying on either tag. Check the
 [npm package page](https://www.npmjs.com/package/@meshimize/proceed-mcp) for whether
-`0.1.0-preview.2` or a later version is available before installing. Publishing automation is
+`0.1.0-preview.3` or a later version is available before installing. Publishing automation is
 planned but not implemented.
 
 ## Requirements
@@ -47,13 +54,15 @@ planned but not implemented.
 - No build tool, native addon, or postinstall script is required.
 
 Recorded synthetic startup checks use Ubuntu 24.04 with Node 24.22.2. Installed-package and live
-Telegram first-use verification remain pending for this version. Windows protected provisioning,
-detached startup and helper cleanup qualification also remain outstanding.
+Telegram first-use verification remain pending for preview.3. Windows protected provisioning,
+detached startup and helper cleanup qualification also remain outstanding. Preview.3 does not change
+these protection or Windows qualification limits, or repair the separate Windows state, key or
+token-file protection defects.
 Protection and secure-channel checks refuse operation when they cannot establish the required safety.
 
-## Install the published preview (manual broker only)
+## Install published preview.1 (manual broker only)
 
-Install the exact preview version globally:
+Install the exact preview.1 version globally:
 
 ```console
 npm install --global @meshimize/proceed-mcp@0.1.0-preview.1
@@ -84,7 +93,7 @@ Keep both broker and adapter on preview.1 for this legacy HTTP mode. The new pro
 
 ## Recommended durable installation location (Windows)
 
-The commands above cover a one-off run and a global install of the published preview. For a durable
+The commands above cover a one-off run and a global install of published preview.1. For a durable
 operator installation on Windows, keep each release in its own versioned prefix under
 `%LOCALAPPDATA%\proceed-mcp\releases\`, and point both the MCP adapter and the TUI plugin at the
 package that npm places inside that prefix. One shared package root keeps the adapter and the plugin
@@ -93,21 +102,25 @@ on the same version.
 This layout is a recommendation for operator storage. It does not change application defaults, the
 state selection order, or the protection requirements in this guide. A package kept on disk is not a
 system service, a login-startup item, or a reboot-surviving installation, and it does not start the
-broker by itself.
+broker by itself. The examples use `0.1.0-preview.3`, which includes the private launch-environment
+route. A preview.2 installation remains valid for file-based automatic startup and the harness
+channel, and it does not gain the automatic-startup environment route. For a preview.2
+installation, use the same layout with `0.1.0-preview.2` in place of `0.1.0-preview.3`. Windows
+protection and helper qualification remain outstanding, as described under [Requirements](#requirements).
 
-### Paths for the 0.1.0-preview.2 release
+### Paths for the 0.1.0-preview.3 release
 
 Use `$env:LOCALAPPDATA` in PowerShell to build the prefix and package root rather than a hard-coded
 profile path.
 
 ```powershell
-$prefix = "$env:LOCALAPPDATA\proceed-mcp\releases\0.1.0-preview.2"
+$prefix = "$env:LOCALAPPDATA\proceed-mcp\releases\0.1.0-preview.3"
 $packageRoot = "$prefix\node_modules\@meshimize\proceed-mcp"
 ```
 
 | Purpose                         | Path                                                  |
 | ------------------------------- | ----------------------------------------------------- |
-| Install prefix (container)      | `%LOCALAPPDATA%\proceed-mcp\releases\0.1.0-preview.2` |
+| Install prefix (container)      | `%LOCALAPPDATA%\proceed-mcp\releases\0.1.0-preview.3` |
 | Package root                    | `<prefix>\node_modules\@meshimize\proceed-mcp`        |
 | CLI entry                       | `<package root>\bin\proceed-mcp.js`                   |
 | TUI plugin `package` value      | `<package root>`                                      |
@@ -124,21 +137,21 @@ package root.
 Install a vetted local tarball for the exact version:
 
 ```powershell
-npm install --prefix $prefix --ignore-scripts --no-save C:\path\to\meshimize-proceed-mcp-0.1.0-preview.2.tgz
+npm install --prefix $prefix --ignore-scripts --no-save C:\path\to\meshimize-proceed-mcp-0.1.0-preview.3.tgz
 ```
 
 Alternatively, install the exact public package spec only when that version is actually available on
 npm:
 
 ```powershell
-npm install --prefix $prefix --ignore-scripts --no-save @meshimize/proceed-mcp@0.1.0-preview.2
+npm install --prefix $prefix --ignore-scripts --no-save @meshimize/proceed-mcp@0.1.0-preview.3
 ```
 
 Check the [npm package page](https://www.npmjs.com/package/@meshimize/proceed-mcp) before relying on
 the public spec, as described under [Distribution](#distribution). `--ignore-scripts` is safe here
-because the preview requires no build or postinstall step. `--no-save` leaves saved dependency
-metadata unchanged. Do not point a durable MCP command or TUI plugin at a transient
-`npx` cache path. `npx` suits the one-off published preview command above, not a stable package
+because these preview releases require no build or postinstall step. `--no-save` leaves saved
+dependency metadata unchanged. Do not point a durable MCP command or TUI plugin at a transient
+`npx` cache path. `npx` suits the one-off published preview.1 command above, not a stable package
 reference.
 
 ### Reference one package root from both configurations
@@ -153,7 +166,7 @@ MCP command array:
 ```jsonc
 "command": [
   "node",
-  "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\releases\\0.1.0-preview.2\\node_modules\\@meshimize\\proceed-mcp\\bin\\proceed-mcp.js",
+  "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\releases\\0.1.0-preview.3\\node_modules\\@meshimize\\proceed-mcp\\bin\\proceed-mcp.js",
   "mcp",
   "--owner",
   "<owner-id>",
@@ -168,7 +181,7 @@ TUI plugin entry in `cli.json`:
 
 ```json
 {
-  "package": "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\releases\\0.1.0-preview.2\\node_modules\\@meshimize\\proceed-mcp",
+  "package": "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\releases\\0.1.0-preview.3\\node_modules\\@meshimize\\proceed-mcp",
   "options": {
     "state_dir": "C:\\Users\\<account>\\AppData\\Local\\proceed-mcp\\state",
     "harness_id": "local-opencode",
@@ -186,7 +199,8 @@ state from [Connect an MCP client](#6-connect-an-mcp-client).
 
 The state, operator key and backup paths in the table are optional examples for a new installation.
 They do not replace the documented default. If you omit `--state-dir`, state selection still ends at
-`<home>/.proceed-mcp` as described under [Preview.2 commands](#preview2-commands). An existing
+`<home>/.proceed-mcp` as described under
+[Preview.2 and preview.3 commands](#preview2-and-preview3-commands). An existing
 installation should keep its current state directory and operator key file when upgrading, and this
 layout implies no migration.
 
@@ -207,17 +221,20 @@ Install the next version into its own versioned prefix, then change the CLI entr
 file. Remove an old release directory only after both integrations reference the new one and you no
 longer need it.
 
-## One-time setup for preview.2
+## One-time setup for preview.2 and preview.3
 
 This setup enables automatic broker startup, and the
-[harness channel](#harness-channel-preview2) builds on it. Use the preview.2 CLI for every step, not
-the preview.1 command. From the source checkout, replace `proceed-mcp` in the commands below with
-`node bin/proceed-mcp.js`. A package installed from a local build can use its own `proceed-mcp`
-command. For a durable Windows layout shared by the MCP adapter and the TUI plugin, see
+[harness channel](#harness-channel-preview2-and-later) builds on it. Published preview.2 supports
+only the protected token file for automatic startup. Preview.3 adds the private launch-environment
+token route in step 4.
+Use the matching preview.2 or preview.3 CLI for every step, not the preview.1 command. From the
+source checkout, replace `proceed-mcp` in the commands below with `node bin/proceed-mcp.js`. A
+package installed from a local build can use its own `proceed-mcp` command. For a durable Windows
+layout shared by the MCP adapter and the TUI plugin, see
 [Recommended durable installation location](#recommended-durable-installation-location-windows).
-The package, lockfile and Registry metadata identify this version as `0.1.0-preview.2`.
-Check the npm package page for availability; npm publication and MCP Registry listing are separate
-operations.
+The package, lockfile and Registry metadata identify this source tree as `0.1.0-preview.3`.
+Check the npm package page for exact availability. Publication and MCP Registry listing are
+separate operations.
 
 ### Existing setup: stop the old broker once
 
@@ -226,9 +243,11 @@ its original foreground terminal and wait for it to exit cleanly. Preserve the s
 pairing. Upgraded `mcp`, `pair`, `status` and `stop` refuse legacy brokers before sending private
 credentials. Old clients cannot use the new secure broker.
 
-Then provision the token in step 4 and connect the preview.2 adapter. Existing pairing does not
-need repeating. Alternatively, use secure foreground mode below without saving a token file.
-This is a one-time stop/restart, not a recurring terminal requirement for automatic startup.
+Then select the credential source in step 4 and connect the matching preview.2 or preview.3 adapter.
+Existing pairing and an existing token file do not need repeating. Alternatively, supply the token
+through the launch environment in step 4 (preview.3) or use secure foreground mode below. Those
+routes need no saved token file. This is a one-time stop/restart, not a recurring terminal
+requirement for automatic startup.
 
 ### 1. Create protected state
 
@@ -260,10 +279,53 @@ not configure a webhook for it and do not run another poller against it. `procee
 a webhook and never rewinds or drops pending updates. If Telegram reports a competing consumer,
 Telegram processing stops with a diagnostic. Repair the bot and restart the broker through your chosen mode.
 
-### 4. Provision the broker-only token
+### 4. Choose a broker credential source
 
-Run provisioning yourself in a trusted local shell, not through an agent or MCP tool. Pipe one
-token from an operator-controlled secret source into this command's stdin:
+Automatic cold startup in `0.1.0-preview.3` accepts either a token supplied through a private launch
+environment or the existing protected token file. The environment route is not available in
+published preview.2, which uses the protected token file for automatic startup. Use one source for
+each broker start. Selection order is an explicit `--telegram-token-file`, then a nonempty
+`PROCEED_TELEGRAM_BOT_TOKEN` in the launch environment, then the default token file. A selected
+source that fails does not fall back to a lower-priority one. Reusing a matching healthy secure
+broker needs no token source. Selection and validation happen only when the broker must be started,
+so an unusable value does not block reuse.
+
+#### Environment route
+
+Supply `PROCEED_TELEGRAM_BOT_TOKEN` privately to the trusted process that starts OpenCode or another
+MCP host, or to the process that runs a cold `proceed-mcp mcp` or `pair`, from an
+operator-controlled secret source. The product does not persist this value. When the broker must be
+started, the value is passed only into that broker's process environment.
+
+Do not put the token value in `opencode.jsonc`, an MCP server `environment` entry, a command
+argument, a repository file, product state, the journal, logs or tool output. That MCP entry is
+configuration, not a private launch environment. Do not paste a token literal into a command you
+keep in shell history.
+
+The accepted value is 1-4096 bytes of non-whitespace ASCII. An absent or exactly empty value means
+no environment source, so the default token file remains available. A nonempty but whitespace-only
+or otherwise unusable value is still the selected source and fails startup without trying another:
+`TELEGRAM_CREDENTIAL_UNAVAILABLE` with CLI exit code 3, reported as `BROKER_UNAVAILABLE` through
+MCP. The failure reports the fixed classification and safe next step, not the value or a raw
+environment dump.
+
+Supply the variable again for each new broker start, including after restart, login or reboot. There
+is no user-wide persistence, login-startup item, secret manager or `.env` loading. Changing the
+parent environment does not change the token of a broker that is already running. To change the
+token in use, or to switch to file mode, stop the broker with the documented `stop` command, then
+start a replacement that receives the new source. Do not start a second poller or take over
+uncertain ownership.
+
+The product removes the token before it launches helpers that do not need it, such as the Windows
+ACL check. It cannot control an unrelated parent process, other MCP processes that parent starts, or
+global environment settings. Treating a value as an environment variable does not make it private,
+and this guide makes no same-account isolation claim.
+
+#### Protected file route
+
+Provisioning is optional when the environment route supplies the token. To use the file route, run
+provisioning yourself in a trusted local shell, not through an agent or MCP tool. Pipe one token
+from an operator-controlled secret source into this command's stdin:
 
 ```console
 proceed-mcp telegram provision --token-stdin --state-dir <absolute-state-dir>
@@ -276,7 +338,8 @@ token in command arguments, shell history, exported variables, MCP configuration
 Disable shell tracing, transcription and session recording before handling secrets.
 
 For example, in an interactive **Bash** shell, this hidden operator prompt pipes the token using
-shell builtins. Replace the state path and use the preview.2 CLI as described above:
+shell builtins. Replace the state path and use the matching preview.2 or preview.3 CLI as described
+above:
 
 ```bash
 (
@@ -321,8 +384,8 @@ minutes, and is not stored in plaintext.
 
 Only the first pairing succeeds. There is no in-chat re-pair or identity change.
 
-In preview.2, `pair` starts or securely reuses the shared broker. No separate broker terminal
-is needed. Issuing a code is not proof that pairing or Telegram delivery has succeeded.
+In preview.2 and preview.3, `pair` starts or securely reuses the shared broker. No separate broker
+terminal is needed. Issuing a code is not proof that pairing or Telegram delivery has succeeded.
 
 ### 6. Connect an MCP client
 
@@ -358,7 +421,7 @@ Replace `<owner-id>` and the state path. On Windows, escape backslashes or use f
 the JSON string. `codemode: false` exposes the tools directly. OpenCode reloads MCP configuration
 after a save. Check the connection with `opencode mcp list`.
 
-This example selects the preview.2 package by absolute path. Use an absolute Node executable path too
+This example selects the preview.3 package by absolute path. Use an absolute Node executable path too
 if your client cannot resolve `node`. If you installed the package from a local build, start the
 `command` array with its `proceed-mcp` executable and keep the same arguments. Do not substitute the
 published preview.1 npx command and expect automatic startup.
@@ -368,8 +431,10 @@ With this server name, OpenCode exposes the tools as `proceed_prepare_approval`,
 `proceed_acknowledge_approval`. If you leave Code Mode enabled, OpenCode groups them under
 `tools.proceed`.
 
-Do not add `PROCEED_TELEGRAM_BOT_TOKEN` to `environment`. The adapter does not need it and must not
-receive it.
+Do not add `PROCEED_TELEGRAM_BOT_TOKEN` or any token value to the MCP server's `environment` block.
+That block is MCP configuration, not a private launch environment. For the
+[environment route](#environment-route), the token is inherited by the OpenCode process from the
+trusted parent that starts it, and Proceed passes it only to the broker it launches.
 
 #### Other stdio MCP clients
 
@@ -380,8 +445,9 @@ proceed-mcp mcp --owner <owner-id> --state-dir <absolute-state-dir>
 ```
 
 The adapter needs no OpenCode API, password, provider credential, or proprietary session metadata.
-It connects only to the local broker. Preview.2 starts a safely stopped broker or securely reuses
-a matching instance. Provisioning is required for cold startup, not reuse of a secure foreground broker.
+It connects only to the local broker. Preview.2 and preview.3 start a safely stopped broker or
+securely reuse a matching instance. A protected token file or a private launch environment token is
+required for cold startup, not for reuse of a matching secure broker.
 
 Startup-dependent calls wait up to 150 seconds for verified local readiness. Your MCP host may
 time out sooner. Local readiness does not prove Telegram availability, completed pairing, human
@@ -390,15 +456,15 @@ receipt or approval. A startup error is never a human decision.
 The server advertises MCP protocol `2025-11-25` and exposes five tools: `prepare_approval`,
 `request_approval`, `get_approval`, `cancel_approval`, and `acknowledge_approval`.
 
-## Harness channel (preview.2)
+## Harness channel (preview.2 and later)
 
 Version `0.1.0-preview.2` adds a client-local TUI path for answering Proceed requests alongside
 Telegram. It is not in the published preview.1 package. The target is exactly **OpenCode 2.2.5**,
 with TUI, OpenCode service and broker on the same machine and OS account. Other versions disable this
 integration. Remote service operation is not qualified. Actual product interaction, authority
 separation, secure transport, concurrent-session routing and installed setup remain under
-qualification. These instructions describe preview.2 source behavior, not a runtime verification
-result, installed-package proof or Windows compatibility claim.
+qualification. These instructions describe the harness behavior in preview.2 and preview.3, not a
+runtime verification result, installed-package proof or Windows compatibility claim.
 
 ### Trust and protected operator key
 
@@ -413,9 +479,9 @@ not encrypted. Same-account processes, administrators or a compromised UI can ac
 Ordinary agent text, tool arguments, API reply records and caller-supplied human flags do not make
 an agent a human decision-maker. The five agent-facing MCP tools remain unchanged.
 
-Complete the [preview.2 setup](#one-time-setup-for-preview2) using this source checkout's CLI,
-including the owner, token provisioning and private-chat pairing. Preserve existing state and pairing
-instead of initializing them again. From the checkout root, generate a new operator key in a
+Complete the [preview.2 or preview.3 setup](#one-time-setup-for-preview2-and-preview3) using the
+matching CLI, including the owner, one broker credential source and private-chat pairing. Preserve
+existing state and pairing instead of initializing them again. From the checkout root, generate a new operator key in a
 dedicated protected directory outside repositories, broker state and MCP configuration:
 
 ```console
@@ -570,15 +636,23 @@ for the discovery and loading contract.
 
 Choose the setup for your runtime before trying the skill:
 
-- **Published preview.1:** [install the published preview](#install-the-published-preview-manual-broker-only)
-  and follow that section's manual setup and adapter instructions. Keep its foreground broker running.
-- **Preview.2:** follow [One-time setup for preview.2](#one-time-setup-for-preview2) using the
-  preview.2 CLI, not the published preview.1 command. For empty state, complete all six steps,
-  including [adding an owner](#2-add-one-owner), [private token provisioning](#4-provision-the-broker-only-token),
-  [pairing the private chat](#5-pair-the-private-chat), and [connecting your MCP client](#6-connect-an-mcp-client).
-  For existing state, first follow [Existing setup: stop the old broker once](#existing-setup-stop-the-old-broker-once).
-  After provisioning, the preview.2 runtime starts or securely reuses the broker without a separate
-  terminal. [Optional foreground mode](#optional-foreground-mode) remains available without saving a token file.
+- **Published preview.1:** [install published preview.1](#install-published-preview1-manual-broker-only)
+  and follow that section's manual setup and adapter instructions. Keep its foreground broker
+  running.
+- **Preview.2 or preview.3:** follow
+  [One-time setup for preview.2 and preview.3](#one-time-setup-for-preview2-and-preview3) using the
+  matching CLI, not the published preview.1 command. Published preview.2 supports only the
+  [protected file route](#protected-file-route) for automatic startup. Preview.3 also supports
+  the [environment route](#environment-route). For empty state, complete all six steps, including
+  [adding an owner](#2-add-one-owner),
+  [choosing a credential source](#4-choose-a-broker-credential-source),
+  [pairing the private chat](#5-pair-the-private-chat), and
+  [connecting your MCP client](#6-connect-an-mcp-client).
+  For existing state, first follow
+  [Existing setup: stop the old broker once](#existing-setup-stop-the-old-broker-once).
+  After the selected source is available, the matching runtime starts or securely reuses the broker
+  without a separate terminal. [Optional foreground mode](#optional-foreground-mode) remains
+  available without saving a token file.
   The harness channel is optional here. This skill flow answers through Telegram.
 
 Follow the linked token privacy requirements. Installing the skill alone does not configure or
@@ -670,8 +744,8 @@ owner.
 | `expired`   | The deadline passed without a decision. This is not approval.             |
 | `cancelled` | An authorized caller cancelled the pending request. This is not approval. |
 
-In published preview.1, human decisions come only from the paired Telegram person. Preview.2 adds the
-separately enrolled local operator described above for Proceed requests.
+In published preview.1, human decisions come only from the paired Telegram person. Preview.2 and
+later add the separately enrolled local operator described above for Proceed requests.
 
 Only an explicit Approve grants approval. Reject records rejection. Respond records
 request-specific instructions only after valid correlated text. To send instructions, press Respond
@@ -687,8 +761,9 @@ cancel it either. Keep the retained request identity and capability, then use `g
 later turn to read the unchanged outcome. Retrieval does not wake an agent or start a new assistant
 turn.
 
-MCP Events are unsupported in this preview. There is no automatic resumption after a timeout and no
-automatic session reattachment. An approval records an outcome. It does not execute the action.
+MCP Events are unsupported in preview.1, preview.2 and preview.3. There is no automatic resumption
+after a timeout and no automatic session reattachment. An approval records an outcome. It does not
+execute the action.
 
 `delivery_state` describes reporting, not the decision:
 
@@ -703,7 +778,8 @@ automatic session reattachment. An approval records an outcome. It does not exec
 
 Use a harmless action. The product never executes it.
 
-1. Connect the MCP client after completing setup. Preview.2 needs no manual `serve` terminal.
+1. Connect the MCP client after completing setup. Preview.2 and preview.3 need no manual `serve`
+   terminal.
 2. In a new agent session, ask for `prepare_approval`, then `request_approval` with
    `client_request_id` `manual-approve-1`, action `Report the text PROCEED TEST`, context
    `Harmless first-use check. Do not modify files.`, and `expires_in_seconds` 300.
@@ -734,13 +810,15 @@ stop it explicitly.
 
 To avoid saving the Telegram token, supply it privately only to the foreground broker's own
 `PROCEED_TELEGRAM_BOT_TOKEN` environment from a trusted operator-controlled secret source. Do not
-type the token into a command or let the MCP client inherit it. Then run the preview.2 foreground broker:
+type the token into a command or copy it into MCP configuration. In this route the adapter needs no
+token and reuses the running broker. Then run the secure foreground broker:
 
 ```console
 proceed-mcp serve --secure-local --state-dir <absolute-state-dir>
 ```
 
-Leave that terminal open. Preview.2 clients reuse this secure broker without a token file.
+Leave that terminal open. Preview.2 and preview.3 clients reuse this secure broker without a
+token file.
 Alternatively, `serve --telegram-token-file <absolute-file> --state-dir <absolute-state-dir>` runs
 secure foreground mode with an already provisioned file. Do not combine a file option with a
 nonempty environment token. Without either new option, `serve` retains legacy HTTP/environment
@@ -750,7 +828,7 @@ A foreground broker without a token can become locally ready but cannot process 
 If Telegram rejects the token or reports another consumer, repair the cause, stop the broker and
 restart it through the chosen mode.
 
-## Preview.2 commands
+## Preview.2 and preview.3 commands
 
 | Command                                              | Purpose                                                                         |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------- |
@@ -762,15 +840,17 @@ restart it through the chosen mode.
 | `mcp --owner <id> --state-dir <dir>`                 | Run the stdio adapter and start or reuse the secure shared broker.              |
 | `stop --state-dir <dir>`                             | Request an authenticated clean stop and wait up to 30 seconds for confirmation. |
 | `status --state-dir <dir> [--request <id>] [--json]` | Show requests, resolution, Telegram and delivery state, and the next action.    |
-| `retry <request_id> --state-dir <dir>`               | Report that request retry is unavailable in this preview.                       |
+| `retry <request_id> --state-dir <dir>`               | Report that request retry is unavailable in preview.2 and preview.3.            |
 
 `doctor` is not implemented and fails as an unknown command. The older `origin add` command in the
 help output belongs to the retired origin-based configuration and refuses this state. Use owner
 mode.
 
 `telegram provision`, `pair`, `mcp` and `serve` accept `--telegram-token-file <absolute-file>`.
-For `serve`, this selects secure file mode. `status` does not start a stopped broker. State selection
-is `--state-dir`, then `PROCEED_STATE_DIR`, then `<home>/.proceed-mcp`.
+For `serve`, this selects secure file mode. In preview.3, for automatic `pair` and `mcp` startup,
+an explicit file option wins over a nonempty `PROCEED_TELEGRAM_BOT_TOKEN` in the launch environment,
+which wins over the default file. `status` does not start a stopped broker. State selection is
+`--state-dir`, then `PROCEED_STATE_DIR`, then `<home>/.proceed-mcp`.
 
 Exit codes are `0` for completion, `2` for invalid arguments or configuration, `3` for an unavailable
 prerequisite, and `4` for a storage or integrity failure. Diagnostics go to stderr. MCP stdout
@@ -793,13 +873,16 @@ mode bits.
 
 The journal stores request text, response text, pairing identifiers, decisions, timestamps, and
 delivery state. Treat the state directory as sensitive local data. Back up a stopped broker's entire
-state directory. This preview has no history deletion or compaction.
+state directory. Preview.2 and preview.3 have no history deletion or compaction.
 
 Request capabilities are stored only as SHA-256 verifiers. The plaintext capability exists in the
 tool result and in your retention. Credential and token values are never printed by a command.
 
 The separate Telegram credential file is not part of this state directory. Keep it protected too.
-Secure local connections authenticate the broker before sending private request credentials.
+An environment-supplied token is also not part of product state. The product does not persist it,
+but the host and broker processes hold it while they run, and the product cannot erase it from a
+parent environment. Secure local connections authenticate the broker before sending private request
+credentials.
 Processes able to read protected state can impersonate that local channel. Owner-only protection
 does not isolate processes running under the same account.
 
@@ -811,7 +894,7 @@ and is not a system service or login-startup installation. Survival across logou
 process-container shutdown is not promised. Distinct owners can share it. Competing adapters using
 the same owner still follow the existing `OWNER_IN_USE` registration rules.
 
-To stop the preview.2 secure broker explicitly:
+To stop the secure broker explicitly:
 
 ```console
 proceed-mcp stop --state-dir <absolute-state-dir>
@@ -832,18 +915,20 @@ stale-lock recovery.
 
 ## Common failures
 
-- `BROKER_UNAVAILABLE`: check initialized state, owner setup and matching `--state-dir`. For
-  preview.2, follow the accompanying startup classification, repair the prerequisite, then start a
-  new adapter. For published preview.1, keep its manual `serve` running.
-- `TELEGRAM_CREDENTIAL_UNAVAILABLE`: provision the token or select the correct protected file.
-  Never put the token in the adapter environment.
+- `BROKER_UNAVAILABLE`: check initialized state, owner setup, the selected credential source and
+  matching `--state-dir`. For preview.2 and preview.3, follow the accompanying startup
+  classification, repair the prerequisite, then start a new adapter. For published preview.1, keep
+  its manual `serve` running.
+- `TELEGRAM_CREDENTIAL_UNAVAILABLE`: supply the token privately in the next launch environment or
+  repair or select the protected token file. Keep it out of MCP configuration, arguments, logs and
+  tool output. A selected source that fails does not fall back to another.
 - `TELEGRAM_CREDENTIAL_EXISTS`: provisioning is create-only. Choose another dedicated safe
   destination and use its file option consistently. No overwrite is performed.
 - `PROTECTION_UNVERIFIED`: use dedicated protected storage or explicitly repair its protection.
   Do not weaken checks or move the token into product state or MCP settings.
 - `BROKER_INSTANCE_CONFLICT`: verify the state and port. Stop a conflicting service through its own
-  interface. For a legacy broker, use its foreground Ctrl+C, then secure foreground mode or
-  provisioned automatic startup. Do not delete its lock.
+  interface. For a legacy broker, use its foreground Ctrl+C, then secure foreground mode or a new
+  automatic start with the selected credential source. Do not delete its lock.
 - `STATE_NOT_OWNED` or `BROKER_STARTUP_TIMEOUT`: preserve state and investigate ownership or the
   startup failure before a new attempt. A timeout does not establish safe cleanup.
 - `NOT_PAIRED`: complete `/pair` before creating a request.
@@ -856,8 +941,9 @@ stale-lock recovery.
 ## Limits
 
 - One paired Telegram human and one bot token per broker. Only the first pairing succeeds. There is
-  no in-chat identity change or re-pair. The preview.2 harness channel can additionally authorize the
-  enrolled local operator described above, without changing the paired Telegram identity.
+  no in-chat identity change or re-pair. The harness channel in preview.2 and preview.3 can
+  additionally authorize the enrolled local operator described above, without changing the paired
+  Telegram identity.
 - One broker per state directory. A separate owner is a separate transport principal, not another
   human or bot.
 - No hosted service and no remote broker. The broker is loopback-only.

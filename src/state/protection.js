@@ -13,6 +13,10 @@ const execFileAsync = promisify(execFile);
 
 const POSIX_DIRECTORY_MODE = 0o700;
 const WINDOWS_ACL_TIMEOUT_MS = 20_000;
+// The Telegram token variable (same name as src/config/portable-config.js). An
+// ACL helper never needs that authority, so it is removed with the other
+// unnecessary inheritance rather than forwarded to the child process.
+const TELEGRAM_TOKEN_ENV = 'PROCEED_TELEGRAM_BOT_TOKEN';
 
 // Sets (mode=protect) or verifies (mode=verify) an owner-only DACL for every
 // target in one PowerShell invocation. Targets arrive through the environment
@@ -61,10 +65,15 @@ function describeExecFailure(error) {
 }
 
 // Windows PowerShell must resolve its own core modules, so a PSModulePath that
-// points at a newer PowerShell installation is removed for the child process.
+// points at a newer PowerShell installation is removed for the child process. The
+// Telegram token and every casing variant are removed too: the ACL helper has no
+// use for that authority. The copied parent environment itself is never changed.
 function windowsAclEnvironment(targets, mode) {
   const environment = { ...process.env };
   delete environment.PSModulePath;
+  for (const key of Object.keys(environment)) {
+    if (key.toUpperCase() === TELEGRAM_TOKEN_ENV) delete environment[key];
+  }
   environment.PROCEED_ACL_TARGETS = targets.join('\n');
   environment.PROCEED_ACL_MODE = mode;
   return environment;
