@@ -106,6 +106,7 @@ const operatorKey = await import('../src/harness/operator-key.js');
 const files = await import('../src/state/files.js');
 const { Journal } = await import('../src/journal/journal.js');
 const { parseStrictJson } = await import('../src/harness/helper-protocol.js');
+const { createFileHeader } = await import('../src/journal/framing.js');
 
 function platform(name, body) {
   const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
@@ -1113,4 +1114,673 @@ test('WIN-QUERY: empty request is local no-op and target order/case is exact', a
       },
     ),
   );
+});
+
+test('WIN-BATCH: exact depth batches retain all targets and bound count/input', async () => {
+  await windowsUnit(async () => {
+    const targets = Array.from({ length: 130 }, (_, index) => `${target}\\item${index}.key`);
+    await protection.verifyWindowsProtection(targets);
+    const batches = processCalls.map(({ options }) => options.env.PROCEED_ACL_TARGETS.split('\n'));
+    assert.deepEqual(batches.slice(0, 2), [['C:\\'], [target]]);
+    assert.deepEqual(
+      batches.slice(2).map((batch) => batch.length),
+      [64, 64, 2],
+    );
+    assert.deepEqual(batches.slice(2).flat(), targets);
+    assert.ok(
+      processCalls.every(
+        ({ options }) => Buffer.byteLength(options.env.PROCEED_ACL_TARGETS) <= 32768,
+      ),
+    );
+  });
+});
+
+test('WIN-DEADLINE: consumed query time reduces the shared budget and preserves settlement reserve', async () => {
+  await windowsUnit(async () => {
+    const original = Date.now;
+    let now = 100000;
+    Date.now = () => now;
+    childReply = ({ options }) => {
+      const paths = options.env.PROCEED_ACL_TARGETS.split('\n');
+      now += 7000;
+      return { stdout: JSON.stringify(metadata(paths)) };
+    };
+    try {
+      await assert.rejects(protection.verifyWindowsProtection([`${target}\\deep\\item.key`]), {
+        code: 'PROTECTION_UNAVAILABLE',
+      });
+      assert.deepEqual(
+        processCalls.map(({ options }) => options.timeout),
+        [19000, 12000, 5000],
+      );
+      assert.equal(processCalls.length, 3, 'no invocation after reserve is consumed');
+    } finally {
+      Date.now = original;
+    }
+  });
+});
+
+test('WIN-DEADLINE: a late final response cannot admit after the original budget', async () => {
+  await windowsUnit(async () => {
+    const original = Date.now;
+    let now = 100000;
+    Date.now = () => now;
+    childReply = ({ options }) => {
+      const paths = options.env.PROCEED_ACL_TARGETS.split('\n');
+      if (paths.includes(target)) now += 20001;
+      return { stdout: JSON.stringify(metadata(paths)) };
+    };
+    try {
+      await assert.rejects(protection.verifyWindowsProtection([target]), {
+        code: 'PROTECTION_UNAVAILABLE',
+      });
+    } finally {
+      Date.now = original;
+    }
+  });
+});
+
+test('WIN-CREATE: new empty directory protection follows emptiness/type recheck, never repairs an injected entry', async () => {
+  await windowsUnit(async () => {
+    let checkedEmpty = false;
+    storageBindings.mkdir = () => {};
+    storageBindings.readdir = () => {
+      checkedEmpty = true;
+      return ['unknown-entry'];
+    };
+    childReply = ({ file, options }) => {
+      if (/icacls/i.test(file)) {
+        assert.equal(checkedEmpty, true, 'confirm still empty before changing permissions');
+        assert.fail('a directory containing an unknown entry must never be protected');
+      }
+      return { stdout: JSON.stringify(metadata(options.env.PROCEED_ACL_TARGETS.split('\n'))) };
+    };
+    await assert.rejects(protection.createProtectedDirectory(target));
+    assert.equal(processCalls.filter(({ file }) => /icacls/i.test(file)).length, 0);
+    assert.ok(!storageCalls.some(({ name }) => ['unlink', 'rm'].includes(name)));
+  });
+});
+
+test('WIN-INHERITANCE: both file and directory inheritance are required for a new directory', async (t) => {
+  for (const flags of [1, 2])
+    await t.test(`flags ${flags}`, () =>
+      windowsUnit(
+        async () => {
+          storageBindings.mkdir = () => {};
+          await assert.rejects(
+            protection.createProtectedDirectory(target, { inheritsProtection: true }),
+            unverified,
+          );
+        },
+        (value) => {
+          for (const entry of value.entries) entry.object.aces = [ace(full, flags)];
+          return value;
+        },
+      ),
+    );
+});
+
+test('WIN-INHERITANCE: foreign inherit-only mutation becomes applicable on the prospective child', async () => {
+  await windowsUnit(
+    async () => {
+      storageBindings.mkdir = () => {};
+      storageBindings.readdir = () => [];
+      await assert.rejects(
+        protection.createProtectedDirectory(target, { inheritsProtection: true }),
+        unverified,
+      );
+      assert.ok(
+        !storageCalls.some(({ name }) => name === 'mkdir'),
+        'refuse before creating an exposed child',
+      );
+    },
+    (value) => {
+      for (const entry of value.entries) entry.object.aces.push(ace(0x40000, 11, foreign));
+      return value;
+    },
+  );
+});
+
+test('WIN-KEY: actual create-only setup and guarded load succeed without disclosing the key', async () => {
+  await windowsUnit(async () => {
+    const file = 'C:\\Operator\\operator.key';
+    const events = [];
+    let bytes;
+    storageBindings.open = (_path, flags) => {
+      events.push(flags === 'wx' ? 'create' : 'open-read');
+      return {
+        stat: async () => memoryInfo(file),
+        writeFile: async (value) => {
+          events.push('write');
+          bytes = Buffer.from(value);
+        },
+        readFile: async () => {
+          events.push('read');
+          return bytes;
+        },
+        sync: async () => events.push('flush'),
+        close: async () => events.push('close'),
+      };
+    };
+    const normalReply = childReply;
+    childReply = (call) => {
+      events.push('admit');
+      return normalReply(call);
+    };
+    const issued = await operatorKey.createOperatorKeyFile({ file, stateDir: target });
+    assert.deepEqual(Object.keys(issued).sort(), ['file', 'keyId']);
+    assert.equal(bytes.length, 69);
+    assert.ok(events.lastIndexOf('admit') > events.indexOf('flush'));
+    assert.ok(
+      events.slice(events.indexOf('create') + 1, events.indexOf('write')).includes('admit'),
+    );
+    const loaded = await operatorKey.loadOperatorKeyFile({ file, stateDir: target });
+    assert.equal(loaded.credential, bytes.toString().trim());
+    assert.equal(loaded.keyId, issued.keyId);
+    assert.ok(events.lastIndexOf('admit') > events.indexOf('read'));
+  });
+});
+
+test('WIN-KEY: opened type/link/size/identity checks refuse before private bytes', async (t) => {
+  for (const [name, override] of [
+    ['type', { isFile: () => false }],
+    ['link', { nlink: 2 }],
+    ['size', { size: 4097 }],
+    ['identity', { ino: 999 }],
+  ])
+    await t.test(name, () =>
+      windowsUnit(async () => {
+        let reads = 0;
+        const file = 'C:\\Operator\\operator.key';
+        storageBindings.open = () => ({
+          stat: async () => ({ ...memoryInfo(file), ...override }),
+          readFile: async () => {
+            reads++;
+            return Buffer.from(`hop_${'a'.repeat(64)}\n`);
+          },
+          close: async () => {},
+        });
+        await assert.rejects(operatorKey.loadOperatorKeyFile({ file, stateDir: target }));
+        assert.equal(reads, 0);
+      }),
+    );
+});
+
+test('WIN-ATOMIC: actual empty sibling admission, write, flush, publication and recheck order', async () => {
+  await windowsUnit(async () => {
+    const events = [];
+    let sibling;
+    storageBindings.open = (path, flags) => {
+      assert.equal(flags, 'wx');
+      sibling = path;
+      events.push('create');
+      return {
+        writeFile: async () => events.push('write'),
+        sync: async () => events.push('flush'),
+        close: async () => events.push('close'),
+      };
+    };
+    storageBindings.rename = (from, to) => {
+      assert.equal(from, sibling);
+      assert.equal(to, `${target}\\config.json`);
+      events.push('publish');
+    };
+    const normalReply = childReply;
+    childReply = (call) => {
+      events.push('admit');
+      return normalReply(call);
+    };
+    await files.writeFileAtomically(`${target}\\config.json`, 'SYNTHETIC');
+    assert.ok(
+      events.slice(events.indexOf('create') + 1, events.indexOf('write')).includes('admit'),
+    );
+    assert.ok(
+      events.slice(events.indexOf('flush') + 1, events.indexOf('publish')).includes('admit'),
+    );
+    assert.ok(events.lastIndexOf('admit') > events.indexOf('publish'));
+  });
+});
+
+test('WIN-CONFIG: changed protection after configuration read discards parsed authority', async () => {
+  let read = false;
+  await windowsUnit(
+    async () => {
+      storageBindings.readFile = () => {
+        read = true;
+        return JSON.stringify(config.createEmptyConfig());
+      };
+      await assert.rejects(
+        store.loadPortableConfiguration({ stateDir: target, configFile: `${target}\\config.json` }),
+        unverified,
+      );
+      assert.equal(read, true);
+    },
+    (value) => {
+      if (read) for (const entry of value.entries) entry.object.aces = [];
+      return value;
+    },
+  );
+});
+
+test('WIN-LOCK: inherited empty record is admitted before PSK write and after flush', async () => {
+  let created = false;
+  await windowsUnit(
+    async () => {
+      let writes = 0;
+      storageBindings.open = () => {
+        created = true;
+        return {
+          stat: async () => memoryInfo(`${target}\\broker.lock`),
+          writeFile: async () => {
+            writes++;
+          },
+          sync: async () => {},
+          close: async () => {},
+        };
+      };
+      const operation = ownership.acquireStateOwnership({
+        lockFile: `${target}\\broker.lock`,
+        port: 43189,
+        channel: { protocol: 'tls-psk-v1', psk: 'b'.repeat(64) },
+      });
+      await assert.rejects(operation);
+      assert.equal(writes, 0, 'unsafe inherited empty lock receives no PSK');
+    },
+    (value) => {
+      if (created)
+        for (const entry of value.entries)
+          if (entry.path.endsWith('broker.lock')) entry.object.aces.push(ace(1, 0, foreign));
+      return value;
+    },
+  );
+});
+
+test('WIN-LOCK: release uncertainty preserves record without reading or deleting it', async () => {
+  await windowsUnit(async () => {
+    storageBindings.open = (path) => ({
+      stat: async () => memoryInfo(path),
+      writeFile: async () => {},
+      sync: async () => {},
+      close: async () => {},
+    });
+    const lock = await ownership.acquireStateOwnership({
+      lockFile: `${target}\\broker.lock`,
+      port: 43189,
+      channel: { protocol: 'tls-psk-v1', psk: 'b'.repeat(64) },
+    });
+    childReply = () => ({ error: unavailable() });
+    storageCalls.length = 0;
+    assert.equal(await lock.release(), false);
+    assert.ok(!storageCalls.some(({ name }) => ['readFile', 'unlink'].includes(name)));
+  });
+});
+
+test('WIN-LOCK: changed protection after reading channel PSK discards private authority', async () => {
+  let read = false;
+  await windowsUnit(
+    async () => {
+      const file = `${target}\\broker.lock`;
+      const bytes = Buffer.from(
+        JSON.stringify({
+          schema_version: 2,
+          instance: 'a'.repeat(32),
+          pid: 1234,
+          port: 43189,
+          started_at: '2026-11-10T00:00:00.000Z',
+          channel: { protocol: 'tls-psk-v1', psk: 'b'.repeat(64) },
+        }),
+      );
+      storageBindings.open = () => ({
+        stat: async () => ({ ...memoryInfo(file), size: bytes.length }),
+        readFile: async () => {
+          read = true;
+          return bytes;
+        },
+        close: async () => {},
+      });
+      await assert.rejects(ownership.readSecureOwnership(file), {
+        code: 'BROKER_INSTANCE_CONFLICT',
+      });
+      assert.equal(read, true);
+    },
+    (value) => {
+      if (read) for (const entry of value.entries) entry.object.aces = [];
+      return value;
+    },
+  );
+});
+
+test('WIN-LOCK: release rechecks protection after exact-byte read before deletion', async () => {
+  await windowsUnit(async () => {
+    storageBindings.open = (path) => ({
+      stat: async () => memoryInfo(path),
+      writeFile: async () => {},
+      sync: async () => {},
+      close: async () => {},
+    });
+    const lock = await ownership.acquireStateOwnership({
+      lockFile: `${target}\\broker.lock`,
+      port: 43189,
+      channel: { protocol: 'tls-psk-v1', psk: 'b'.repeat(64) },
+    });
+    storageBindings.readFile = () => {
+      childReply = () => ({ error: unavailable() });
+      return lock.contents;
+    };
+    let deleted = false;
+    storageBindings.unlink = () => {
+      deleted = true;
+    };
+    assert.equal(await lock.release(), false);
+    assert.equal(deleted, false);
+  });
+});
+
+test('WIN-JOURNAL: newly created empty journal is admitted before its first header write', async () => {
+  let created = false;
+  await windowsUnit(
+    async () => {
+      let writes = 0;
+      storageBindings.readFile = () => Buffer.alloc(0);
+      storageBindings.open = () => {
+        created = true;
+        return {
+          write: async (_buffer, _offset, length) => {
+            writes++;
+            return { bytesWritten: length };
+          },
+          sync: async () => {},
+          close: async () => {},
+        };
+      };
+      await assert.rejects(Journal.open(`${target}\\events.journal`));
+      assert.equal(writes, 0, 'unadmitted empty journal must receive no bytes');
+    },
+    (value) => {
+      if (created) for (const entry of value.entries) entry.object.aces = [];
+      return value;
+    },
+  );
+});
+
+test('WIN-JOURNAL: changed admission before append prevents any write or acknowledged sequence', async () => {
+  await windowsUnit(async () => {
+    let writes = 0;
+    storageBindings.readFile = () => createFileHeader();
+    storageBindings.stat = () => ({ size: createFileHeader().length });
+    storageBindings.open = () => ({
+      write: async (_buffer, _offset, length) => {
+        writes++;
+        return { bytesWritten: length };
+      },
+      sync: async () => {},
+      close: async () => {},
+    });
+    const journal = await Journal.open(`${target}\\events.journal`);
+    childReply = () => ({ error: unavailable() });
+    try {
+      await assert.rejects(
+        journal.append([{ type: 'pairing_set', chat_id: '123', user_id: '456' }], {
+          committedAt: '2026-11-10T00:00:00.000Z',
+        }),
+      );
+      assert.equal(writes, 0);
+      assert.equal(journal.sequence, 0);
+    } finally {
+      await journal.close();
+    }
+  });
+});
+
+test('WIN-JOURNAL: an unknown upgrade sibling is preserved rather than deleted', async () => {
+  await windowsUnit(async () => {
+    const file = `${target}\\events.journal`;
+    storageBindings.readFile = () => createFileHeader();
+    storageBindings.stat = () => ({ size: createFileHeader().length });
+    storageBindings.open = (path) => {
+      if (path.endsWith('.upgrade'))
+        throw Object.assign(new Error('existing unknown sibling'), { code: 'EEXIST' });
+      return { sync: async () => {}, close: async () => {} };
+    };
+    storageBindings.unlink = () => {};
+    const journal = await Journal.open(file);
+    storageCalls.length = 0;
+    try {
+      await assert.rejects(journal.ensureHarnessFormat());
+      assert.ok(
+        !storageCalls.some(({ name }) => name === 'unlink'),
+        'unknown upgrade contents are never deleted',
+      );
+    } finally {
+      await journal.close();
+    }
+  });
+});
+
+// Actual runtime assembly with only effect-producing collaborators replaced by
+// memory sinks. State, credential, ownership, journal and protection remain real.
+let runtimeEvents = [];
+mock.module('../src/broker/portable.js', {
+  namedExports: {
+    createPortableBroker: () => ({
+      recover: async () => runtimeEvents.push('recover'),
+      sweepExpired: async () => runtimeEvents.push('expire-flush'),
+      close: async () => runtimeEvents.push('broker-close'),
+      pairing: () => null,
+    }),
+  },
+});
+mock.module('../src/broker/portable-server.js', {
+  namedExports: {
+    createPortableServer: ({ credentials, secure }) => {
+      assert.equal(credentials.control, 'a'.repeat(64));
+      assert.equal(secure.key.length, 32);
+      return {
+        listen: async () => runtimeEvents.push('bind'),
+        markReady: () => runtimeEvents.push('ready'),
+        beginDrain: () => runtimeEvents.push('drain'),
+        close: async () => runtimeEvents.push('server-close'),
+      };
+    },
+  },
+});
+mock.module('../src/broker/expiry-schedule.js', {
+  namedExports: {
+    startExpirySchedule: () => ({
+      failed: false,
+      stop: async () => runtimeEvents.push('schedule-stop'),
+    }),
+  },
+});
+mock.module('../src/telegram/portable-poller.js', {
+  namedExports: {
+    createPortableTelegramPoller: () => ({
+      start: () => runtimeEvents.push('telegram-start'),
+      stop: async () => {},
+    }),
+  },
+});
+const { startPortableRuntime } = await import('../src/broker/portable-runtime.js');
+const { harnessTuiDefinition } = await import('../src/harness/tui-plugin.js');
+const { run: runCli } = await import('../src/cli/main.js');
+
+test('WIN-PROVISION: actual public CLI refuses unsupported file mode without consuming stdin', async () => {
+  await windowsUnit(async () => {
+    storageBindings.readFile = () => JSON.stringify(config.createEmptyConfig());
+    let consumed = false;
+    let output = '';
+    const stdin = {
+      isTTY: false,
+      [Symbol.asyncIterator]() {
+        consumed = true;
+        throw new Error('must not consume a secret');
+      },
+    };
+    const code = await runCli(
+      [
+        'telegram',
+        'provision',
+        '--token-stdin',
+        '--state-dir',
+        target,
+        '--telegram-token-file',
+        'C:\\Tokens\\telegram.token',
+      ],
+      {
+        env: {},
+        stdin,
+        stdout: {
+          write: (text) => {
+            output += text;
+          },
+        },
+        stderr: {
+          write: (text) => {
+            output += text;
+          },
+        },
+      },
+    );
+    assert.equal(code, 3);
+    assert.match(
+      output,
+      /Windows Telegram token-file provisioning and loading are not supported/,
+      output,
+    );
+    assert.equal(consumed, false);
+    assert.ok(
+      !storageCalls.some(({ name }) =>
+        ['open', 'writeFile', 'mkdir', 'rename', 'unlink'].includes(name),
+      ),
+    );
+    assert.ok(!output.includes(rawFailure));
+  });
+});
+
+test('WIN-RUNTIME: protected environment-mode assembly reaches readiness only after recovery/final admission', async (t) => {
+  for (const failFinal of [false, true])
+    await t.test(failFinal ? 'final guard failure' : 'success', () =>
+      windowsUnit(async () => {
+        runtimeEvents = [];
+        const paths = {
+          stateDir: target,
+          credentialsDir: `${target}\\credentials`,
+          configFile: `${target}\\config.json`,
+          controlCredentialFile: `${target}\\control.token`,
+          journalFile: `${target}\\events.journal`,
+          brokerLockFile: `${target}\\broker.lock`,
+          ownerCredentialFile: () => `${target}\\owner.test.token`,
+        };
+        storageBindings.readFile = (path) => {
+          runtimeEvents.push(`read:${win32.basename(path)}`);
+          return path.endsWith('.journal') ? createFileHeader() : `${'a'.repeat(64)}\n`;
+        };
+        storageBindings.stat = (path) => ({
+          ...memoryInfo(path),
+          size: path.endsWith('.journal') ? createFileHeader().length : 65,
+        });
+        storageBindings.open = (path) => ({
+          stat: async () => memoryInfo(path),
+          writeFile: async () => runtimeEvents.push('lock-write'),
+          sync: async () => runtimeEvents.push('flush'),
+          close: async () => {},
+        });
+        const normalReply = childReply;
+        childReply = (call) => {
+          runtimeEvents.push('admit');
+          if (failFinal && runtimeEvents.includes('bind')) return { error: unavailable() };
+          return normalReply(call);
+        };
+        const attempt = startPortableRuntime({
+          paths,
+          config: { broker: { port: 43189 }, owners: [{ owner_id: 'test' }] },
+          secure: true,
+          telegram: { getUpdates: async () => [] },
+        });
+        if (failFinal) {
+          await assert.rejects(attempt, { code: 'PROTECTION_UNAVAILABLE' });
+          assert.ok(!runtimeEvents.includes('ready'));
+          assert.ok(!runtimeEvents.includes('telegram-start'));
+          assert.ok(runtimeEvents.includes('server-close'));
+        } else {
+          const runtime = await attempt;
+          assert.ok(runtimeEvents.indexOf('recover') < runtimeEvents.indexOf('expire-flush'));
+          assert.ok(runtimeEvents.indexOf('expire-flush') < runtimeEvents.indexOf('bind'));
+          assert.ok(
+            runtimeEvents
+              .slice(runtimeEvents.indexOf('bind') + 1, runtimeEvents.indexOf('ready'))
+              .includes('admit'),
+          );
+          assert.ok(runtimeEvents.indexOf('ready') < runtimeEvents.indexOf('telegram-start'));
+          await runtime.stop();
+          assert.ok(runtimeEvents.indexOf('broker-close') < runtimeEvents.indexOf('server-close'));
+        }
+      }),
+    );
+});
+
+test('WIN-TUI: actual setup consumes guarded config/key before registering trusted controls', async (t) => {
+  for (const failure of ['none', 'config', 'key'])
+    await t.test(failure, () =>
+      windowsUnit(async () => {
+        let keyRead = false;
+        let configRead = false;
+        const toasts = [];
+        let layer;
+        const cfg = config.createEmptyConfig();
+        cfg.owners = [{ owner_id: 'test', label: 'Test' }];
+        storageBindings.readFile = () => {
+          configRead = true;
+          return JSON.stringify(cfg);
+        };
+        storageBindings.open = (file) => ({
+          stat: async () => memoryInfo(file),
+          readFile: async () => {
+            keyRead = true;
+            return Buffer.from(`hop_${'a'.repeat(64)}\n`);
+          },
+          close: async () => {},
+        });
+        const normalReply = childReply;
+        childReply = (call) => {
+          const paths = call.options.env.PROCEED_ACL_TARGETS;
+          if (failure === 'config' || (failure === 'key' && paths.includes('operator.key')))
+            return { error: unavailable() };
+          return normalReply(call);
+        };
+        const dispose = await harnessTuiDefinition.setup({
+          app: { version: '2.2.5' },
+          options: {
+            state_dir: target,
+            harness_id: 'test',
+            owner_id: 'test',
+            operator_key_file: 'C:\\Operator\\operator.key',
+          },
+          keymap: {
+            layer: (read) => {
+              assert.equal(keyRead, true);
+              layer = read();
+            },
+          },
+          ui: { toast: { show: (value) => toasts.push(value) } },
+        });
+        if (failure === 'none') {
+          assert.equal(configRead, true);
+          assert.equal(keyRead, true);
+          assert.deepEqual(layer.bindings, ['proceed.harness.enroll', 'proceed.harness.open']);
+          assert.equal(typeof dispose, 'function');
+          dispose();
+        } else {
+          assert.equal(layer, undefined);
+          assert.equal(keyRead, false);
+          assert.equal(configRead, failure !== 'config');
+          assert.equal(dispose, undefined);
+        }
+        assert.ok(toasts.every(({ message }) => !message.includes(`hop_${'a'.repeat(64)}`)));
+        assert.ok(
+          !processCalls.some(({ file }) => !/powershell/i.test(file)),
+          'setup sends no authority through a process',
+        );
+      }),
+    );
 });
