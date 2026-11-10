@@ -131,14 +131,26 @@ export async function acquireStateOwnership({ lockFile, port, channel }) {
     created = await handle.stat();
     if (channel !== undefined) {
       // The secret key is written only after the record and its directory are
-      // verified owner-only, and the complete record is flushed before return.
+      // verified owner-only, and the empty record this attempt created is
+      // admitted before its first byte.
       if (process.platform !== 'win32') await handle.chmod(POSIX_FILE_MODE);
       created = await handle.stat();
       assertOwnerOnlyRecord(created);
+      await verifyWindowsProtection([lockFile], {
+        fail: () =>
+          conflictRecord('the secure broker ownership record cannot be verified as protected'),
+      });
     }
     await handle.writeFile(contents, 'utf8');
     await handle.sync();
-    if (channel !== undefined) assertOwnerOnlyRecord(await handle.stat());
+    if (channel !== undefined) {
+      assertOwnerOnlyRecord(await handle.stat());
+      // Re-observe the flushed record before the key is treated as published.
+      await verifyWindowsProtection([lockFile], {
+        fail: () =>
+          conflictRecord('the secure broker ownership record cannot be verified as protected'),
+      });
+    }
   } catch (cause) {
     await handle.close().catch(() => {});
     // The exclusive create proved this attempt owned the object it opened, but
@@ -184,6 +196,14 @@ export async function acquireStateOwnership({ lockFile, port, channel }) {
         );
       }
       if (current !== contents) return false;
+      // Release deletes the record, so its protection is re-observed after the
+      // exact-byte comparison and before the removal: a failed recheck leaves
+      // the record in place as an uncertain release.
+      try {
+        await verifyWindowsProtection([lockFile]);
+      } catch {
+        return false;
+      }
       try {
         await unlink(lockFile);
       } catch (cause) {
@@ -284,6 +304,11 @@ export async function readSecureOwnership(lockFile) {
   if (bytes.length > MAX_RECORD_BYTES) {
     throw conflictRecord('the broker ownership record is too large');
   }
+  // The key bytes are private authority only while the object that produced them
+  // is still admitted: a failed re-observation discards the read result.
+  await verifyWindowsProtection([lockFile], {
+    fail: () => conflictRecord('the broker ownership record cannot be verified as protected'),
+  });
 
   let record;
   try {

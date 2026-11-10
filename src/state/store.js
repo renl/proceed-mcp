@@ -25,12 +25,17 @@ async function readConfigText(paths) {
   // before any configuration byte is read, so unsafe storage cannot select
   // authority. A missing configuration is still reported as absent.
   await verifyWindowsProtection([paths.configFile], { allowMissingTail: true });
+  let text;
   try {
-    return await readFile(paths.configFile, 'utf8');
+    text = await readFile(paths.configFile, 'utf8');
   } catch (cause) {
     if (cause?.code === 'ENOENT') return null;
     throw storageFailure(`could not read ${paths.configFile}`, 'STORAGE_FAILURE', cause);
   }
+  // The bytes are authority only while the object that produced them is still
+  // admitted: a failed re-observation discards the result instead of returning it.
+  await verifyWindowsProtection([paths.configFile]);
+  return text;
 }
 
 // The schema-1 readers below still serve the broker, pairing, status, retry and
@@ -103,6 +108,8 @@ async function assertBrokerStopped(paths) {
     if (cause?.code === 'ENOENT') return;
     throw storageFailure(`could not read ${paths.brokerLockFile}`, 'STORAGE_FAILURE', cause);
   }
+  // The record's bytes stay authority only while its protection still holds.
+  await verifyWindowsProtection([paths.brokerLockFile]);
 
   let record;
   try {

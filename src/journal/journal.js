@@ -2,7 +2,7 @@
 // writer: one process opens the file for append, writes one framed record per
 // transaction and awaits a file flush before the caller may acknowledge or
 // perform any external effect. Replay discards only an incomplete final frame.
-import { open, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { open, readFile, rename, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { storageFailure } from '../errors.js';
 import { verifyWindowsProtection } from '../state/protection.js';
@@ -86,9 +86,11 @@ export class Journal {
 
     if (buffer.length === 0) {
       const header = createFileHeader();
+      // A journal this attempt created is empty but not yet admitted: the empty
+      // object is admitted before its first header byte, then re-observed after
+      // the header is durable and before any replay or append uses it.
+      await verifyWindowsProtection([this.filePath]);
       await this.#writeAndFlush(header);
-      // A journal this attempt had to initialise is re-observed after its header
-      // is durable, before any replay or append uses it.
       await verifyWindowsProtection([this.filePath]);
       buffer = header;
     }
@@ -138,6 +140,10 @@ export class Journal {
     if (!Array.isArray(mutations) || mutations.length === 0) {
       throw storageFailure('a journal transaction needs at least one mutation', 'STORAGE_FAILURE');
     }
+    // Every append is a new effect: the journal is admitted again before this
+    // record's bytes are written, so no sequence is advanced or acknowledged
+    // from a file whose protection can no longer be observed.
+    await verifyWindowsProtection([this.filePath]);
 
     const sequence = this.#sequence + 1;
     const frame = encodeFrame({
@@ -217,10 +223,12 @@ export class Journal {
     const temporary = `${this.filePath}.upgrade`;
     let tempHandle;
     try {
-      await unlink(temporary).catch((cause) => {
-        if (cause?.code !== 'ENOENT') throw cause;
-      });
+      // An existing sibling is content this attempt did not create, so it is
+      // never deleted: the exclusive create refuses and the history is preserved
+      // untouched. The new empty child is admitted before its first byte and
+      // again after the flush, and the published destination is re-observed.
       tempHandle = await open(temporary, 'wx', POSIX_FILE_MODE);
+      await verifyWindowsProtection([temporary]);
       let written = 0;
       while (written < rewritten.length) {
         const { bytesWritten } = await tempHandle.write(
@@ -232,6 +240,7 @@ export class Journal {
         written += bytesWritten;
       }
       await tempHandle.sync();
+      await verifyWindowsProtection([temporary]);
       const created = await tempHandle.stat();
       if (created.size !== rewritten.length) {
         throw new Error('journal upgrade replacement length mismatch');
@@ -267,6 +276,10 @@ export class Journal {
         cause,
       );
     }
+
+    // The published journal is re-observed before this instance reports it as
+    // the upgraded history; a failed check leaves the caller without authority.
+    await verifyWindowsProtection([this.filePath]);
 
     try {
       this.#handle = await open(this.filePath, 'a', POSIX_FILE_MODE);
@@ -313,6 +326,8 @@ export class Journal {
   async #truncateTail(validLength) {
     const info = await stat(this.filePath).catch(() => null);
     if (info === null || info.size <= validLength) return;
+    // Truncation changes the journal, so the object is admitted again here.
+    await verifyWindowsProtection([this.filePath]);
     let handle;
     try {
       handle = await open(this.filePath, 'r+', POSIX_FILE_MODE);

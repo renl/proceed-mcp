@@ -44,6 +44,9 @@ const GENERIC_WRITE = 0x40000000;
 const GENERIC_READ = 0x80000000;
 const ACE_OBJECT_INHERIT = 0x0001;
 const ACE_CONTAINER_INHERIT = 0x0002;
+// A new directory hands full access to files and to subdirectories only when its
+// entry carries both inheritance forms.
+const ACE_CHILD_INHERITANCE = ACE_OBJECT_INHERIT | ACE_CONTAINER_INHERIT;
 const ACE_NO_PROPAGATE = 0x0004;
 const ACE_INHERIT_ONLY = 0x0008;
 // Object, container, no-propagate, inherit-only and inherited. Any other bit is
@@ -468,6 +471,14 @@ async function queryMetadata(targets, deadline) {
       `the Windows protection check reported a problem; ${UNSUPPORTED_PLACE_GUIDANCE}`,
     );
   }
+  // A response that arrives after the attempt's own deadline, or that leaves no
+  // room to settle, is not an observation this attempt may use: the shared
+  // budget is judged on the time actually consumed, not on the requested limit.
+  if (Date.now() >= deadline - WINDOWS_SETTLEMENT_RESERVE_MS) {
+    throw unavailableFailure(
+      `the Windows protection check did not answer within this attempt; ${UNSUPPORTED_PLACE_GUIDANCE}`,
+    );
+  }
   return decodeObservation(stdout ?? '', targets);
 }
 
@@ -599,14 +610,14 @@ function admitAncestor(entry, context, trusted, description) {
 
 // A component that does not exist yet is admitted through its parent: an
 // inheritable foreign grant that could mutate or replace the new child refuses
-// before it is created.
+// before it is created. An inherit-only entry does not apply to the parent
+// itself, but inheritance makes it apply to the child this attempt would create,
+// so it is evaluated here rather than skipped.
 function assertProspectiveChildren(entry, context, trusted, description) {
   const object = presentEntry(entry, description);
   for (const ace of object.aces) {
     if (trusted.has(ace.sid)) continue;
     if ((ace.flags & (ACE_OBJECT_INHERIT | ACE_CONTAINER_INHERIT)) === 0) continue;
-    // An inherit-only entry does not apply to the child being created.
-    if ((ace.flags & ACE_INHERIT_ONLY) !== 0) continue;
     const rights = expandRights(ace.mask, 'directory');
     if ((rights & ANCESTOR_FORBIDDEN_RIGHTS) !== 0) {
       throw unverifiedFailure(
@@ -617,13 +628,18 @@ function assertProspectiveChildren(entry, context, trusted, description) {
   return object;
 }
 
+// A new directory must pass account-only full access to both of its possible
+// child kinds: files arrive through object inheritance and subdirectories
+// through container inheritance, so one without the other leaves a gap.
 function assertProtectedInheritance(object, context, description) {
   let inheritsFullAccess = false;
   for (const ace of object.aces) {
     if (ace.type !== 'allow' || !sameSid(ace.sid, context.accountSid)) continue;
     if ((ace.flags & ACE_INHERIT_ONLY) !== 0) continue;
     if ((ace.flags & ACE_NO_PROPAGATE) !== 0) continue;
-    if ((ace.flags & (ACE_OBJECT_INHERIT | ACE_CONTAINER_INHERIT)) === 0) continue;
+    if ((ace.flags & (ACE_OBJECT_INHERIT | ACE_CONTAINER_INHERIT)) !== ACE_CHILD_INHERITANCE) {
+      continue;
+    }
     const rights = expandRights(ace.mask, 'directory');
     if ((rights & FILE_ALL_ACCESS) === FILE_ALL_ACCESS) inheritsFullAccess = true;
   }
@@ -764,28 +780,33 @@ async function createWindowsProtectedDirectory(directory, { inheritsProtection }
     }
   }
 
-  if (created && !inheritsProtection) {
-    await protectNewWindowsDirectory(directory, admitted.context.accountSid, deadline);
-  }
-
-  // Observe the resulting directory itself: the applied or inherited descriptor
-  // must admit the current account only. A directory this attempt created must
-  // also propagate that full access to its children, and no collision is ever
-  // repaired or re-permissioned here.
+  // Observe the resulting object before this attempt changes anything: the
+  // applied or inherited descriptor must admit the current account only. A
+  // collision is admitted as it stands and is never repaired or re-permissioned.
+  let context = admitted.context;
   const observed = await queryMetadata([directory], deadline);
-  const observedContext = {
-    accountSid: observed.account_sid,
-    trustedInstallerSid: observed.trusted_installer_sid,
-  };
+  context = consistentContext(context, observed);
   const object = admitDedicated(
     observed.entries[0],
-    observedContext,
+    context,
     `the protected directory ${directory}`,
   );
-  if (created) {
-    assertProtectedInheritance(object, observedContext, `the new protected directory ${directory}`);
-  }
-  if (created && !inheritsProtection) await assertEmptyDirectory(directory);
+  if (!created) return;
+
+  assertProtectedInheritance(object, context, `the new protected directory ${directory}`);
+  if (inheritsProtection) return;
+
+  // Only the empty directory this attempt created is protected. An entry that
+  // appeared since creation is preserved, and the current type, inheritance and
+  // descriptor are re-observed immediately before the permissions change.
+  await assertEmptyDirectory(directory);
+  const before = await queryMetadata([directory], deadline);
+  context = consistentContext(context, before);
+  admitDedicated(before.entries[0], context, `the protected directory ${directory}`);
+  await protectNewWindowsDirectory(directory, context.accountSid, deadline);
+  const applied = await queryMetadata([directory], deadline);
+  context = consistentContext(context, applied);
+  admitDedicated(applied.entries[0], context, `the protected directory ${directory}`);
 }
 
 async function assertPosixOwnerOnly(targets) {
