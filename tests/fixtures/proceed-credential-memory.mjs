@@ -29,7 +29,7 @@ export async function memory(platform = 'linux') {
   const stateDir = path.join(root, 'SyntheticState');
   const parent = path.join(home, 'PrivateCredentials');
   const file = path.join(parent, 'telegram.token');
-  const packageRoot = path.join(root, 'SyntheticPackage');
+  const packageRoot = path.join(root, 'SyntheticInstall', 'node_modules', '@synthetic', 'proceed');
   let s;
   const absent = () => Object.assign(new Error('absent memory entry'), { code: 'ENOENT' });
   const collision = () => Object.assign(new Error('memory collision'), { code: 'EEXIST' });
@@ -56,6 +56,12 @@ export async function memory(platform = 'linux') {
   function reset(settings = {}) {
     s = { entries: new Map(), events: [], queries: [], ...settings };
     for (const name of [root, home, stateDir, parent, packageRoot]) add(name);
+    for (
+      let name = s.packageRoot ?? packageRoot;
+      name !== path.dirname(name);
+      name = path.dirname(name)
+    )
+      if (!s.entries.has(name)) add(name);
     // These opaque artifacts must remain byte-identical across setup/refusal.
     for (const name of ['pairing.json', 'owner.key', 'journal', 'broker.lock']) {
       const entry = add(path.join(stateDir, name), 'file');
@@ -169,7 +175,7 @@ export async function memory(platform = 'linux') {
       ...url,
       fileURLToPath(value) {
         const relative = new URL(value).href.slice(sourceRoot.length);
-        return path.join(packageRoot, ...relative.split('/'));
+        return path.join(s.packageRoot ?? packageRoot, ...relative.split('/'));
       },
     },
   });

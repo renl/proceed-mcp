@@ -151,6 +151,24 @@ test('SETUP-PATH: unsafe ancestry and separated missing destinations refuse befo
     });
 });
 
+test('SETUP-PATH: installation container refuses before either input mode', async (t) => {
+  for (const stdinMode of [false, true])
+    await t.test(stdinMode ? 'explicit stdin' : 'private terminal', async () => {
+      m.reset();
+      m.current.destination = m.path.join(m.root, 'SyntheticInstall', 'missing', 'telegram.token');
+      const result = await m.invoke({
+        stdinMode,
+        stream: m.terminal([SECRET, null], { isTTY: !stdinMode }),
+      });
+      assert.equal(result.code, 4);
+      assert.match(result.stderr, /PROTECTION_UNVERIFIED/);
+      assert.equal(count('input'), 0);
+      assert.equal(count('open'), 0);
+      assert.equal(count('write'), 0);
+      assert.equal(count('read'), 0);
+    });
+});
+
 test('SETUP-STDIN: explicit nonterminal mode retains EOF/validation and refuses TTY input', async () => {
   m.reset();
   let result = await m.invoke({

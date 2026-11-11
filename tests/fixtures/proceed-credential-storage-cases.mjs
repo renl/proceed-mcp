@@ -155,7 +155,7 @@ export function storageCases(m, credential) {
     assert.ok(m.current.entries.has(m.file));
     assert.ok(!events().some(([name]) => name === 'unlink'));
   });
-  test(`${m.platform}: STORE-SEPARATION missing parents never put a credential inside state/config`, async (t) => {
+  test(`${m.platform}: STORE-SEPARATION missing parents never put a credential inside state/config/package`, async (t) => {
     for (const forbidden of [
       m.stateDir,
       m.packageRoot,
@@ -174,7 +174,117 @@ export function storageCases(m, credential) {
           safeError,
         );
         assert.equal(writes().length, 0);
+        assert.ok(!events().some(([name]) => name === 'read'));
       });
+  });
+  test(`${m.platform}: STORE-SEPARATION installation containers follow design decision 2`, async (t) => {
+    const at = (...parts) => m.path.join(m.root, ...parts);
+    const layouts = [
+      ...(m.platform === 'win32'
+        ? [
+            [
+              'case and separator normalization',
+              'c:/syntheticcase/NODE_MODULES/@scope/proceed',
+              [at('SyntheticCase')],
+            ],
+          ]
+        : []),
+      [
+        'scoped local',
+        at('SyntheticProject', 'node_modules', '@scope', 'proceed'),
+        [at('SyntheticProject')],
+      ],
+      [
+        'global lib',
+        at('SyntheticPrefix', 'lib', 'node_modules', '@scope', 'proceed'),
+        m.platform === 'win32'
+          ? [at('SyntheticPrefix', 'lib')]
+          : [at('SyntheticPrefix', 'lib'), at('SyntheticPrefix')],
+      ],
+      ['redirected prefix', at('Redirected', 'node_modules', 'proceed'), [at('Redirected')]],
+      [
+        'nested dependencies',
+        at('Outer', 'node_modules', 'dependency', 'node_modules', 'proceed'),
+        [at('Outer'), at('Outer', 'node_modules', 'dependency')],
+      ],
+      ['home container', m.path.join(m.home, 'node_modules', 'proceed'), [m.home]],
+      ['root container', at('node_modules', 'proceed'), [m.root]],
+      ['no observable prefix', at('PhysicalPackage'), [at('PhysicalPackage')]],
+      [
+        'home ancestor only',
+        m.path.join(m.home, 'Tools', 'node_modules', 'proceed'),
+        [m.path.join(m.home, 'Tools')],
+      ],
+    ];
+    for (const [layout, packageRoot, containers] of layouts) {
+      await t.test(layout, async (t) => {
+        m.reset({ packageRoot });
+        // Only the public storage operations are called. A fresh module captures
+        // each synthetic running PACKAGE_ROOT without a production test option.
+        const subject = await import(
+          `../../src/state/credential-file.js?separation=${m.platform}-${encodeURIComponent(layout)}`
+        );
+        for (const container of containers) {
+          for (const loading of [false, true]) {
+            await t.test(`${container}: ${loading ? 'load' : 'provision'}`, async () => {
+              m.reset({ packageRoot });
+              const retained = m.snapshot();
+              const destination =
+                container === m.home
+                  ? subject.defaultCredentialFile({ stateDir: m.stateDir })
+                  : m.path.join(container, 'missing', 'nested', 'telegram.token');
+              if (loading) {
+                for (
+                  let name = m.path.dirname(destination);
+                  name !== m.root;
+                  name = m.path.dirname(name)
+                )
+                  if (!m.current.entries.has(name)) m.add(name);
+                m.add(destination, 'file').bytes = Buffer.from(`${SECRET}\n`);
+              }
+              await assert.rejects(
+                loading
+                  ? subject.loadCredentialFile({ file: destination, stateDir: m.stateDir })
+                  : subject.provisionCredentialFile({
+                      file: destination,
+                      stateDir: m.stateDir,
+                      token: SECRET,
+                    }),
+                safeError,
+              );
+              assert.ok(!events().some(([name]) => ['read', 'write', 'unlink'].includes(name)));
+              assert.deepEqual(m.snapshot(), retained);
+            });
+          }
+        }
+        if (containers.includes(m.root)) return;
+        for (const destination of [
+          m.path.join(
+            `${containers.reduce((a, b) => (a.length < b.length ? a : b))}-sibling`,
+            'telegram.token',
+          ),
+          ...(containers.includes(m.home)
+            ? []
+            : [subject.defaultCredentialFile({ stateDir: m.stateDir })]),
+        ]) {
+          await t.test(`outside container: ${destination}`, async () => {
+            m.reset({ packageRoot });
+            for (const target of [packageRoot, m.path.dirname(destination)])
+              for (let name = target; name !== m.path.dirname(name); name = m.path.dirname(name))
+                if (!m.current.entries.has(name)) m.add(name);
+            await subject.provisionCredentialFile({
+              file: destination,
+              stateDir: m.stateDir,
+              token: SECRET,
+            });
+            assert.equal(
+              await subject.loadCredentialFile({ file: destination, stateDir: m.stateDir }),
+              SECRET,
+            );
+          });
+        }
+      });
+    }
   });
   test(`${m.platform}: STORE-BOUNDS oversized/malformed selected content never becomes a token`, async () => {
     for (const value of ['', 'bad token\n', 'x'.repeat(4099)]) {
