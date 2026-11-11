@@ -19,6 +19,26 @@ test('WIN-SETUP: supported private setup reaches the same public command', async
   assert.equal(result.code, 0);
   assert.equal(await credential.loadCredentialFile({ file: m.file, stateDir: m.stateDir }), SECRET);
 });
+test('WIN-MISSING-PARENT: unavailable ancestry admission refuses before either input mode', async (t) => {
+  for (const stdinMode of [false, true])
+    await t.test(stdinMode ? 'explicit stdin' : 'private terminal', async () => {
+      m.reset({ queryUnavailable: true });
+      m.current.destination = m.path.join(m.parent, 'missing', 'telegram.token');
+      const result = await m.invoke({
+        stdinMode,
+        stream: m.terminal([SECRET, stdinMode ? null : '\r'], { isTTY: !stdinMode }),
+      });
+      assert.equal(result.code, 4);
+      assert.match(result.stderr, /PROTECTION_UNAVAILABLE/);
+      assert.equal(
+        m.current.events.filter(([event]) =>
+          ['input', 'raw', 'read', 'write', 'mkdir'].includes(event),
+        ).length,
+        0,
+        'unavailable Windows ancestry admission must precede input and creation',
+      );
+    });
+});
 test('WIN-REFUSAL: unsafe inheritance/storage or unavailable query refuses before input and reads', async (t) => {
   for (const [name, settings, code] of [
     ['unavailable query', { queryUnavailable: true }, 'PROTECTION_UNAVAILABLE'],

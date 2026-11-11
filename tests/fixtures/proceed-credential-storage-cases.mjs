@@ -149,6 +149,17 @@ export function storageCases(m, credential) {
     });
     await assert.rejects(setup(), safeError);
   });
+  test(`${m.platform}: STORE-WRITE-IDENTITY replaced destination cannot report success`, async () => {
+    m.reset({
+      afterSync() {
+        // Replace the pathname with another regular, equally protected object.
+        m.add(m.file, 'file').bytes = Buffer.from('retained-replacement');
+      },
+    });
+    await assert.rejects(setup(), safeError);
+    assert.equal(m.current.entries.get(m.file).bytes.toString(), 'retained-replacement');
+    assert.ok(!events().some(([name]) => name === 'unlink'));
+  });
   test(`${m.platform}: STORE-CLEANUP uncertain created file preserved on write failure`, async () => {
     m.reset({ writeFailure: true });
     await assert.rejects(setup());
