@@ -39,13 +39,14 @@ import { createOperatorKeyFile, validateOperatorKeyFileOption } from '../harness
 import { harnessIdProblem } from '../harness/identifiers.js';
 import { startPortableRuntime } from '../broker/portable-runtime.js';
 import {
-  assertWindowsFileCredentialSupported,
   defaultCredentialFile,
   loadCredentialFile,
   provisionCredentialFile,
   readTokenFromStdin,
   validateCredentialFileOption,
+  verifyCredentialProvisioning,
 } from '../state/credential-file.js';
+import { PROVISION_PROMPT, readTokenFromTerminal } from './terminal-input.js';
 import { readLocalCredential } from '../state/credentials.js';
 import { readOwnerCredential } from '../state/owner-credentials.js';
 import { readSecureOwnership } from '../state/ownership.js';
@@ -70,7 +71,7 @@ const USAGE = [
   'Usage:',
   '  proceed-mcp init [--state-dir <directory>]',
   '  proceed-mcp owner add <owner_id> --label <label> [--state-dir <directory>]',
-  '  proceed-mcp telegram provision --token-stdin [--telegram-token-file <absolute-file>] [--state-dir <directory>]',
+  '  proceed-mcp telegram provision [--token-stdin] [--telegram-token-file <absolute-file>] [--state-dir <directory>]',
   '  proceed-mcp harness keygen --operator-key-file <absolute-file> [--state-dir <directory>]',
   '  proceed-mcp serve [--state-dir <directory>] [--secure-local] [--telegram-token-file <absolute-file>]',
   '  proceed-mcp pair [--state-dir <directory>] [--telegram-token-file <absolute-file>]',
@@ -88,8 +89,15 @@ const USAGE = [
   'The Telegram token is never stored in state or passed in command arguments.',
   'Automatic startup selects one source, in this order: --telegram-token-file, then a nonempty',
   `private ${TELEGRAM_TOKEN_ENV} in the launch environment, then the default credential file.`,
-  'For the file route, "telegram provision --token-stdin" writes that file once, owner-only, outside',
-  'this repository and the state directory; only the broker reads it. That file is not encrypted and',
+  'For the file route, "telegram provision" reads one token privately - hidden terminal input, or the',
+  'existing --token-stdin nonterminal route - and writes that file once, owner-only, outside every',
+  'repository, the state directory and npm installation; only the broker reads it. It never prompts',
+  'during installation, pairing or MCP startup and never overwrites an existing file.',
+  'On Windows the file route needs a dedicated local fixed NTFS parent owned by this account and',
+  'restricted to it, passing current-account-only full access to files and directories; an ordinary',
+  'home default may not qualify. Unsafe storage is refused, never repaired, so select a supported',
+  'explicit --telegram-token-file and repeat it for provisioning and every later startup.',
+  'On POSIX the credential directory is mode 0700 and the file mode 0600. That file is not encrypted and',
   'other processes running as the same account can read it.',
   'Environment mode needs the token supplied privately again for each fresh launch. Changing the',
   'launch value does not change an already running broker: stop it and start its replacement through',
@@ -460,17 +468,47 @@ async function runServe(argv, { stdout, stderr, env }) {
   return EXIT_CODE.OK;
 }
 
-// Explicit, create-only provisioning (design sections 1-2). The token arrives
-// only through non-TTY stdin, no broker is started, and the destination is never
-// overwritten, truncated, deleted or read for comparison.
-async function runProvision(argv, { stdout, stdin, env }) {
+// Explicit, create-only provisioning (design sections 1-3). The token arrives
+// only through private interactive input or the existing nonterminal stdin route,
+// no broker is started, and the destination is never overwritten, truncated,
+// deleted or read for comparison.
+//
+// Provisioning arguments carry paths only, never token values, so screening
+// happens before the shared parser: an unsupported option, a positional or a
+// repeated flag is refused without reproducing whatever it carried.
+function screenProvisionArguments(argv) {
+  const valueOptions = new Set(['state-dir', TOKEN_FILE_OPTION]);
+  const refused = () =>
+    invalidArgument(
+      'telegram provision accepts only --token-stdin, --telegram-token-file and --state-dir; the token is never a command argument',
+    );
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === '--') {
+      if (index + 1 < argv.length) throw refused();
+      continue;
+    }
+    if (argument.startsWith('--') && argument.length > 2) {
+      const name = argument.slice(2);
+      if (name === 'token-stdin') continue;
+      if (!valueOptions.has(name)) throw refused();
+      index += 1;
+      continue;
+    }
+    throw refused();
+  }
+}
+
+async function runProvision(argv, { stdout, stderr, stdin, env }) {
+  screenProvisionArguments(argv);
   const { positionals, options, flags } = parseArguments(argv, {
     valueOptions: ['state-dir', TOKEN_FILE_OPTION],
     flagOptions: ['token-stdin'],
   });
-  noPositionals(positionals, 'telegram provision');
-  if (!flags.has('token-stdin')) {
-    throw invalidArgument('telegram provision requires --token-stdin');
+  if (positionals.length > 0) {
+    throw invalidArgument(
+      'telegram provision accepts no positional arguments; the token is never a command argument',
+    );
   }
   const requested = options.get(TOKEN_FILE_OPTION);
   if (requested !== undefined) validateCredentialFileOption(requested);
@@ -479,10 +517,13 @@ async function runProvision(argv, { stdout, stdin, env }) {
   await loadPortableConfiguration(paths);
   const file =
     requested === undefined ? defaultCredentialFile({ stateDir: paths.stateDir }) : requested;
-  // An unsupported Windows token-file route refuses before any secret input is
-  // consumed, and it never falls back to another source.
-  assertWindowsFileCredentialSupported('provision');
-  const token = await readTokenFromStdin(stdin);
+  // Every prerequisite that must hold before a secret is supplied is checked
+  // first: a missing state, an unsafe or separated destination, an existing
+  // destination or an unusable private facility never consumes token input.
+  await verifyCredentialProvisioning({ file, stateDir: paths.stateDir });
+  const token = flags.has('token-stdin')
+    ? await readTokenFromStdin(stdin)
+    : await readTokenFromTerminal(stdin, { stderr, prompt: PROVISION_PROMPT });
   await provisionCredentialFile({ file, stateDir: paths.stateDir, token });
   stdout.write(
     `Provisioned the automatic-startup Telegram credential at ${file} (value not shown).\n` +

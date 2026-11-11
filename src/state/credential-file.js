@@ -1,15 +1,18 @@
-// Broker-only automatic-startup Telegram credential (design sections 1-2).
+// Broker-only automatic-startup Telegram credential (design sections 1-3).
 //
-// One explicitly provisioned owner-only file outside the repository, product
-// state and MCP configuration. Provisioning is create-only: it never reads,
-// overwrites, truncates or repairs an existing destination, and it removes only
-// objects it can still prove it created. Loading verifies the path, the actual
-// file identity and the protection before the content is read, then rechecks
-// identity and protection before the token is used.
+// One explicitly provisioned owner-only file outside every repository, product
+// state, package installation and MCP configuration. Provisioning is create-only:
+// it never reads, overwrites, truncates or repairs an existing destination, and it
+// removes only objects it can still prove it created. Loading verifies the path,
+// the actual file identity and the protection before the content is read, then
+// rechecks identity, ancestry and protection before the token is used.
 //
-// This is same-account protection, not encryption or isolation from other
-// processes running as the same account. Platforms or filesystems whose checks
-// cannot be established fail closed.
+// Both supported platforms persist this file. POSIX verifies owner-only mode bits
+// and protected ancestry; Windows reuses the shared metadata-only admission in
+// `protection.js` and requires an already safe dedicated parent with account-only
+// full-access inheritance. This is same-account protection, not encryption or
+// isolation from other processes running as the same account. Storage whose checks
+// cannot be established fails closed.
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, realpath } from 'node:fs/promises';
@@ -25,6 +28,12 @@ import {
   splitPath,
   windowsAbsolutePathProblem,
 } from './path-trust.js';
+import {
+  createProtectedDirectory,
+  verifyWindowsInheritableDirectory,
+  verifyWindowsProspectiveDirectory,
+  verifyWindowsProtection,
+} from './protection.js';
 
 export const CREDENTIAL_DIRECTORY_NAME = '.proceed-mcp-credentials';
 export const CREDENTIAL_FILE_NAME = 'telegram.token';
@@ -48,8 +57,36 @@ const CONFIGURATION_FILE_NAMES = new Set([
 ]);
 const PACKAGE_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
+const MISSING_CREDENTIAL_GUIDANCE =
+  'run "proceed-mcp telegram provision" in a trusted terminal, or provision it explicitly from a nonterminal source';
+const MALFORMED_CREDENTIAL_GUIDANCE =
+  'provision it again through a trusted source; never write it by hand';
+
 function credentialPathFailure(message, cause) {
   return storageFailure(message, 'PROTECTION_UNVERIFIED', cause);
+}
+
+// The collision classification is the documented exit-2 outcome: the destination
+// is never opened, compared or replaced.
+function credentialExists() {
+  return invalidArgument(
+    'the credential destination already exists; choose another dedicated destination (TELEGRAM_CREDENTIAL_EXISTS)',
+    'TELEGRAM_CREDENTIAL_EXISTS',
+  );
+}
+
+function missingCredential() {
+  return blockedPrerequisite(
+    `the automatic-startup Telegram credential is missing; ${MISSING_CREDENTIAL_GUIDANCE} (TELEGRAM_CREDENTIAL_UNAVAILABLE)`,
+    'TELEGRAM_CREDENTIAL_UNAVAILABLE',
+  );
+}
+
+function malformedCredential() {
+  return blockedPrerequisite(
+    `the automatic-startup Telegram credential is empty or malformed; ${MALFORMED_CREDENTIAL_GUIDANCE} (TELEGRAM_CREDENTIAL_UNAVAILABLE)`,
+    'TELEGRAM_CREDENTIAL_UNAVAILABLE',
+  );
 }
 
 function canonicalStatePath(stateDir) {
@@ -103,21 +140,6 @@ export function validateCredentialFileOption(value) {
   return value;
 }
 
-// Windows token-file provisioning and loading are not supportable in this
-// release: the required file protection cannot be verified there. The refusal
-// is a fixed, secret-free prerequisite failure before any secret is read or
-// written, and it never falls back to another source.
-const WINDOWS_FILE_ROUTE_GUIDANCE =
-  'Windows Telegram token-file provisioning and loading are not supported in this release; supply the token privately through PROCEED_TELEGRAM_BOT_TOKEN at launch, or use "serve --secure-local" for foreground reuse without a token file';
-
-export function assertWindowsFileCredentialSupported(operation) {
-  if (posix()) return;
-  throw blockedPrerequisite(
-    `${WINDOWS_FILE_ROUTE_GUIDANCE} (${operation})`,
-    'TELEGRAM_CREDENTIAL_UNSUPPORTED',
-  );
-}
-
 async function inspect(path) {
   try {
     return await lstat(path);
@@ -161,10 +183,53 @@ async function within(resolvedChild, resolvedParent) {
   return resolvedChild === resolvedParent || resolvedChild.startsWith(prefix);
 }
 
-// The destination must live outside product state, the running package, any
-// repository worktree and known MCP configuration directories. Ancestors are
-// inspected for repository markers only; repository contents are never read and
-// the filesystem is never searched for configurations or secrets.
+// Complete normalized components of one absolute path, including components that
+// do not exist yet. Windows comparison is case- and separator-insensitive; POSIX
+// comparison is exact. This is the platform normalization the design requires,
+// not a prefix test on raw text.
+function pathComponents(value) {
+  const { root } = parse(value);
+  const parts = String(value)
+    .slice(root.length)
+    .split(/[\\/]/)
+    .filter((part) => part !== '');
+  const normalize = (part) => (posix() ? part : part.toLowerCase());
+  return [normalize(root), ...parts.map(normalize)];
+}
+
+function withinComponents(child, parent) {
+  if (child.length < parent.length) return false;
+  return parent.every((part, index) => part === child[index]);
+}
+
+// The running package root plus the conservative npm layout containers derived
+// from its own absolute physical path (design decision 2). No npm subprocess,
+// configuration scan, prefix variable or working directory is consulted, and no
+// prefix is invented when no `node_modules` ancestor is observable.
+function installationContainers() {
+  const components = pathComponents(PACKAGE_ROOT);
+  const containers = [components];
+  for (let index = 1; index < components.length; index += 1) {
+    if (components[index] !== 'node_modules') continue;
+    const parentEnd = index - 1;
+    // Every `node_modules` parent and all its descendants.
+    containers.push(components.slice(0, parentEnd + 1));
+    // The documented npm global layout nests `node_modules` under `lib`. A local
+    // project named `lib` is indistinguishable from it, so both plausible
+    // containers are excluded without guessing which install mode was used.
+    if (posix() && parentEnd >= 1 && components[parentEnd] === 'lib') {
+      containers.push(components.slice(0, parentEnd));
+    }
+  }
+  return containers;
+}
+
+// The destination must live outside product state, the running package and every
+// installation container derived from it, and known MCP configuration
+// directories. The whole destination decides this, including a tail that does not
+// exist yet. Ancestors are inspected for repository markers only; repository
+// contents are never read and the filesystem is never searched for configurations
+// or secrets.
 async function assertLocation({ file, stateDir }) {
   if (CONFIGURATION_FILE_NAMES.has(basename(file).toLowerCase())) {
     throw storageFailure(
@@ -172,9 +237,33 @@ async function assertLocation({ file, stateDir }) {
       'PROTECTION_UNVERIFIED',
     );
   }
-  const parent = dirname(file);
-  const parentInfo = await inspect(parent);
-  const resolvedParent = parentInfo === null ? null : await canonicalExisting(parent);
+  const destination = pathComponents(file);
+  for (const container of installationContainers()) {
+    if (!withinComponents(destination, container)) continue;
+    throw storageFailure(
+      'the credential destination is inside an npm installation or the running package directory; choose a dedicated directory outside every installation being replaced',
+      'PROTECTION_UNVERIFIED',
+    );
+  }
+  if (withinComponents(destination, pathComponents(stateDir))) {
+    throw storageFailure(
+      'the credential destination must be outside the product state directory',
+      'PROTECTION_UNVERIFIED',
+    );
+  }
+  const configRoots = [join(homedir(), '.config', 'opencode'), join(homedir(), '.opencode')];
+  for (const configRoot of configRoots) {
+    if (!withinComponents(destination, pathComponents(configRoot))) continue;
+    throw storageFailure(
+      'the credential destination is inside a known configuration directory',
+      'PROTECTION_UNVERIFIED',
+    );
+  }
+
+  // Existing ancestors are additionally resolved, so a redirect cannot hide one
+  // of these locations behind another spelling.
+  const parentInfo = await inspect(dirname(file));
+  const resolvedParent = parentInfo === null ? null : await canonicalExisting(dirname(file));
   if (resolvedParent !== null) {
     if (await within(resolvedParent, await canonicalExisting(PACKAGE_ROOT))) {
       throw storageFailure(
@@ -190,10 +279,7 @@ async function assertLocation({ file, stateDir }) {
         );
       }
     }
-    for (const configRoot of [
-      join(homedir(), '.config', 'opencode'),
-      join(homedir(), '.opencode'),
-    ]) {
+    for (const configRoot of configRoots) {
       if ((await inspect(configRoot)) !== null) {
         if (await within(resolvedParent, await canonicalExisting(configRoot))) {
           throw storageFailure(
@@ -258,6 +344,47 @@ function assertOwnerOnlyDirectory(info, description) {
       'PROTECTION_UNVERIFIED',
     );
   }
+}
+
+// The exclusive create proves which object this attempt opened. That identity is
+// retained and compared with the destination afterwards, so a pathname renamed
+// away and replaced by another regular, equally protected file is refused rather
+// than reported as this attempt's completed provision. A missing or uninspectable
+// destination is equally uncertain. This is a repeated-snapshot check, not a
+// native handle pin.
+function assertCreatedIdentity(info, created) {
+  if (info === null || info.dev !== created.dev || info.ino !== created.ino) {
+    throw storageFailure(
+      'the credential destination no longer resolves to the object this attempt created',
+      'PROTECTION_UNVERIFIED',
+    );
+  }
+}
+
+// Shared Windows admission, applied at the same points as the POSIX owner-only
+// checks: before a secret is written or read, and again before success is
+// reported. No helper receives the token.
+async function admitWindowsProtection(targets, { allowMissingTail = false } = {}) {
+  if (posix()) return;
+  await verifyWindowsProtection(targets, { allowMissingTail });
+}
+
+// A credential file that is not yet created must arrive in a directory that
+// passes account-only full access to children. This is the shared inheritance
+// policy, not a new one, and it never repairs an unsafe parent.
+async function admitWindowsCredentialParent(directory) {
+  if (posix()) return;
+  await verifyWindowsInheritableDirectory(directory);
+}
+
+// A dedicated credential directory that does not exist yet is admitted through
+// its existing ancestry before any secret is supplied, so an unavailable query or
+// an inheritance that would reach another account refuses before either input
+// mode. This observes only; the creation attempt still admits the parent it
+// actually uses.
+async function admitWindowsCredentialTail(directory) {
+  if (posix()) return;
+  await verifyWindowsProspectiveDirectory(directory);
 }
 
 // One token line: no BOM, embedded newline, NUL or whitespace. The terminator is
@@ -343,44 +470,79 @@ function withCode(error) {
   return error;
 }
 
+// Everything that must hold before the operator supplies a secret: absolute
+// syntax, safe ancestry, destination separation, destination absence, and the
+// protection this attempt is not allowed to change. Nothing here reads or writes
+// credential content. A missing dedicated parent is admitted through its existing
+// ancestry and safe-inheritance rule rather than skipped, so an unavailable or
+// unsafe Windows chain refuses before either input mode.
+async function verifyProvisioningInner({ file, stateDir }) {
+  if (!isAbsolute(file)) {
+    throw invalidArgument('the credential destination must be an absolute path');
+  }
+  await assertAncestors(file, { allowMissingTail: true });
+  await assertLocation({ file, stateDir });
+  if ((await inspect(file)) !== null) throw credentialExists();
+  const parent = dirname(file);
+  const parentInfo = await inspect(parent);
+  if (parentInfo === null) {
+    await admitWindowsCredentialTail(parent);
+    return { file, parent };
+  }
+  assertOwnerOnlyDirectory(parentInfo, 'the credential directory');
+  await admitWindowsCredentialParent(parent);
+  return { file, parent };
+}
+
+// Public preflight for the operator command: the same prerequisite checks run
+// again inside provisioning, before the token is written.
+export async function verifyCredentialProvisioning({ file, stateDir }) {
+  try {
+    return await verifyProvisioningInner({ file, stateDir });
+  } catch (error) {
+    throw withCode(error);
+  }
+}
+
+// Missing dedicated directories are created one component at a time under
+// admitted parents and admitted before the next component is descended into. An
+// existing directory is never re-permissioned.
+async function createCredentialDirectory(directory) {
+  if (!posix()) {
+    await createProtectedDirectory(directory, { inheritsProtection: true });
+    return;
+  }
+  try {
+    await mkdir(directory, { mode: POSIX_DIRECTORY_MODE });
+  } catch (cause) {
+    if (cause?.code !== 'EEXIST') {
+      throw storageFailure('could not create the credential directory', 'STORAGE_FAILURE', cause);
+    }
+  }
+  assertOwnerOnlyDirectory(await inspect(directory), 'the credential directory');
+}
+
 // Creates only missing dedicated credential directories and the new credential
 // file. The destination is opened exclusively, protected before the token is
 // written, flushed and reverified before provisioning is reported complete.
 async function provisionInner({ file, stateDir, token }) {
-  if (!isAbsolute(file)) {
-    throw invalidArgument('the credential destination must be an absolute path');
-  }
-  assertWindowsFileCredentialSupported('provision');
-  await assertAncestors(file, { allowMissingTail: true });
-  await assertLocation({ file, stateDir });
+  const { parent } = await verifyProvisioningInner({ file, stateDir });
 
   const { root, rest } = splitPath(file);
   let prefix = root;
   for (const part of rest.slice(0, -1)) {
     prefix = join(prefix, part);
     if ((await inspect(prefix)) !== null) continue;
-    try {
-      await mkdir(prefix, { mode: POSIX_DIRECTORY_MODE });
-    } catch (cause) {
-      if (cause?.code !== 'EEXIST') {
-        throw storageFailure('could not create the credential directory', 'STORAGE_FAILURE', cause);
-      }
-    }
+    await createCredentialDirectory(prefix);
   }
 
-  const parent = dirname(file);
   assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
 
   let handle;
   try {
     handle = await open(file, 'wx', POSIX_FILE_MODE);
   } catch (cause) {
-    if (cause?.code === 'EEXIST') {
-      throw invalidArgument(
-        'the credential destination already exists; choose another dedicated destination (TELEGRAM_CREDENTIAL_EXISTS)',
-        'TELEGRAM_CREDENTIAL_EXISTS',
-      );
-    }
+    if (cause?.code === 'EEXIST') throw credentialExists();
     throw storageFailure('could not create the credential file', 'PROTECTION_UNVERIFIED', cause);
   }
 
@@ -389,9 +551,18 @@ async function provisionInner({ file, stateDir, token }) {
     if (posix()) await handle.chmod(POSIX_FILE_MODE);
     created = await handle.stat();
     assertOwnerOnlyFile(created, 'the new credential file');
+    // Protection is established before the token is written, so no secret reaches
+    // an object this attempt has not admitted.
+    await admitWindowsProtection([parent, file]);
     await handle.writeFile(`${token}\n`, 'utf8');
     await handle.sync();
+    // Flushed and revalidated before success is reported: a changed identity,
+    // ancestry or protection is a failure, not a completed provision.
     assertOwnerOnlyFile(await handle.stat(), 'the new credential file');
+    assertCreatedIdentity(await inspect(file), created);
+    assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
+    await assertAncestors(file, { allowMissingTail: false });
+    await admitWindowsProtection([parent, file]);
   } catch (cause) {
     await handle.close().catch(() => {});
     // The exclusive create proved this attempt owned the object it opened, but
@@ -410,48 +581,56 @@ async function provisionInner({ file, stateDir, token }) {
   }
   await handle.close();
 
-  assertOwnerOnlyFile(await inspect(file), 'the provisioned credential file');
+  // The destination is checked once more after the handle is released: the
+  // reported success names this attempt's object, not a later replacement.
+  const provisioned = await inspect(file);
+  assertCreatedIdentity(provisioned, created);
+  assertOwnerOnlyFile(provisioned, 'the provisioned credential file');
   assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
   return { file };
 }
 
+// Content access is bounded by the accepted input bound. The earlier size
+// observation is only an observation, so the read itself is bounded and one byte
+// beyond the bound is probed rather than trusted to a reported length.
+async function readBoundedContent(handle) {
+  const buffer = Buffer.allocUnsafe(MAX_TOKEN_INPUT_BYTES);
+  const { bytesRead } = await handle.read(buffer, 0, MAX_TOKEN_INPUT_BYTES, 0);
+  if (bytesRead === MAX_TOKEN_INPUT_BYTES) {
+    const beyond = Buffer.allocUnsafe(1);
+    const more = await handle.read(beyond, 0, 1, MAX_TOKEN_INPUT_BYTES);
+    if (more.bytesRead > 0) throw malformedCredential();
+  }
+  return buffer.subarray(0, bytesRead);
+}
+
 // Broker-only load: path and protection are established, the actual regular-file
-// identity is checked before the content read, and both are rechecked before the
-// token is returned. No validation-then-following-read shortcut is used.
+// identity is checked before the content read, and identity, ancestry and
+// protection are rechecked before the token is returned. No
+// validation-then-following-read shortcut is used.
 async function loadInner({ file, stateDir }) {
   if (!isAbsolute(file)) {
     throw invalidArgument('the credential destination must be an absolute path');
   }
-  assertWindowsFileCredentialSupported('load');
-  if ((await inspect(dirname(file))) === null) {
-    throw blockedPrerequisite(
-      'the automatic-startup Telegram credential is missing; run "proceed-mcp telegram provision --token-stdin"',
-      'TELEGRAM_CREDENTIAL_UNAVAILABLE',
-    );
-  }
+  const parent = dirname(file);
+  if ((await inspect(parent)) === null) throw missingCredential();
   await assertAncestors(file, { allowMissingTail: false });
   await assertLocation({ file, stateDir });
 
   const before = await inspect(file);
-  if (before === null) {
-    throw blockedPrerequisite(
-      'the automatic-startup Telegram credential is missing; run "proceed-mcp telegram provision --token-stdin"',
-      'TELEGRAM_CREDENTIAL_UNAVAILABLE',
-    );
-  }
+  if (before === null) throw missingCredential();
   assertOwnerOnlyFile(before, 'the automatic-startup credential file');
-  assertOwnerOnlyDirectory(await inspect(dirname(file)), 'the credential directory');
+  assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
+  // A directory that cannot pass account-only full access to its children is not
+  // a dedicated credential directory, even though this attempt only reads.
+  await admitWindowsCredentialParent(parent);
+  await admitWindowsProtection([parent, file]);
 
   let handle;
   try {
     handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   } catch (cause) {
-    if (cause?.code === 'ENOENT') {
-      throw blockedPrerequisite(
-        'the automatic-startup Telegram credential is missing; run "proceed-mcp telegram provision --token-stdin"',
-        'TELEGRAM_CREDENTIAL_UNAVAILABLE',
-      );
-    }
+    if (cause?.code === 'ENOENT') throw missingCredential();
     throw storageFailure(
       'the automatic-startup credential could not be opened safely',
       'PROTECTION_UNVERIFIED',
@@ -471,17 +650,14 @@ async function loadInner({ file, stateDir }) {
     // Validate the actual opened handle before any content access: a pathname
     // check before the open cannot prove the handle that will be read.
     assertOwnerOnlyFile(opened, 'the opened automatic-startup credential file');
-    if (opened.size > MAX_TOKEN_INPUT_BYTES) {
-      throw blockedPrerequisite(
-        'the automatic-startup Telegram credential is malformed; provision it again through a trusted source',
-        'TELEGRAM_CREDENTIAL_UNAVAILABLE',
-      );
-    }
-    bytes = await handle.readFile();
+    if (opened.size > MAX_TOKEN_INPUT_BYTES) throw malformedCredential();
+    bytes = await readBoundedContent(handle);
   } finally {
     await handle.close().catch(() => {});
   }
 
+  // Post-access revalidation: a changed identity, kind, ancestry or protection
+  // discards the loaded value instead of releasing it to broker startup.
   const after = await inspect(file);
   if (after === null || after.dev !== before.dev || after.ino !== before.ino) {
     throw storageFailure(
@@ -490,17 +666,15 @@ async function loadInner({ file, stateDir }) {
     );
   }
   assertOwnerOnlyFile(after, 'the automatic-startup credential file');
+  assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
+  await assertAncestors(file, { allowMissingTail: false });
+  await admitWindowsProtection([parent, file]);
 
-  let token;
   try {
-    token = parseTokenInput(bytes);
+    return parseTokenInput(bytes);
   } catch {
-    throw blockedPrerequisite(
-      'the automatic-startup Telegram credential is empty or malformed; provision it again through a trusted source',
-      'TELEGRAM_CREDENTIAL_UNAVAILABLE',
-    );
+    throw malformedCredential();
   }
-  return token;
 }
 
 export async function provisionCredentialFile(options) {

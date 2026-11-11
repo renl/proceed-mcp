@@ -1,6 +1,6 @@
 {
   "name": "@meshimize/proceed-mcp",
-  "version": "0.1.0-preview.3",
+  "version": "0.1.0-preview.4",
   "description": "Preview Telegram approval broker for MCP clients; live first use unverified.",
   "type": "module",
   "license": "MIT",

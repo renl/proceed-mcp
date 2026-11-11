@@ -110,8 +110,8 @@ try {
   await progress();
   const [packed] = JSON.parse(npmRun(['pack', '--json', '--pack-destination', run], stage));
   assert.equal(packed.name, '@meshimize/proceed-mcp');
-  assert.equal(packed.version, '0.1.0-preview.3');
-  assert.equal(packed.filename, 'meshimize-proceed-mcp-0.1.0-preview.3.tgz');
+  assert.equal(packed.version, '0.1.0-preview.4');
+  assert.equal(packed.filename, 'meshimize-proceed-mcp-0.1.0-preview.4.tgz');
   const packedHash = createHash('sha256')
     .update(await readFile(join(run, packed.filename)))
     .digest('hex');
