@@ -2,7 +2,7 @@
 
 Give npm-installed Proceed a private, one-time Telegram credential setup that is independent of the MCP harness.
 
-Status: Draft for product confirmation. This proposal does not authorize implementation, publication, installation or activation.
+Status: Product scope confirmed. Primary spec-author review accepts both capability deltas for CLI archive. Runtime outcomes remain unverified. Delivery authority and candidate-specific risk decisions are recorded separately, not granted by this proposal.
 
 ## Why
 
@@ -42,7 +42,7 @@ The first useful outcome is an npm-installed Proceed completing a Telegram appro
 
 ### Boundary, Landing and Exclusions
 
-This is one coherent credential-setup and cold-start outcome. It can land independently in one change PR targeting `main`, with no change dependencies. It relies on the current [delivery and startup contract](../../specs/opencode-session-continuation/spec.md) and [npm first-use contract](../../specs/npm-distribution/spec.md). Windows credential admission and npm first-use guidance belong together because either alone leaves the agreed operator outcome incomplete.
+This is one coherent credential-setup and cold-start outcome. It can land independently in one change PR targeting `main`, with no change dependencies. It relies on the current [delivery and startup contract](../../../specs/opencode-session-continuation/spec.md) and [npm first-use contract](../../../specs/npm-distribution/spec.md). These links use the final archive location. Windows credential admission and npm first-use guidance belong together because either alone leaves the agreed operator outcome incomplete.
 
 Excluded: npm installation hooks, a custom installer, `.env` loading, a new framework, native helper executable, compiler or signing requirement, permission bridging, additional harness integrations, publication automation, automatic migration, credential rotation or overwrite, storage repair, and automatic service startup. Existing pairing, pending requests, decisions, keys and uncertain ownership records must be preserved. Configuring credentials neither enables a disabled integration nor grants new human decision authority.
 
@@ -65,10 +65,10 @@ Telegram decision semantics and pairing authority are unchanged, so `telegram-ap
 - Architecture feasibility question: can npm-installed Proceed privately provision and verify durable Windows credentials, then load them only during broker startup, under the existing protection requirements and without the excluded helper, build or installation mechanisms? The architecture owner must establish that contract before any support claim. Current preview.3 refuses Windows token-file operations and does not establish this feasibility.
 - If feasibility requires weaker protection, broader access, another distribution mechanism or a narrower Windows outcome, return that concrete scope/security tradeoff for a user decision. None is authorized here.
 - The project's unit-only restriction continues. Automated tests must use normal JavaScript/TypeScript unit tooling and run on Linux without PowerShell or Windows dependencies. Independent review remains required. Windows runtime, installed first-use and fresh-launch outcomes stay unverified until permitted evidence exists. Preview.3 publication, installed-byte checks and its candidate-specific risk acceptance do not prove or authorize this feature's landing or exposure.
-- Product confirmation is required for this proposal and the later product-behavior delta before technical work proceeds. Publication, installation, activation and any candidate-specific acceptance of unrun checks require their own authorization.
+- Product scope and both product-behavior deltas were confirmed for implementation. Publication, installation, activation and any candidate-specific acceptance of unrun checks require their own authorization. Spec acceptance is not proof that unrun outcomes passed.
 
 ### Related Artifacts
 
-- [Project index](../../../AGENTS.md)
-- [Current README](../../../README.md) - existing instructions, not evidence that this proposal is implemented.
-- [Preview.3 delivery record](../../../docs/operations/preview-3-delivery.md) - published/installed identity and disabled configuration, not confirmed runtime operation.
+- [Project index](../../../../AGENTS.md)
+- [Current README](../../../../README.md) - instructions, not runtime proof.
+- [Preview.3 delivery record](../../../../docs/operations/preview-3-delivery.md) - published/installed identity and disabled configuration, not confirmed runtime operation.

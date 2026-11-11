@@ -6,7 +6,7 @@ Make the Telegram approval preview installable from public npm with truthful set
 ## Requirements
 
 ### Requirement: Public package and explicit prerequisites
-The product MUST be available as the public npm preview `@meshimize/proceed-mcp@0.1.0-preview.1` with requested dist-tag `preview` and the user-selected MIT license. Copyright attribution, licensing rights and publisher identity MUST be confirmed, not fabricated.
+The product MUST be available as the public npm preview `@meshimize/proceed-mcp@0.1.0-preview.1` with requested dist-tag `preview` and the user-selected MIT license. Copyright attribution, licensing rights and publisher identity MUST be confirmed, not fabricated. Ordinary npm installation MUST require no Telegram secret or credential interaction. Proceed-owned credential provisioning MUST be an explicit operator action after installation, not an npm lifecycle hook or custom installer. Packaged instructions MUST cover supported Windows and POSIX storage prerequisites and one-time private provisioning independently of any harness. Credentials, state and keys MUST remain outside package installation/prefix directories. Package replacement or upgrade MUST preserve that external credential, state, keys, pairing, journal and uncertain artifacts without automatic migration, overwrite or rotation. This extension does not change historical publication policy or authorize another publication.
 
 #### Scenario: Disclose the first-publication tag exception
 - **GIVEN** for this first publication only, the observed `latest` mapping is an exception to the original preview-only plan
@@ -36,8 +36,30 @@ The product MUST be available as the public npm preview `@meshimize/proceed-mcp@
 - **WHEN** the operator follows the public npm installation and start instructions for a released version
 - **THEN** the packaged product starts without a repository checkout, unpublished local files, or repository-only build steps.
 
+#### Scenario: Install without credential side effects
+- **GIVEN** a clean supported environment with no Proceed credentials or state
+- **WHEN** the operator installs the npm package normally
+- **THEN** installation neither requests nor captures a Telegram token and runs no credential-setup hook
+- **AND** it creates no pairing, request, decision or standing approval
+- **AND** subsequent private setup uses the installed Proceed command without a custom installer, native helper or harness-specific secret mechanism.
+
+#### Scenario: Explain supported Windows credential prerequisites
+- **GIVEN** an operator follows packaged persisted-credential instructions on Windows
+- **WHEN** choosing the default or an explicit credential location
+- **THEN** instructions identify the supported local fixed NTFS envelope, verifiable protection and dedicated account-only safe inheritance required for child files and directories
+- **AND** they do not guarantee ordinary home defaults meet those prerequisites
+- **AND** they explain the consistent explicit credential-path alternative, refusal without storage repair, and removal of a higher-priority token from the actual harness launch environment to select the default persisted route
+- **AND** supported POSIX prerequisites and the existing private environment/foreground routes remain documented.
+
+#### Scenario: Package replacement preserves configured use
+- **GIVEN** completed supported setup with protected credentials, state, keys, pairing and journal outside installation/prefix directories
+- **WHEN** the operator replaces or upgrades the npm package
+- **THEN** those external artifacts and uncertain ownership records are neither deleted, moved, overwritten nor migrated by package replacement
+- **AND** subsequent normal MCP startup can use the unchanged configured credential without reprovisioning or token re-entry
+- **AND** package replacement alone does not enable a disabled integration or prove runtime operation.
+
 ### Requirement: Complete first useful action from empty state
-The product MUST support a documented first-use path starting without product configuration, pairing, requests, or decisions.
+The product MUST support a documented first-use path starting without product configuration, credentials, pairing, requests, or decisions. After ordinary secret-free npm installation, supported setup MUST establish protected state, a transport principal, separately protected credentials and authorized private pairing through installed Proceed. The persisted route MUST support the first useful approval after a fresh token-free harness launch on supported Windows and POSIX storage. Credential persistence alone MUST NOT count as completion. Existing private environment-token first use remains supported without persistent token provisioning.
 
 #### Scenario: Create foundational configuration through supported setup
 - **GIVEN** an installation without product configuration, pairing, requests, or decisions
@@ -88,6 +110,21 @@ The product MUST support a documented first-use path starting without product co
 - **WHEN** first-use acceptance evidence is reconciled
 - **THEN** those results MUST be identified as user-supplied live evidence, not independent reproduction, general compatibility or proof of all release and failure-path checks.
 - **AND** unexecuted checks and unconfirmed shutdown MUST retain those limits. Request capabilities MUST NOT be reproduced in evidence or public reports.
+
+#### Scenario: Complete installed persisted setup and fresh-launch approval
+- **GIVEN** an ordinary npm installation with no credentials, state, owner, pairing, requests or decisions, and documented Windows or POSIX prerequisites
+- **WHEN** the operator follows installed Proceed instructions to initialize protected state, add a transport principal, privately provision the separate credential and authorize private-chat pairing
+- **AND** safely stops the broker and starts a fresh supported harness with no Telegram token in its environment or configuration
+- **AND** normal MCP use calls `prepare_approval`, then `request_approval` with the returned authority, and the paired human selects Approve while the call remains active
+- **THEN** the same waiting call returns the matching explicit approval without token re-entry, a harness secret entry or a separate broker terminal
+- **AND** setup alone neither enables a disabled integration nor grants standing approval or native permission bypass.
+
+#### Scenario: New credential outcomes retain their own evidence limits
+- **GIVEN** this credential-setup increment is assessed under the project's unit-only JavaScript/TypeScript verification restriction
+- **WHEN** setup, package or first-use readiness is reported
+- **THEN** automated tests use normal unit tooling runnable on Linux without PowerShell or Windows dependencies, and independent review remains required
+- **AND** native protection, terminal privacy, installed first use, login/reboot startup, actual Telegram delivery and multi-harness behavior remain unverified until permitted evidence exists
+- **AND** neither source review, unit results nor preview.3 risk acceptance substitutes for candidate-specific landing or exposure decisions.
 
 ### Requirement: Non-publishing pull-request validation
 Pull-request CI MUST build and test the proposed package without publishing a package or triggering a publishing path. Untrusted pull-request execution MUST NOT receive registry publishing credentials.
