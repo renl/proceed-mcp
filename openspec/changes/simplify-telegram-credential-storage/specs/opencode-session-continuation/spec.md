@@ -71,7 +71,7 @@ Provisioning MUST verify command prerequisites, destination separation, destinat
 
 Missing, empty, invalid or unreadable selected credentials and invalid selected environment tokens MUST produce actionable secret-free cold-start failure, not approval or a claim of working Telegram approval. Startup failure MUST NOT prompt for a secret, obtain one from agent arguments or silently change sources. Failure MUST preserve preexisting and uncertain objects, existing pairing, keys, durable work and uncertain broker ownership. Cleanup MUST be limited to objects still proven to belong to the attempt.
 
-#### Scenario: Automatic-startup credential is missing or unusable
+#### Scenario: Automatic-startup credential is missing or unsafe
 
 - **GIVEN** the selected file credential is missing, empty, invalid, unreadable or violates required storage separation
 - **WHEN** provisioning or automatic credential loading is attempted
@@ -85,14 +85,14 @@ Missing, empty, invalid or unreadable selected credentials and invalid selected 
 - **THEN** startup fails with a supported next step to supply the token privately at launch or correct the selected file prerequisite through supported operator action
 - **AND** it neither prompts for a secret nor obtains one from agent arguments, discloses token values, falls back after selected-source failure or returns a human decision.
 
-#### Scenario: Windows credentials can be provisioned and loaded without protection admission
+#### Scenario: Supported Windows credentials can be provisioned and loaded
 
 - **GIVEN** the documented Windows runtime, an absent separated token destination and ordinary OS access sufficient to create and later read the file
 - **WHEN** the operator provisions a new credential and a later cold broker startup selects it
 - **THEN** both operations can succeed without token-specific ownership, ACL, inheritance or NTFS admission
 - **AND** refusing every Windows persisted-credential operation does not satisfy this requirement.
 
-#### Scenario: Windows token protection evidence is unavailable
+#### Scenario: Windows file protection is unsupported or unverifiable
 
 - **GIVEN** ordinary file access and storage separation are usable but Windows token protection queries are unavailable or the storage is outside the former local-fixed-NTFS envelope
 - **WHEN** provisioning or selected-file loading is attempted
@@ -100,7 +100,7 @@ Missing, empty, invalid or unreadable selected credentials and invalid selected 
 - **AND** actual selected-file failure does not fall back to the environment
 - **AND** environment-mode startup without explicit file selection requires no token-file provisioning or loading.
 
-#### Scenario: Token parent uses ordinary inherited permissions
+#### Scenario: Windows parent inheritance is unsafe
 
 - **GIVEN** an otherwise usable separated default or explicit token destination whose parent permits access by additional OS principals, including ordinary inherited Windows permissions or POSIX modes other than 0700/0600
 - **WHEN** provisioning validates the destination or cold startup loads the selected file
@@ -123,7 +123,7 @@ Missing, empty, invalid or unreadable selected credentials and invalid selected 
 - **AND** private-input unavailability refuses before consuming secret characters
 - **AND** any acquired terminal mode and input listeners are restored or released with secret-free guidance.
 
-#### Scenario: File access changes during provisioning or loading
+#### Scenario: Protection changes during credential access
 
 - **GIVEN** initial ordinary path and I/O checks succeeded
 - **WHEN** the operation observes destination replacement, loss of required separation or incomplete file access

@@ -67,7 +67,7 @@ Ship the README correction with this behavior. Keep ordinary installation secret
 
 Token guidance shall state ordinary plaintext exposure, no permission preparation/repair, external storage separation and consistent explicit-path selection on later startup. To select the default file, remove higher-priority tokens from the actual launch environment. Preserve private environment/foreground alternatives, secure broker reuse and supported stop/replacement for rotation. A later login/reboot needs no service installation and does not establish verified startup.
 
-Use `0.1.0-preview.5` as the next unpublished candidate version, consistently across existing release metadata. Do not relabel published preview.4 as implementing this change. Primary installation guidance shall identify the current actually released version, with historical preview.1 subordinate. Until preview.5 publication is confirmed, label its behavior as unreleased candidate behavior and distinguish it from the current released flow. Version preparation is not permission to publish, install, activate or merge.
+Use `0.1.0-preview.5` as the next unpublished candidate version, consistently across existing release metadata. Do not relabel published preview.4 as implementing this change. The README shall be a concise current installation and use guide, not a release history. Primary installation guidance shall identify the current actually released version. Until preview.5 publication is confirmed, label its behavior as unreleased candidate behavior and distinguish it from the current released flow. Historical evidence remains in its existing records, not in the README. Version preparation is not permission to publish, install, activate or merge.
 
 ## Verification boundary and risks
 

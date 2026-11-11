@@ -48,7 +48,7 @@ The product MUST retain the historical public npm preview identity `@meshimize/p
 - **AND** it creates no pairing, request, decision or standing approval
 - **AND** subsequent private setup uses the installed Proceed command without a custom installer, native helper or harness-specific secret mechanism.
 
-#### Scenario: Explain ordinary Windows and POSIX credential storage
+#### Scenario: Explain supported Windows credential prerequisites
 
 - **GIVEN** an operator follows packaged persisted-credential instructions on Windows or POSIX
 - **WHEN** choosing the default or an explicit credential location
