@@ -90,15 +90,16 @@ const USAGE = [
   'Automatic startup selects one source, in this order: --telegram-token-file, then a nonempty',
   `private ${TELEGRAM_TOKEN_ENV} in the launch environment, then the default credential file.`,
   'For the file route, "telegram provision" reads one token privately - hidden terminal input, or the',
-  'existing --token-stdin nonterminal route - and writes that file once, owner-only, outside every',
-  'repository, the state directory and npm installation; only the broker reads it. It never prompts',
-  'during installation, pairing or MCP startup and never overwrites an existing file.',
-  'On Windows the file route needs a dedicated local fixed NTFS parent owned by this account and',
-  'restricted to it, passing current-account-only full access to files and directories; an ordinary',
-  'home default may not qualify. Unsafe storage is refused, never repaired, so select a supported',
-  'explicit --telegram-token-file and repeat it for provisioning and every later startup.',
-  'On POSIX the credential directory is mode 0700 and the file mode 0600. That file is not encrypted and',
-  'other processes running as the same account can read it.',
+  'existing --token-stdin nonterminal route - and writes that file once outside every repository, the',
+  'state directory and npm installation; only the broker reads it. It never prompts during installation,',
+  'pairing or MCP startup and never overwrites an existing file.',
+  'That file is ordinary plaintext with no token-specific protection: any principal whose OS access',
+  'permits reading it can obtain the token, including administrators, other processes and backups.',
+  'Do not prepare or repair its permissions; ordinary OS access controls, I/O errors and native',
+  'permission prompts still apply as they do for any other file.',
+  'To use the default file, remove any higher-priority token from the actual launch environment. For',
+  'another location, pass the same explicit --telegram-token-file to provisioning and every later startup.',
+  'Protected state, owner/operator keys and channel keys keep their own protection requirements.',
   'Environment mode needs the token supplied privately again for each fresh launch. Changing the',
   'launch value does not change an already running broker: stop it and start its replacement through',
   'the supported commands instead.',
@@ -527,7 +528,9 @@ async function runProvision(argv, { stdout, stderr, stdin, env }) {
   await provisionCredentialFile({ file, stateDir: paths.stateDir, token });
   stdout.write(
     `Provisioned the automatic-startup Telegram credential at ${file} (value not shown).\n` +
-      'This file is owner-only, not encrypted, and readable by other processes using the same account.\n' +
+      'This file is ordinary plaintext, not encrypted and not restricted to your account: any principal\n' +
+      'whose OS access permits reading it can obtain the token. Local persistence is not proof of Telegram\n' +
+      'validity, pairing or approval.\n' +
       'The broker alone loads it; do not pass the token to the MCP adapter environment.\n',
   );
   return EXIT_CODE.OK;
@@ -580,7 +583,7 @@ async function runHarnessCommand(argv, context) {
 // or exactly empty environment value is not a source and leaves the default file.
 function environmentTokenProblem() {
   return blockedPrerequisite(
-    `the ${TELEGRAM_TOKEN_ENV} value is not a usable Telegram token; supply 1-4096 private non-whitespace ASCII bytes in ${TELEGRAM_TOKEN_ENV} for the next launch, or select a safe token file (TELEGRAM_CREDENTIAL_UNAVAILABLE)`,
+    `the ${TELEGRAM_TOKEN_ENV} value is not a usable Telegram token; supply 1-4096 private non-whitespace ASCII bytes in ${TELEGRAM_TOKEN_ENV} for the next launch, or select the provisioned token file (TELEGRAM_CREDENTIAL_UNAVAILABLE)`,
     'TELEGRAM_CREDENTIAL_UNAVAILABLE',
   );
 }

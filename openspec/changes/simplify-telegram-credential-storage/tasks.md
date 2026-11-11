@@ -22,7 +22,7 @@ Inputs: [proposal](proposal.md), [design](design.md), [delivery delta](specs/ope
 
 ## 2. Ordinary token storage and matching operator guidance
 
-- [ ] 2.1 Implement design decisions 1-4 in `src/state/credential-file.js`. Disconnect only the token caller from protection admission. Use ordinary creation defaults without mode overrides, permission queries or chmod. Keep type/nonredirection, exclusive creation, identity, separation including resolved ancestry with missing tails, bounded reads, flush completion and conservative cleanup. Verify U1 and U2 pass without weakening protected-caller assertions.
+- [x] 2.1 Implement design decisions 1-4 in `src/state/credential-file.js`. Disconnect only the token caller from protection admission. Use ordinary creation defaults without mode overrides, permission queries or chmod. Keep type/nonredirection, exclusive creation, identity, separation including resolved ancestry with missing tails, bounded reads, flush completion and conservative cleanup. Verify U1 and U2 pass without weakening protected-caller assertions.
 - [ ] 2.2 Update token help/success/error guidance in `src/cli/main.js` and the matching `README.md` flow. Explain ordinary plaintext exposure and no permission preparation/repair. Preserve CLI syntax, private input, no overwrite, source selection, protected state/key prerequisites and truthful local-persistence-only success. Verify U1, U2 and the manual static README checks below.
 - [ ] 2.3 Prepare unpublished `0.1.0-preview.5` in `package.json`, both package-lock root versions, `server.json` top-level version and its npm package reference. Do not change dependencies, package identity, scripts or release tags. Verify U3 passes. README must be a concise current installation and use guide, not a release history. Keep actually released preview.4 installation primary until a later authorized publication is confirmed, with preview.5 behavior explicitly unreleased. Leave historical evidence in its existing records, not in README.
 
@@ -96,3 +96,25 @@ No integrated candidate exists yet. Scratch logs under `.scratch/simplify-unit/`
 
 - After independent review and owner delta review, obtain the separate authorization for one CLI archive and the single change PR merge. Finish active-folder evidence before archive. Confirm any later finalization delta is docs-only or revalidate affected inputs.
 - Test engineering retains worktree lifecycle ownership until verified landing and safe removal, or explicitly authorized abandonment with recovery. Preserve the root drafts and superseded hotfix worktree. This setup authorizes no cleanup of those resources.
+
+## Implementation evidence
+
+Implementation pass on the branch at the commits recorded below, still based on `main` `831b714158e9759be012e2826c75140bbd26b757` with no stacked parent. Worktree HEAD before this pass: `961b59edce2c489dd10eda0b470adee27a454bff`, clean. No production change existed before it.
+
+- 2.1 `src/state/credential-file.js`: the token caller no longer imports or calls `assertProtectedAncestors`, `effectiveUid`, `createProtectedDirectory`, `verifyWindowsProtection`, `verifyWindowsInheritableDirectory` or `verifyWindowsProspectiveDirectory`. Provisioning and loading retain one non-redirected directory chain, destination separation, exclusive creation, handle/path identity, flush completion, bounded reads and exact-created cleanup. Directories and the new file use ordinary creation defaults, with no chmod, mode, owner, ACL or inheritance query. Separation additionally resolves the deepest existing ancestor, so a destination under not-yet-created directories is still refused when that ancestor is state, package, configuration or repository content. Removing the hard-link, mode, owner and Windows admission checks is the approved delta for this token caller only.
+- 2.2 token guidance in `src/cli/main.js`: usage and provisioning success text now state ordinary plaintext exposure, no permission preparation or repair, the repeated explicit-path alternative, default-file selection after removing a higher-priority launch token, and the unchanged protected state, operator-key and channel-key requirements. `README.md` was not edited in this pass, so its preview.4 flow, owner-only claim and Windows parent prerequisite text still contradict this behavior and tasks 2.2 and 2.3 remain open.
+- 2.3 metadata: `0.1.0-preview.5` in `package.json`, both `package-lock.json` root versions, and `server.json` top level plus its npm package reference. Dependencies, package identity, scripts, descriptions, publish configuration and tags are unchanged.
+
+Commands run from the worktree root with the recorded Windows Node v26.13.0, after the production change:
+
+| Check | Command | Result |
+| --- | --- | --- |
+| U1 | `node --experimental-test-module-mocks --test tests/proceed-credential-posix-unit.test.mjs tests/proceed-credential-windows-unit.test.mjs tests/proceed-setup-cli-unit.test.mjs` | exit 0, 177 tests, 177 PASS, 0 fail, 0 skipped, 0 cancelled |
+| U2 | `node --experimental-test-module-mocks --test tests/windows-storage-node-unit.test.mjs tests/startup-token-environment.test.mjs tests/startup-token-helper-environment.test.mjs tests/proceed-setup-package-unit.test.mjs` | exit 0, 177 PASS, 0 fail |
+| U3 | `node --test tests/release-metadata.test.mjs` | exit 0, 9 PASS, 0 fail |
+| Format | `node node_modules/prettier/bin/prettier.cjs --check src/state/credential-file.js src/cli/main.js package.json package-lock.json server.json` | exit 0 |
+| Whitespace | `git diff --check` | exit 0 |
+| Structure | `openspec validate simplify-telegram-credential-storage --strict` | exit 1, the two recorded advisory introductory-text warnings only. Ordinary validation exit 0. Strict is not passed and is not claimed. |
+
+- Expected RED before the change was 158 PASS / 19 RED for U1 and 6 PASS / 3 RED for U3 at the same code revision. Both now pass. No test, fixture, criterion or protected shared caller was edited, no check was skipped or weakened, and no pre-implementation review was replayed.
+- Unverified and unrun: everything the unit-only restriction excludes, including installed first use, native Windows and POSIX enforcement, terminal privacy, login/reboot startup, actual Telegram delivery and multi-harness behavior. No publication, installation, activation, archive or merge is performed or authorized by this pass.

@@ -1,18 +1,23 @@
 // Broker-only automatic-startup Telegram credential (design sections 1-3).
 //
-// One explicitly provisioned owner-only file outside every repository, product
-// state, package installation and MCP configuration. Provisioning is create-only:
-// it never reads, overwrites, truncates or repairs an existing destination, and it
-// removes only objects it can still prove it created. Loading verifies the path,
-// the actual file identity and the protection before the content is read, then
-// rechecks identity, ancestry and protection before the token is used.
+// One explicitly provisioned ordinary plaintext file outside every repository,
+// product state, package installation and MCP configuration. Provisioning is
+// create-only: it never reads, overwrites, truncates or repairs an existing
+// destination, and it removes only objects it can still prove it created. Loading
+// checks the path and the actual file identity before the content is read, then
+// rechecks identity and ancestry before the token is used.
 //
-// Both supported platforms persist this file. POSIX verifies owner-only mode bits
-// and protected ancestry; Windows reuses the shared metadata-only admission in
-// `protection.js` and requires an already safe dedicated parent with account-only
-// full-access inheritance. This is same-account protection, not encryption or
-// isolation from other processes running as the same account. Storage whose checks
-// cannot be established fails closed.
+// This file is deliberately not protected storage. Both platforms use ordinary
+// filesystem I/O: no owner, mode, ACL, inheritance, filesystem-type or fixed
+// volume admission is queried, required or repaired, and creation uses ordinary
+// OS defaults. Anyone whose OS access permits reading the file can obtain the
+// token. What remains here is I/O integrity and non-replacement only: a
+// contiguous non-redirected directory chain, storage separation, exclusive
+// creation, handle/path identity, write-flush completion, bounded reads and
+// cleanup limited to objects this attempt can still prove it created. Approval
+// state, journals, owner/control/operator credentials and channel keys keep the
+// shared admission in `protection.js` and `path-trust.js`; this caller no longer
+// reaches it (design decision 4).
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, realpath } from 'node:fs/promises';
@@ -20,20 +25,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { blockedPrerequisite, invalidArgument, storageFailure } from '../errors.js';
-import {
-  assertProtectedAncestors,
-  effectiveUid,
-  posix,
-  removeExactCreated,
-  splitPath,
-  windowsAbsolutePathProblem,
-} from './path-trust.js';
-import {
-  createProtectedDirectory,
-  verifyWindowsInheritableDirectory,
-  verifyWindowsProspectiveDirectory,
-  verifyWindowsProtection,
-} from './protection.js';
+import { posix, removeExactCreated, splitPath, windowsAbsolutePathProblem } from './path-trust.js';
 
 export const CREDENTIAL_DIRECTORY_NAME = '.proceed-mcp-credentials';
 export const CREDENTIAL_FILE_NAME = 'telegram.token';
@@ -43,8 +35,6 @@ export const MAX_TOKEN_BYTES = 4096;
 export const MAX_TOKEN_INPUT_BYTES = 4098;
 export const TOKEN_INPUT_TIMEOUT_MS = 60000;
 
-const POSIX_DIRECTORY_MODE = 0o700;
-const POSIX_FILE_MODE = 0o600;
 // Destinations that would place credential material in an MCP client
 // configuration file instead of dedicated credential storage.
 const CONFIGURATION_FILE_NAMES = new Set([
@@ -156,14 +146,38 @@ async function inspect(path) {
 // Ancestors are inspected without following them: no symbolic link, junction or
 // other reparse component may redirect the credential, and an uninspectable
 // component is a refusal rather than a guess. A missing tail is allowed only
-// when the caller is about to create it. The shared owner-only path rule is the
-// same one design section 4 applies to the trust publication.
+// when the caller is about to create it. Ownership, mode bits, ACLs and
+// inheritance are not admission for this file (design decision 1), so only
+// non-redirection and the directory type are retained here.
 async function assertAncestors(file, { allowMissingTail }) {
-  await assertProtectedAncestors(file, {
-    allowMissingTail,
-    label: 'the credential path',
-    fail: credentialPathFailure,
-  });
+  const { root, rest } = splitPath(file);
+  let prefix = root;
+  let missingFrom = null;
+  for (const part of rest.slice(0, -1)) {
+    prefix = join(prefix, part);
+    const info = await inspect(prefix);
+    if (info === null) {
+      if (!allowMissingTail) {
+        throw credentialPathFailure(
+          'the credential path does not resolve to one existing directory chain',
+        );
+      }
+      missingFrom ??= prefix;
+      continue;
+    }
+    if (missingFrom !== null) {
+      // An existing entry below a missing parent is not this attempt's object.
+      throw credentialPathFailure(
+        'the credential path does not resolve to one contiguous directory chain',
+      );
+    }
+    if (info.isSymbolicLink()) {
+      throw credentialPathFailure('the credential path contains a symbolic link or reparse point');
+    }
+    if (!info.isDirectory()) {
+      throw credentialPathFailure('the credential path has a non-directory ancestor');
+    }
+  }
 }
 
 async function canonicalExisting(path) {
@@ -175,6 +189,21 @@ async function canonicalExisting(path) {
       'PROTECTION_UNVERIFIED',
       cause,
     );
+  }
+}
+
+// The deepest ancestor of `directory` that already exists, resolved to its
+// physical path. A destination whose own parent does not exist yet still belongs
+// to the resolved ancestor that exists today, so a not-yet-created tail cannot
+// escape the separation rule or hide behind another spelling of a forbidden
+// location.
+async function resolvedExistingAncestor(directory) {
+  let current = directory;
+  for (;;) {
+    if ((await inspect(current)) !== null) return canonicalExisting(current);
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
   }
 }
 
@@ -260,10 +289,10 @@ async function assertLocation({ file, stateDir }) {
     );
   }
 
-  // Existing ancestors are additionally resolved, so a redirect cannot hide one
-  // of these locations behind another spelling.
-  const parentInfo = await inspect(dirname(file));
-  const resolvedParent = parentInfo === null ? null : await canonicalExisting(dirname(file));
+  // Existing ancestry is additionally resolved, so a redirect cannot hide one of
+  // these locations behind another spelling, and a destination below directories
+  // that do not exist yet is still judged by the ancestor that does exist.
+  const resolvedParent = await resolvedExistingAncestor(dirname(file));
   if (resolvedParent !== null) {
     if (await within(resolvedParent, await canonicalExisting(PACKAGE_ROOT))) {
       throw storageFailure(
@@ -305,44 +334,18 @@ async function assertLocation({ file, stateDir }) {
   }
 }
 
-function assertOwnerOnlyFile(info, description) {
+// Ordinary object type only: the credential is a regular, non-redirected file and
+// its dedicated parent is a real directory. Ownership, link count and mode are not
+// admission (design decisions 1 and 3), so they are not inspected here.
+function assertRegularFile(info, description) {
   if (info === null || !info.isFile() || info.isSymbolicLink()) {
     throw storageFailure(`${description} is not a regular file`, 'PROTECTION_UNVERIFIED');
   }
-  if (info.nlink !== 1) {
-    throw storageFailure(`${description} has multiple hard links`, 'PROTECTION_UNVERIFIED');
-  }
-  if (!posix()) return;
-  if ((info.mode & 0o777) !== POSIX_FILE_MODE) {
-    throw storageFailure(
-      `${description} does not have owner-only mode 0600`,
-      'PROTECTION_UNVERIFIED',
-    );
-  }
-  if (info.uid !== effectiveUid()) {
-    throw storageFailure(
-      `${description} is not owned by the current account`,
-      'PROTECTION_UNVERIFIED',
-    );
-  }
 }
 
-function assertOwnerOnlyDirectory(info, description) {
+function assertDirectoryEntry(info, description) {
   if (info === null || !info.isDirectory() || info.isSymbolicLink()) {
-    throw storageFailure(`${description} is not a dedicated directory`, 'PROTECTION_UNVERIFIED');
-  }
-  if (!posix()) return;
-  if ((info.mode & 0o777) !== POSIX_DIRECTORY_MODE) {
-    throw storageFailure(
-      `${description} does not have owner-only mode 0700`,
-      'PROTECTION_UNVERIFIED',
-    );
-  }
-  if (info.uid !== effectiveUid()) {
-    throw storageFailure(
-      `${description} is not owned by the current account`,
-      'PROTECTION_UNVERIFIED',
-    );
+    throw storageFailure(`${description} is not a directory`, 'PROTECTION_UNVERIFIED');
   }
 }
 
@@ -359,32 +362,6 @@ function assertCreatedIdentity(info, created) {
       'PROTECTION_UNVERIFIED',
     );
   }
-}
-
-// Shared Windows admission, applied at the same points as the POSIX owner-only
-// checks: before a secret is written or read, and again before success is
-// reported. No helper receives the token.
-async function admitWindowsProtection(targets, { allowMissingTail = false } = {}) {
-  if (posix()) return;
-  await verifyWindowsProtection(targets, { allowMissingTail });
-}
-
-// A credential file that is not yet created must arrive in a directory that
-// passes account-only full access to children. This is the shared inheritance
-// policy, not a new one, and it never repairs an unsafe parent.
-async function admitWindowsCredentialParent(directory) {
-  if (posix()) return;
-  await verifyWindowsInheritableDirectory(directory);
-}
-
-// A dedicated credential directory that does not exist yet is admitted through
-// its existing ancestry before any secret is supplied, so an unavailable query or
-// an inheritance that would reach another account refuses before either input
-// mode. This observes only; the creation attempt still admits the parent it
-// actually uses.
-async function admitWindowsCredentialTail(directory) {
-  if (posix()) return;
-  await verifyWindowsProspectiveDirectory(directory);
 }
 
 // One token line: no BOM, embedded newline, NUL or whitespace. The terminator is
@@ -471,11 +448,9 @@ function withCode(error) {
 }
 
 // Everything that must hold before the operator supplies a secret: absolute
-// syntax, safe ancestry, destination separation, destination absence, and the
-// protection this attempt is not allowed to change. Nothing here reads or writes
-// credential content. A missing dedicated parent is admitted through its existing
-// ancestry and safe-inheritance rule rather than skipped, so an unavailable or
-// unsafe Windows chain refuses before either input mode.
+// syntax, one non-redirected directory chain, destination separation and
+// destination absence. Nothing here reads or writes credential content, and no
+// owner, mode, ACL or inheritance admission is consulted (design decisions 1-3).
 async function verifyProvisioningInner({ file, stateDir }) {
   if (!isAbsolute(file)) {
     throw invalidArgument('the credential destination must be an absolute path');
@@ -483,15 +458,7 @@ async function verifyProvisioningInner({ file, stateDir }) {
   await assertAncestors(file, { allowMissingTail: true });
   await assertLocation({ file, stateDir });
   if ((await inspect(file)) !== null) throw credentialExists();
-  const parent = dirname(file);
-  const parentInfo = await inspect(parent);
-  if (parentInfo === null) {
-    await admitWindowsCredentialTail(parent);
-    return { file, parent };
-  }
-  assertOwnerOnlyDirectory(parentInfo, 'the credential directory');
-  await admitWindowsCredentialParent(parent);
-  return { file, parent };
+  return { file, parent: dirname(file) };
 }
 
 // Public preflight for the operator command: the same prerequisite checks run
@@ -504,27 +471,22 @@ export async function verifyCredentialProvisioning({ file, stateDir }) {
   }
 }
 
-// Missing dedicated directories are created one component at a time under
-// admitted parents and admitted before the next component is descended into. An
-// existing directory is never re-permissioned.
+// Missing dedicated directories are created one component at a time with ordinary
+// OS creation defaults: no token-specific mode is requested and an existing
+// directory is never re-permissioned or repaired.
 async function createCredentialDirectory(directory) {
-  if (!posix()) {
-    await createProtectedDirectory(directory, { inheritsProtection: true });
-    return;
-  }
   try {
-    await mkdir(directory, { mode: POSIX_DIRECTORY_MODE });
+    await mkdir(directory);
   } catch (cause) {
     if (cause?.code !== 'EEXIST') {
       throw storageFailure('could not create the credential directory', 'STORAGE_FAILURE', cause);
     }
   }
-  assertOwnerOnlyDirectory(await inspect(directory), 'the credential directory');
 }
 
 // Creates only missing dedicated credential directories and the new credential
-// file. The destination is opened exclusively, protected before the token is
-// written, flushed and reverified before provisioning is reported complete.
+// file. The destination is opened exclusively, written, flushed and reverified
+// before provisioning is reported complete.
 async function provisionInner({ file, stateDir, token }) {
   const { parent } = await verifyProvisioningInner({ file, stateDir });
 
@@ -536,11 +498,9 @@ async function provisionInner({ file, stateDir, token }) {
     await createCredentialDirectory(prefix);
   }
 
-  assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
-
   let handle;
   try {
-    handle = await open(file, 'wx', POSIX_FILE_MODE);
+    handle = await open(file, 'wx');
   } catch (cause) {
     if (cause?.code === 'EEXIST') throw credentialExists();
     throw storageFailure('could not create the credential file', 'PROTECTION_UNVERIFIED', cause);
@@ -548,21 +508,16 @@ async function provisionInner({ file, stateDir, token }) {
 
   let created = null;
   try {
-    if (posix()) await handle.chmod(POSIX_FILE_MODE);
     created = await handle.stat();
-    assertOwnerOnlyFile(created, 'the new credential file');
-    // Protection is established before the token is written, so no secret reaches
-    // an object this attempt has not admitted.
-    await admitWindowsProtection([parent, file]);
+    assertRegularFile(created, 'the new credential file');
     await handle.writeFile(`${token}\n`, 'utf8');
     await handle.sync();
     // Flushed and revalidated before success is reported: a changed identity,
-    // ancestry or protection is a failure, not a completed provision.
-    assertOwnerOnlyFile(await handle.stat(), 'the new credential file');
+    // object type or ancestry is a failure, not a completed provision.
+    assertRegularFile(await handle.stat(), 'the new credential file');
     assertCreatedIdentity(await inspect(file), created);
-    assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
+    assertDirectoryEntry(await inspect(parent), 'the credential directory');
     await assertAncestors(file, { allowMissingTail: false });
-    await admitWindowsProtection([parent, file]);
   } catch (cause) {
     await handle.close().catch(() => {});
     // The exclusive create proved this attempt owned the object it opened, but
@@ -585,8 +540,8 @@ async function provisionInner({ file, stateDir, token }) {
   // reported success names this attempt's object, not a later replacement.
   const provisioned = await inspect(file);
   assertCreatedIdentity(provisioned, created);
-  assertOwnerOnlyFile(provisioned, 'the provisioned credential file');
-  assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
+  assertRegularFile(provisioned, 'the provisioned credential file');
+  assertDirectoryEntry(await inspect(parent), 'the credential directory');
   return { file };
 }
 
@@ -604,10 +559,10 @@ async function readBoundedContent(handle) {
   return buffer.subarray(0, bytesRead);
 }
 
-// Broker-only load: path and protection are established, the actual regular-file
-// identity is checked before the content read, and identity, ancestry and
-// protection are rechecked before the token is returned. No
-// validation-then-following-read shortcut is used.
+// Broker-only load: the path and the actual regular-file identity are checked
+// before the content read, and identity and ancestry are rechecked before the
+// token is returned. No validation-then-following-read shortcut is used, and no
+// permission-protection snapshot is taken (design decision 3).
 async function loadInner({ file, stateDir }) {
   if (!isAbsolute(file)) {
     throw invalidArgument('the credential destination must be an absolute path');
@@ -619,12 +574,8 @@ async function loadInner({ file, stateDir }) {
 
   const before = await inspect(file);
   if (before === null) throw missingCredential();
-  assertOwnerOnlyFile(before, 'the automatic-startup credential file');
-  assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
-  // A directory that cannot pass account-only full access to its children is not
-  // a dedicated credential directory, even though this attempt only reads.
-  await admitWindowsCredentialParent(parent);
-  await admitWindowsProtection([parent, file]);
+  assertRegularFile(before, 'the automatic-startup credential file');
+  assertDirectoryEntry(await inspect(parent), 'the credential directory');
 
   let handle;
   try {
@@ -649,15 +600,15 @@ async function loadInner({ file, stateDir }) {
     }
     // Validate the actual opened handle before any content access: a pathname
     // check before the open cannot prove the handle that will be read.
-    assertOwnerOnlyFile(opened, 'the opened automatic-startup credential file');
+    assertRegularFile(opened, 'the opened automatic-startup credential file');
     if (opened.size > MAX_TOKEN_INPUT_BYTES) throw malformedCredential();
     bytes = await readBoundedContent(handle);
   } finally {
     await handle.close().catch(() => {});
   }
 
-  // Post-access revalidation: a changed identity, kind, ancestry or protection
-  // discards the loaded value instead of releasing it to broker startup.
+  // Post-access revalidation: a changed identity, kind or ancestry discards the
+  // loaded value instead of releasing it to broker startup.
   const after = await inspect(file);
   if (after === null || after.dev !== before.dev || after.ino !== before.ino) {
     throw storageFailure(
@@ -665,10 +616,9 @@ async function loadInner({ file, stateDir }) {
       'PROTECTION_UNVERIFIED',
     );
   }
-  assertOwnerOnlyFile(after, 'the automatic-startup credential file');
-  assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
+  assertRegularFile(after, 'the automatic-startup credential file');
+  assertDirectoryEntry(await inspect(parent), 'the credential directory');
   await assertAncestors(file, { allowMissingTail: false });
-  await admitWindowsProtection([parent, file]);
 
   try {
     return parseTokenInput(bytes);
