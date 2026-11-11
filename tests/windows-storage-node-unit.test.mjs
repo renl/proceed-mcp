@@ -941,8 +941,9 @@ test('WIN-PRESERVE: init with unknown entries refuses without config read or rol
   });
 });
 
-test('WIN-TOKEN: unsupported selected file refuses before opening contents', async () => {
+test('WIN-TOKEN: unavailable protection query refuses selected file before opening contents', async () => {
   await windowsUnit(async () => {
+    childReply = () => ({ error: unavailable() });
     let reads = 0;
     storageBindings.open = () => {
       reads++;
@@ -1604,8 +1605,9 @@ const { startPortableRuntime } = await import('../src/broker/portable-runtime.js
 const { harnessTuiDefinition } = await import('../src/harness/tui-plugin.js');
 const { run: runCli } = await import('../src/cli/main.js');
 
-test('WIN-PROVISION: actual public CLI refuses unsupported file mode without consuming stdin', async () => {
+test('WIN-PROVISION: actual public CLI refuses unavailable protection without consuming stdin', async () => {
   await windowsUnit(async () => {
+    childReply = () => ({ error: unavailable() });
     storageBindings.readFile = () => JSON.stringify(config.createEmptyConfig());
     let consumed = false;
     let output = '';
@@ -1641,12 +1643,8 @@ test('WIN-PROVISION: actual public CLI refuses unsupported file mode without con
         },
       },
     );
-    assert.equal(code, 3);
-    assert.match(
-      output,
-      /Windows Telegram token-file provisioning and loading are not supported/,
-      output,
-    );
+    assert.equal(code, 4);
+    assert.match(output, /protection/i);
     assert.equal(consumed, false);
     assert.ok(
       !storageCalls.some(({ name }) =>
