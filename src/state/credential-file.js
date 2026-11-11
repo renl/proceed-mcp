@@ -31,6 +31,7 @@ import {
 import {
   createProtectedDirectory,
   verifyWindowsInheritableDirectory,
+  verifyWindowsProspectiveDirectory,
   verifyWindowsProtection,
 } from './protection.js';
 
@@ -345,6 +346,21 @@ function assertOwnerOnlyDirectory(info, description) {
   }
 }
 
+// The exclusive create proves which object this attempt opened. That identity is
+// retained and compared with the destination afterwards, so a pathname renamed
+// away and replaced by another regular, equally protected file is refused rather
+// than reported as this attempt's completed provision. A missing or uninspectable
+// destination is equally uncertain. This is a repeated-snapshot check, not a
+// native handle pin.
+function assertCreatedIdentity(info, created) {
+  if (info === null || info.dev !== created.dev || info.ino !== created.ino) {
+    throw storageFailure(
+      'the credential destination no longer resolves to the object this attempt created',
+      'PROTECTION_UNVERIFIED',
+    );
+  }
+}
+
 // Shared Windows admission, applied at the same points as the POSIX owner-only
 // checks: before a secret is written or read, and again before success is
 // reported. No helper receives the token.
@@ -359,6 +375,16 @@ async function admitWindowsProtection(targets, { allowMissingTail = false } = {}
 async function admitWindowsCredentialParent(directory) {
   if (posix()) return;
   await verifyWindowsInheritableDirectory(directory);
+}
+
+// A dedicated credential directory that does not exist yet is admitted through
+// its existing ancestry before any secret is supplied, so an unavailable query or
+// an inheritance that would reach another account refuses before either input
+// mode. This observes only; the creation attempt still admits the parent it
+// actually uses.
+async function admitWindowsCredentialTail(directory) {
+  if (posix()) return;
+  await verifyWindowsProspectiveDirectory(directory);
 }
 
 // One token line: no BOM, embedded newline, NUL or whitespace. The terminator is
@@ -447,7 +473,9 @@ function withCode(error) {
 // Everything that must hold before the operator supplies a secret: absolute
 // syntax, safe ancestry, destination separation, destination absence, and the
 // protection this attempt is not allowed to change. Nothing here reads or writes
-// credential content, and a missing parent is admitted only as a future tail.
+// credential content. A missing dedicated parent is admitted through its existing
+// ancestry and safe-inheritance rule rather than skipped, so an unavailable or
+// unsafe Windows chain refuses before either input mode.
 async function verifyProvisioningInner({ file, stateDir }) {
   if (!isAbsolute(file)) {
     throw invalidArgument('the credential destination must be an absolute path');
@@ -456,8 +484,12 @@ async function verifyProvisioningInner({ file, stateDir }) {
   await assertLocation({ file, stateDir });
   if ((await inspect(file)) !== null) throw credentialExists();
   const parent = dirname(file);
-  if ((await inspect(parent)) === null) return { file, parent };
-  assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
+  const parentInfo = await inspect(parent);
+  if (parentInfo === null) {
+    await admitWindowsCredentialTail(parent);
+    return { file, parent };
+  }
+  assertOwnerOnlyDirectory(parentInfo, 'the credential directory');
   await admitWindowsCredentialParent(parent);
   return { file, parent };
 }
@@ -527,6 +559,7 @@ async function provisionInner({ file, stateDir, token }) {
     // Flushed and revalidated before success is reported: a changed identity,
     // ancestry or protection is a failure, not a completed provision.
     assertOwnerOnlyFile(await handle.stat(), 'the new credential file');
+    assertCreatedIdentity(await inspect(file), created);
     assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
     await assertAncestors(file, { allowMissingTail: false });
     await admitWindowsProtection([parent, file]);
@@ -548,7 +581,11 @@ async function provisionInner({ file, stateDir, token }) {
   }
   await handle.close();
 
-  assertOwnerOnlyFile(await inspect(file), 'the provisioned credential file');
+  // The destination is checked once more after the handle is released: the
+  // reported success names this attempt's object, not a later replacement.
+  const provisioned = await inspect(file);
+  assertCreatedIdentity(provisioned, created);
+  assertOwnerOnlyFile(provisioned, 'the provisioned credential file');
   assertOwnerOnlyDirectory(await inspect(parent), 'the credential directory');
   return { file };
 }

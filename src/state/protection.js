@@ -695,10 +695,17 @@ function consistentContext(current, payload) {
 // The root is observed first and a descendant is queried only after every one of
 // its ancestors has been admitted. One attempt shares one deadline. The last
 // observation is returned so a creation attempt can judge its parent.
-async function admitWindowsLevels(levels, { targets, allowMissingTail, deadline }) {
+//
+// `stopAtAbsent` admits a protected destination that does not exist yet: the
+// first absent component ends the descent, so the returned `deepest` is the last
+// existing component and no descendant of the missing tail is ever queried.
+async function admitWindowsLevels(
+  levels,
+  { targets, allowMissingTail = false, stopAtAbsent = false, deadline },
+) {
   let context = null;
   let deepest = null;
-  for (let depth = 0; depth < levels.length; depth += 1) {
+  descend: for (let depth = 0; depth < levels.length; depth += 1) {
     const lastLevel = depth === levels.length - 1;
     for (const batch of batchedTargets(levels[depth])) {
       const payload = await queryMetadata(batch, deadline);
@@ -713,6 +720,7 @@ async function admitWindowsLevels(levels, { targets, allowMissingTail, deadline 
             deepest = entry;
             continue;
           }
+          if (stopAtAbsent && entry.status === 'absent') break descend;
           presentEntry(entry, description);
           continue;
         }
@@ -887,6 +895,38 @@ export async function verifyWindowsInheritableDirectory(directory, { fail } = {}
       admitted.deepest.object,
       admitted.context,
       `the directory ${directory}`,
+    );
+  } catch (error) {
+    if (typeof fail === 'function') throw fail(error);
+    throw error;
+  }
+}
+
+// Admission for a dedicated directory that does not exist yet: every existing
+// component is admitted depth-first and the deepest existing component must pass
+// the same prospective-child rule a creation attempt applies, so an inheritance
+// that would hand another account access to the new directory refuses before any
+// secret is supplied. Nothing is created, repaired or queried below the missing
+// component, and a later creation attempt still admits its actual parent.
+export async function verifyWindowsProspectiveDirectory(target, { fail } = {}) {
+  if (process.platform !== 'win32') return;
+  const deadline = Date.now() + WINDOWS_ATTEMPT_BUDGET_MS;
+  try {
+    const admitted = await admitWindowsLevels(chainLevels(target), {
+      targets: [],
+      stopAtAbsent: true,
+      deadline,
+    });
+    if (admitted.deepest === null || admitted.context === null) {
+      throw unverifiedFailure(
+        `the existing ancestry of ${target} could not be observed; ${UNSUPPORTED_PLACE_GUIDANCE}`,
+      );
+    }
+    assertProspectiveChildren(
+      admitted.deepest,
+      admitted.context,
+      trustedPrincipals(admitted.context),
+      `the future protected directory ${target}`,
     );
   } catch (error) {
     if (typeof fail === 'function') throw fail(error);
