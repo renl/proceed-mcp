@@ -870,6 +870,30 @@ export async function verifyWindowsProtection(targets, { allowMissingTail = fals
   }
 }
 
+// Admission for an existing dedicated directory that must already pass
+// account-only full access to the files and directories created inside it. The
+// directory is admitted and never repaired or re-permissioned, so an unsafe
+// parent refuses instead of being fixed.
+export async function verifyWindowsInheritableDirectory(directory, { fail } = {}) {
+  if (process.platform !== 'win32') return;
+  const deadline = Date.now() + WINDOWS_ATTEMPT_BUDGET_MS;
+  try {
+    const admitted = await admitWindowsLevels(chainLevels(directory), {
+      targets: [directory],
+      allowMissingTail: false,
+      deadline,
+    });
+    assertProtectedInheritance(
+      admitted.deepest.object,
+      admitted.context,
+      `the directory ${directory}`,
+    );
+  } catch (error) {
+    if (typeof fail === 'function') throw fail(error);
+    throw error;
+  }
+}
+
 // Creates a directory and protects it. `inheritsProtection` marks a child of an
 // already-protected directory: POSIX still needs its own mode, while Windows
 // checks the inherited descriptor that the child actually received.

@@ -43,3 +43,15 @@ jobs:
         run: |
           node --experimental-test-module-mocks --test tests/windows-storage-node-unit.test.mjs
         timeout-minutes: 1
+      - shell: bash
+        run: |
+          node --experimental-test-module-mocks --test tests/proceed-setup-cli-unit.test.mjs
+        timeout-minutes: 1
+      - shell: bash
+        run: |
+          node --experimental-test-module-mocks --test tests/proceed-credential-posix-unit.test.mjs tests/proceed-credential-windows-unit.test.mjs
+        timeout-minutes: 1
+      - shell: bash
+        run: |
+          node --test tests/proceed-setup-package-unit.test.mjs
+        timeout-minutes: 1
