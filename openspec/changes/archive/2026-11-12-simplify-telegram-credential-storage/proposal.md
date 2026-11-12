@@ -13,7 +13,7 @@ Problem: token-specific permission admission blocks that setup. Removing those c
 - Remove token-specific ACL, owner, inheritance, exact-mode and local-fixed-NTFS admission requirements. Do not inspect or repair permissions, run chmod repair or require a special credential parent for the token file. Ordinary OS access controls, I/O errors and native permission prompts still apply.
 - Preserve private terminal input, explicit bounded nonterminal stdin input, value-free errors, exclusive creation without overwrite, storage separation, source precedence, no `.env` loading and healthy-broker reuse without credential access.
 - Keep protected approval state, journals, control/owner credentials, channel and operator keys, private request authority, pairing and human decision rules unchanged. Ordinary file identity and destination checks remain for correct I/O and nonreplacement, not as a substitute protection gate.
-- Ship a matching README with the implemented install/configure/start flow, current released-version installation primary and historical release details subordinate. State plainly that anyone whose OS access permits reading the file can obtain the Telegram token. Do not imply encryption, account-only access or a credential store.
+- Ship a matching README with the implemented install/configure/start flow and exact source version. Require checking that version's npm availability before installation, without claiming publication or attributing new behavior to an older release. Keep historical release evidence in its existing records rather than making the README a release history. State plainly that anyone whose OS access permits reading the file can obtain the Telegram token. Do not imply encryption, account-only access or a credential store.
 
 ### User Stories
 
@@ -53,5 +53,11 @@ Implementation must separate token-file handling from protected state/key handli
 
 ### Related Artifacts
 
-- Current contracts: [delivery and setup](../../specs/opencode-session-continuation/spec.md), [distribution](../../specs/npm-distribution/spec.md).
+- Current contracts on merged main: [delivery and setup](https://github.com/renl/proceed-mcp/blob/main/openspec/specs/opencode-session-continuation/spec.md), [distribution](https://github.com/renl/proceed-mcp/blob/main/openspec/specs/npm-distribution/spec.md).
 - Proposed deltas: [delivery and setup](specs/opencode-session-continuation/spec.md), [distribution](specs/npm-distribution/spec.md).
+
+### Primary-author finalization review
+
+Both capability deltas are accepted against the merged-baseline contracts at `831b714158e9759be012e2826c75140bbd26e757`. All six modified requirements retain every baseline scenario name. Token-specific protection is intentionally removed, while protected state/key admission, private input, source precedence, no overwrite, broker-only loading, pairing and human authority remain unchanged. No conflicting requirement was identified. The accepted source-version README presentation supersedes the earlier released-version-first wording, without authorizing publication or claiming availability.
+
+The two reported strict-validation introductory-prose warnings are advisory and retained. Ordinary validation was reported valid. Strict validation was not passed. This content review runs no commands and does not substitute for final CLI validation or fresh-head CI. Installed first use, native state/key enforcement, terminal privacy, login/reboot, Telegram delivery and multi-harness outcomes remain unverified. Final archive, CI, merge and release evidence belongs in the live status record or change PR, not in the archived folder.

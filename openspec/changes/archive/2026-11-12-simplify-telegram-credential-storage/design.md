@@ -67,7 +67,7 @@ Ship the README correction with this behavior. Keep ordinary installation secret
 
 Token guidance shall state ordinary plaintext exposure, no permission preparation/repair, external storage separation and consistent explicit-path selection on later startup. To select the default file, remove higher-priority tokens from the actual launch environment. Preserve private environment/foreground alternatives, secure broker reuse and supported stop/replacement for rotation. A later login/reboot needs no service installation and does not establish verified startup.
 
-Use `0.1.0-preview.5` as the next unpublished candidate version, consistently across existing release metadata. Do not relabel published preview.4 as implementing this change. The README shall be a concise current installation and use guide, not a release history. Primary installation guidance shall identify the current actually released version. Until preview.5 publication is confirmed, label its behavior as unreleased candidate behavior and distinguish it from the current released flow. Historical evidence remains in its existing records, not in the README. Version preparation is not permission to publish, install, activate or merge.
+Use `0.1.0-preview.5` consistently across existing release metadata. The README shall be a concise installation and use guide matching that exact source version, not a release history. It shall require checking that exact version's npm availability before installation and pin its installation command to `@meshimize/proceed-mcp@0.1.0-preview.5`. Source-version guidance does not claim publication or availability and shall not attribute this behavior to an older release. Historical evidence remains in its existing records, not in the README. Version preparation is not permission to publish, install, activate or merge.
 
 ## Verification boundary and risks
 
@@ -77,7 +77,7 @@ Only normal JavaScript/TypeScript unit tests runnable on Linux are permitted. Us
 - Missing parents, storage separation, existing destinations/create races, exclusive creation, incomplete writes, observed replacement and conservative cleanup retain their observable outcomes.
 - Private-input ordering/restoration, input bounds, secret-free failures, deterministic source precedence, no fallback, broker-only loading and credential-free healthy reuse remain intact.
 - Existing protected state/key admission assertions remain enforced. Review the shared-caller inventory above rather than weakening those tests to fit token simplification.
-- README/help/success messages disclose plaintext exposure and distinguish candidate behavior, released installation and unverified first use.
+- README/help/success messages disclose plaintext exposure. The README matches the exact source version, requires checking its npm availability before installation and keeps first use explicitly unverified.
 
 Native state/key enforcement, actual terminal privacy, installed first use, login/reboot startup, Telegram outcomes and multi-harness behavior remain deferred and unverified. Unit success and independent review do not substitute for those outcomes or for candidate-specific landing/exposure decisions. The accepted plaintext risk is not an unresolved design decision. No new external platform interface is designed by this change.
 
