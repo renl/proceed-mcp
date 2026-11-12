@@ -30,7 +30,8 @@ test('SETUP-PRIVATE: Proceed enters private mode before input and restores it af
     assert.ok(result.stderr.length > 0, 'fixed prompt uses operator stderr, not protocol stdout');
     prompt ??= result.stderr;
     assert.equal(result.stderr, prompt, 'prompt reveals neither length nor masking characters');
-    assert.match(result.stdout, /same account|same-account/);
+    assert.match(result.stdout, /plaintext/i);
+    assert.ok(!/owner.only|same.account protection|prepare.*inheritance/i.test(result.stdout));
     assert.ok(!/valid token|paired successfully|approval received/i.test(result.stdout));
     restored(result);
   }
@@ -136,10 +137,11 @@ test('SETUP-ARGUMENTS: rejected token values are not reproduced or read as input
 });
 
 test('SETUP-PATH: unsafe ancestry and separated missing destinations refuse before consuming stdin', async (t) => {
-  for (const name of ['unsafe ancestry', 'inside state with missing parents'])
+  for (const name of ['redirected ancestry', 'inside state with missing parents'])
     await t.test(name, async () => {
       m.reset();
-      if (name === 'unsafe ancestry') m.current.entries.get(m.home).info.mode = 0o777;
+      if (name === 'redirected ancestry')
+        m.current.entries.get(m.home).info.isSymbolicLink = () => true;
       else m.current.destination = m.path.join(m.stateDir, 'new', 'nested', 'telegram.token');
       const result = await m.invoke({
         stdinMode: true,

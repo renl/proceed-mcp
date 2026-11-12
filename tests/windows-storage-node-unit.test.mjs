@@ -941,20 +941,8 @@ test('WIN-PRESERVE: init with unknown entries refuses without config read or rol
   });
 });
 
-test('WIN-TOKEN: unavailable protection query refuses selected file before opening contents', async () => {
-  await windowsUnit(async () => {
-    childReply = () => ({ error: unavailable() });
-    let reads = 0;
-    storageBindings.open = () => {
-      reads++;
-      throw unavailable();
-    };
-    await assert.rejects(
-      credential.loadCredentialFile({ file: 'C:\\Tokens\\telegram.token', stateDir: target }),
-    );
-    assert.equal(reads, 0);
-  });
-});
+// Ordinary token-file query independence is covered in the shared
+// proceed-credential-storage-cases suite. Protected callers below stay guarded.
 
 test('WIN-JOURNAL: admission failure precedes replay, truncation or append open', async () => {
   await windowsUnit(async () => {
@@ -1605,7 +1593,7 @@ const { startPortableRuntime } = await import('../src/broker/portable-runtime.js
 const { harnessTuiDefinition } = await import('../src/harness/tui-plugin.js');
 const { run: runCli } = await import('../src/cli/main.js');
 
-test('WIN-PROVISION: actual public CLI refuses unavailable protection without consuming stdin', async () => {
+test('WIN-PROVISION: protected configuration still refuses unavailable protection before token input', async () => {
   await windowsUnit(async () => {
     childReply = () => ({ error: unavailable() });
     storageBindings.readFile = () => JSON.stringify(config.createEmptyConfig());

@@ -85,13 +85,13 @@ export async function memory(platform = 'linux') {
     lstat,
     stat: lstat,
     async realpath(name) {
-      return name;
+      return s.realpath ? s.realpath(name) : name;
     },
-    async mkdir(name) {
-      s.events.push(['mkdir', name]);
+    async mkdir(name, options) {
+      s.events.push(['mkdir', name, options]);
       if (s.entries.has(name)) throw collision();
       get(path.dirname(name));
-      add(name);
+      add(name, 'directory', s.createdDirectoryInfo);
     },
     async readdir() {
       return [];
@@ -103,15 +103,16 @@ export async function memory(platform = 'linux') {
       s.events.push(['unlink', name]);
       s.entries.delete(name);
     },
-    async open(name, flags) {
-      s.events.push(['open', name, flags]);
+    async open(name, flags, mode) {
+      s.events.push(['open', name, flags, mode]);
+      if (s.openFailure) throw Object.assign(new Error(SECRET), { code: 'EACCES' });
       if (flags === 'wx') {
         if (s.race) {
           add(name, 'file').bytes = Buffer.from('racing-existing');
           throw collision();
         }
         if (s.entries.has(name)) throw collision();
-        add(name, 'file');
+        add(name, 'file', s.createdFileInfo);
       }
       const entry = get(name);
       return {
@@ -133,6 +134,7 @@ export async function memory(platform = 'linux') {
         },
         async sync() {
           s.events.push(['sync', name]);
+          if (s.syncFailure) throw new Error(SECRET);
           s.afterSync?.(entry);
         },
         async close() {
