@@ -31,7 +31,7 @@ import {
   LocalRequestError,
   SecureChannelError,
 } from '../http/local-client.js';
-import { LOCAL_WAIT_TIMEOUT_MS, LOCAL_REQUEST_TIMEOUT_MS } from '../http/local-client.js';
+import { LOCAL_REQUEST_TIMEOUT_MS } from '../http/local-client.js';
 import { createToolExecutor } from '../mcp/execution.js';
 import { createRegistrationBinding } from '../mcp/registration.js';
 import { runMcpServer } from '../mcp/server.js';
@@ -690,11 +690,11 @@ async function runPair(argv, { stdout, env }) {
 // credential; no harness URL, password, host admission or proprietary metadata is
 // needed to serve the catalog, and stdout is left to protocol messages alone. Tool
 // execution uses that credential against the configured loopback broker port, so
-// preparation reserves real authority and the waiting call waits on a longer
-// deadline. One availability attempt starts at adapter launch: it never blocks
-// initialization or catalog traffic, and broker-dependent calls await its shared
-// result. The adapter passes only the nonsecret credential path to a detached
-// broker child; it never opens that file.
+// preparation reserves real authority and the waiting call is bounded by its caller
+// rather than by a product-internal exchange deadline. One availability attempt
+// starts at adapter launch: it never blocks initialization or catalog traffic, and
+// broker-dependent calls await its shared result. The adapter passes only the
+// nonsecret credential path to a detached broker child; it never opens that file.
 async function runMcp(argv, { env }) {
   const { positionals, options } = parseArguments(argv, {
     valueOptions: ['state-dir', 'owner', 'harness-id', TOKEN_FILE_OPTION],
@@ -755,14 +755,15 @@ async function runMcp(argv, { env }) {
     }),
     availability,
   );
-  // The waiting call keeps its own longer deadline, because one broker poll
-  // turnover is slower than an ordinary management exchange.
+  // The waiting call is caller-bounded: it installs no product-internal exchange
+  // deadline, because one broker poll turnover is slower than an ordinary management
+  // exchange and only the caller's own limits end the wait.
   const waitClient = gateClient(
     createSecureLocalClient({
       port: config.broker.port,
       lockFile: paths.brokerLockFile,
       token: credential,
-      timeoutMs: LOCAL_WAIT_TIMEOUT_MS,
+      mode: 'caller',
     }),
     availability,
   );
