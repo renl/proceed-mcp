@@ -57,5 +57,5 @@ jobs:
         timeout-minutes: 1
       - shell: bash
         run: |
-          node --test --test-reporter=tap tests/authenticated-readiness-deadline.test.mjs tests/release-metadata.test.mjs
+          node --test --test-reporter=tap tests/authenticated-readiness-deadline.test.mjs tests/ordinary-exchange-deadline.test.mjs tests/release-metadata.test.mjs
         timeout-minutes: 1
