@@ -2,14 +2,14 @@
 
 Proceed sends an agent's approval request to your private Telegram chat and returns the human decision to the waiting MCP call. Only an explicit Approve grants approval. Proceed records the outcome and never executes the action.
 
-This guide matches source version `0.1.0-preview.5`. Check that this exact version is available from npm before installing.
+This guide matches source version `0.1.0-preview.6`. Check that this exact version is available from npm before installing.
 
 Package: [@meshimize/proceed-mcp](https://www.npmjs.com/package/@meshimize/proceed-mcp)
 
 ## Install
 
 ```console
-npm install --global @meshimize/proceed-mcp@0.1.0-preview.5
+npm install --global @meshimize/proceed-mcp@0.1.0-preview.6
 proceed-mcp --help
 ```
 
