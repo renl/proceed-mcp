@@ -56,9 +56,10 @@ shrink toward zero and eventually refuse a healthy exchange.
 
 ## 2. Production correction (software engineer)
 
-- [ ] 2.1 Give the ordinary authenticated local exchange the remaining original command or startup deadline instead of the fixed 10,000 ms per-exchange budget, in the allowlist below, and change nothing else.
+- [x] 2.1 Give the ordinary authenticated local exchange the remaining original command or startup deadline instead of the fixed 10,000 ms per-exchange budget, in the allowlist below, and change nothing else.
   - Acceptance: `node --test tests/ordinary-exchange-deadline.test.mjs` reports 7 pass, 0 fail, 0 skipped. Report the actual counts in the evidence line.
   - A correction that fixes one caller while another keeps the fixed budget is incomplete. All four sites shall be corrected in this one commit series.
+  - Evidence: `22da13a94c41f4aff4cfeee5ffff370d8a2776ff` changes one file, `src/cli/main.js`, in 15 insertions and 4 deletions: `runStatus` captures `commandStart` after `noPositionals` and before `commandStatePaths` and passes `remainingStartupBudget(commandStart)`, `runRetry` does the same after its one-request_id argument check, `runPair` passes `remainingStartupBudget(attemptStart)`, the `runMcp` ordinary client passes one `remainingStartupBudget(attemptStart)` snapshot at construction, and the `../http/local-client.js` named import narrows to `LOCAL_WAIT_TIMEOUT_MS`. The `runMcp` wait client still passes `LOCAL_WAIT_TIMEOUT_MS`, no ordinary site still passes `LOCAL_REQUEST_TIMEOUT_MS`, and `src/http/local-client.js`, `src/state/ownership.js`, `src/broker/availability.js`, `src/harness/**`, `tests/**` and the remaining budget constants are untouched. Focused suite after the correction: 7 tests, 7 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo.
 
   **Production allowlist, exhaustive.** Only `src/cli/main.js`. Four edits, at the `timeoutMs` argument of each ordinary exchange:
 
@@ -75,8 +76,9 @@ shrink toward zero and eventually refuse a healthy exchange.
   - The `runMcp` wait client's `timeoutMs: LOCAL_WAIT_TIMEOUT_MS`, the `runStop` exchanges, `awaitSecureAvailability` and the harness operator helper stay as they are.
   - Any new budget constant, clamp, retry, fallback, log line, message wording, exit-code change or refactor. `LOCAL_REQUEST_TIMEOUT_MS` keeps its value and stays the default of `createLocalClient` and `createSecureLocalClient`.
 
-- [ ] 2.2 Run the bounded sequence in "Test mapping and run sequence", record the implementation commit and the actual counts, and stop.
+- [x] 2.2 Run the bounded sequence in "Test mapping and run sequence", record the implementation commit and the actual counts, and stop.
   - Acceptance: `node --check src/cli/main.js` exits 0, the focused suite is 7 pass and 0 fail, `git diff --check` is clean, and the diff touches only allowlisted paths.
+  - Evidence, on the implementation commit `22da13a94c41f4aff4cfeee5ffff370d8a2776ff` from this worktree, each command bounded to 60 seconds except the suite at 180 seconds: `node --check src/cli/main.js` exit 0, `node --check tests/ordinary-exchange-deadline.test.mjs` exit 0 unchanged, `node --test tests/ordinary-exchange-deadline.test.mjs` exit 0 with 7 tests, 7 pass, 0 fail, 0 skipped. The measured-33-second case, which was the recorded red at the same head's baseline, now passes with three protected reads and exactly one `/v1/status` request. `git diff --check` exit 0. The tracked diff of that commit is `src/cli/main.js` alone. `openspec validate fix-ordinary-exchange-deadline --strict` is UNRUN here, not passed: this worktree has no `node_modules`, so the pinned CLI is absent and installing it is outside the authorized scope. Its last recorded exit 0 covers the change metadata, which this correction does not touch. No `npm test`, discovery, readiness, integration, e2e, build, pack, install, broker, status or state command was run.
   - Do not run `npm test`, directory discovery, the readiness suite, integration, e2e, build, pack, install or any broker, status or state command. Do not edit the tests to fit the implementation. Do not push, merge or archive.
 
 ## 3. Independent verification (test engineering)
