@@ -158,7 +158,6 @@ test('WAIT-U-INPUT: required/formats/scalar/duration validation before all broke
   }
 });
 test('WAIT-U-CREATE: exact create once/default omission/capability, repeated204 same target/registration', async () => {
-  assert.equal(local.LOCAL_WAIT_TIMEOUT_MS, 32000);
   for (const extra of [
     {},
     { expires_in_seconds: 60 },

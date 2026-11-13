@@ -45,8 +45,28 @@ export const LOCAL_PRODUCT_RESPONSE_BYTES = 65_536;
 
 export const LOCAL_REQUEST_TIMEOUT_MS = 10_000;
 
-// A waiting exchange outlives the broker's bounded poll turnover, so it has its own deadline.
-export const LOCAL_WAIT_TIMEOUT_MS = 32_000;
+// The exchange-deadline mode is a closed set chosen once at construction. `budget`
+// keeps one absolute product-internal budget for the whole exchange; `caller`
+// installs no product-internal duration at all, so the caller's own limits are the
+// only bound. A caller mode carrying any duration would silently behave as a
+// ceiling, so that combination is refused rather than ignored.
+const EXCHANGE_MODES = new Set(['budget', 'caller']);
+
+function assertExchangeMode(mode, timeoutMs) {
+  if (!EXCHANGE_MODES.has(mode)) {
+    throw new LocalRequestError('INVALID_REQUEST', 'the exchange deadline mode is not usable');
+  }
+  if (mode === 'caller' && typeof timeoutMs === 'number') {
+    throw new LocalRequestError('INVALID_REQUEST', 'the caller-bounded exchange takes no duration');
+  }
+}
+
+// The operation budget of one `budget` exchange: it starts before the first
+// protected read, so a slow read is charged to the caller's original limit instead
+// of handing the exchange a fresh timer.
+function operationBudget(budgetMs, startedAt) {
+  return () => budgetMs - (performance.now() - startedAt);
+}
 
 export function createLocalClient({ port, token, timeoutMs = LOCAL_REQUEST_TIMEOUT_MS }) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -182,13 +202,10 @@ function profileProblem(socket) {
 // presented or accepted, strict client validation stays on, and the callbacks
 // select the fixed public identity rather than a peer-supplied key. Cancellation
 // is transport cancellation here too: an aborted attempt destroys the socket it
-// already owns rather than waiting for the handshake timer.
-function openSecureSocket({
-  port,
-  psk,
-  timeoutMs = LOCAL_HANDSHAKE_TIMEOUT_MS,
-  signal = undefined,
-}) {
+// already owns rather than waiting for the handshake timer. A caller-bounded
+// attempt installs no handshake timer, so only `secureConnect`, a socket error or
+// cancellation settles it.
+function openSecureSocket({ port, psk, timeoutMs, signal = undefined }) {
   return new Promise((resolve, reject) => {
     let tcpConnected = false;
     let settled = false;
@@ -218,16 +235,18 @@ function openSecureSocket({
       }
       resolve(value);
     };
-    timer = setTimeout(
-      () => {
-        finish(
-          tcpConnected
-            ? conflictingChannel('the secure channel did not establish in time')
-            : unavailableChannel('the broker is not reachable'),
-        );
-      },
-      Math.max(1, timeoutMs),
-    );
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(
+        () => {
+          finish(
+            tcpConnected
+              ? conflictingChannel('the secure channel did not establish in time')
+              : unavailableChannel('the broker is not reachable'),
+          );
+        },
+        Math.max(1, timeoutMs),
+      );
+    }
     if (signal !== undefined && signal !== null) {
       if (signal.aborted) {
         cancel();
@@ -263,10 +282,11 @@ async function stableRecord(lock) {
   return current;
 }
 
-// One exchange owns one absolute budget. The protected-record comparisons, TLS
-// establishment and the HTTP exchange all spend that same remaining time instead
-// of each starting a fresh timer, so a slow handshake cannot buy a slow response
-// extra time beyond the caller's deadline.
+// One `budget` exchange owns one absolute budget. The protected-record comparisons,
+// TLS establishment and the HTTP exchange all spend that same remaining time
+// instead of each starting a fresh timer, so a slow handshake cannot buy a slow
+// response extra time beyond the caller's deadline. A `caller` exchange creates
+// none, so no product-internal duration exists to consume.
 function exchangeDeadline(budgetMs) {
   const endsAt = performance.now() + Math.max(1, budgetMs);
   return () => endsAt - performance.now();
@@ -275,10 +295,12 @@ function exchangeDeadline(budgetMs) {
 // A socket that this exchange already owns is bounded even while the caller is
 // awaiting a protected-record read that cannot itself be cancelled: expiry or
 // cancellation destroys the live transport, and the pending read's later result
-// is refused by the next budget check instead of authorizing continuation.
+// is refused by the next budget check instead of authorizing continuation. A
+// caller-bounded exchange keeps the cancellation listener and installs no timer.
 function guardOwnedSocket(socket, signal, remainingTime) {
   const abort = () => socket.destroy();
-  const timer = setTimeout(abort, Math.max(1, remainingTime()));
+  const timer =
+    remainingTime === null ? undefined : setTimeout(abort, Math.max(1, remainingTime()));
   if (signal !== undefined && signal !== null) {
     if (signal.aborted) abort();
     else signal.addEventListener('abort', abort, { once: true });
@@ -303,6 +325,7 @@ function httpOverSocket({
 }) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let timer;
     const bytes = body === undefined ? undefined : Buffer.from(JSON.stringify(body), 'utf8');
     const merged = {
       ...headers,
@@ -331,10 +354,12 @@ function httpOverSocket({
       resolve(value);
     };
     const cancel = () => finish(unavailableChannel('the local request was cancelled'));
-    const timer = setTimeout(
-      () => finish(unavailableChannel('the secure broker did not answer in time')),
-      Math.max(1, timeoutMs),
-    );
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(
+        () => finish(unavailableChannel('the secure broker did not answer in time')),
+        Math.max(1, timeoutMs),
+      );
+    }
     if (signal !== undefined && signal !== null) {
       if (signal.aborted) {
         cancel();
@@ -385,10 +410,12 @@ function httpOverSocket({
 
 // One authenticated exchange over a fresh channel. The stable protected record
 // is compared before the Authorization header and again after a readiness
-// response, so a later substitution never inherits an earlier success. A single
-// absolute budget covers every phase, and the actual socket is aborted when it
-// expires: a phase that starts, or a response that settles, after the deadline
-// never authorizes a later exchange or adoption.
+// response, so a later substitution never inherits an earlier success. In `budget`
+// mode a single absolute budget covers every phase, and the actual socket is
+// aborted when it expires: a phase that starts, or a response that settles, after
+// the deadline never authorizes a later exchange or adoption. `caller` mode
+// installs no product-internal duration at all, so only a settled response, a
+// response-size breach, a transport error or end, or caller abort ends it.
 export async function secureExchange({
   lock,
   token,
@@ -396,35 +423,46 @@ export async function secureExchange({
   path,
   body,
   headers = {},
-  timeoutMs = LOCAL_REQUEST_TIMEOUT_MS,
+  mode = 'budget',
+  timeoutMs,
   maxBytes = LOCAL_LIFECYCLE_BYTES * 64,
   signal,
 }) {
+  // An invalid mode or a duration handed to a caller-bounded exchange is refused
+  // before any protected read, so no caller can pass a number that behaves as a
+  // ceiling.
+  assertExchangeMode(mode, timeoutMs);
   if (lock === undefined || lock.schemaVersion !== 2) {
     throw conflictingChannel('the broker ownership record is not a secure publication');
   }
   if (signal?.aborted === true) {
     throw unavailableChannel('the local request was cancelled');
   }
-  const remainingTime = exchangeDeadline(timeoutMs);
+  const callerBounded = mode === 'caller';
+  const budgetMs = timeoutMs === undefined ? LOCAL_REQUEST_TIMEOUT_MS : timeoutMs;
+  const remainingTime = callerBounded ? null : exchangeDeadline(budgetMs);
   // Check remaining budget before starting any phase. A protected-record read
   // cannot be cancelled, so its result only authorizes the next phase while time
-  // remains.
+  // remains. A caller-bounded exchange refuses only on the caller's own decision.
   const expired = () => {
     if (signal?.aborted === true) {
       throw unavailableChannel('the local request was cancelled');
     }
-    if (remainingTime() <= 0) {
+    if (remainingTime !== null && remainingTime() <= 0) {
       throw unavailableChannel('the secure broker did not answer in time');
     }
   };
   expired();
   if (lock.path !== undefined) await stableRecord(lock);
   expired();
+  const handshakeLimit =
+    remainingTime === null
+      ? undefined
+      : Math.min(LOCAL_HANDSHAKE_TIMEOUT_MS, Math.max(1, remainingTime()));
   const socket = await openSecureSocket({
     port: lock.port,
     psk: lock.channel.psk,
-    timeoutMs: Math.min(LOCAL_HANDSHAKE_TIMEOUT_MS, Math.max(1, remainingTime())),
+    timeoutMs: handshakeLimit,
     signal,
   });
   // The socket is owned from here until the exchange settles: a deadline or
@@ -444,7 +482,7 @@ export async function secureExchange({
       path,
       body,
       headers,
-      timeoutMs: Math.max(1, remainingTime()),
+      timeoutMs: remainingTime === null ? undefined : Math.max(1, remainingTime()),
       maxBytes,
       signal,
     });
@@ -466,12 +504,14 @@ export async function secureExchange({
 
 // Per-request secure client: each new business, wait or lifecycle exchange
 // performs its own handshake and stable-record comparison. A successful check on
-// an earlier socket never authorizes a later one.
+// an earlier socket never authorizes a later one. The exchange-deadline mode is
+// chosen here, once, so no ordinary exchange can become unbounded by accident.
 export function createSecureLocalClient({
   port,
   lockFile,
   token,
-  timeoutMs = LOCAL_REQUEST_TIMEOUT_MS,
+  mode = 'budget',
+  timeoutMs,
   maxResponseBytes = LOCAL_LIFECYCLE_BYTES * 64,
 }) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -480,19 +520,23 @@ export function createSecureLocalClient({
   if (typeof token !== 'string' || token === '') {
     throw new LocalRequestError('CREDENTIAL_UNAVAILABLE', 'a local credential is missing');
   }
+  assertExchangeMode(mode, timeoutMs);
+  const callerBounded = mode === 'caller';
+  const budgetMs = timeoutMs === undefined ? LOCAL_REQUEST_TIMEOUT_MS : timeoutMs;
   return {
     async request(method, path, body, extraHeaders = {}, options = {}) {
       const signal = options?.signal;
       // One operation budget starts before the first protected read: a slow record
       // read is charged to the caller's original limit instead of handing the
-      // exchange a fresh timer, and an already-cancelled call touches no file.
+      // exchange a fresh timer, and an already-cancelled call touches no file. A
+      // caller-bounded client has no such budget and refuses only on cancellation.
       const startedAt = performance.now();
-      const remainingTime = () => timeoutMs - (performance.now() - startedAt);
+      const remainingTime = callerBounded ? null : operationBudget(budgetMs, startedAt);
       const expired = () => {
         if (signal?.aborted === true) {
           throw new LocalRequestError('BROKER_UNAVAILABLE', 'the local request was cancelled');
         }
-        if (remainingTime() <= 0) {
+        if (remainingTime !== null && remainingTime() <= 0) {
           throw new LocalRequestError('BROKER_UNAVAILABLE', 'the broker did not answer in time');
         }
       };
@@ -525,7 +569,8 @@ export function createSecureLocalClient({
         path,
         body,
         headers: extraHeaders,
-        timeoutMs: remainingTime(),
+        mode,
+        timeoutMs: remainingTime === null ? undefined : remainingTime(),
         maxBytes: maxResponseBytes,
         signal,
       });
