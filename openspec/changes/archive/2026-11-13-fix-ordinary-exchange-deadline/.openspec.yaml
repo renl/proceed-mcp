@@ -1,0 +1,14 @@
+schema: spec-driven
+created: 2026-11-13
+skip_specs: true
+x-worktree:
+  path: .worktree/fix-ordinary-exchange-deadline
+  branch: fix-ordinary-exchange-deadline
+  change: fix-ordinary-exchange-deadline
+  owner: test engineering
+  status: active
+  baseline: daf0cf49d4782597b0c5e485165441fdcc6565ae
+  outcome: The ordinary authenticated local exchange uses the remaining original startup or command deadline instead of a fixed short per-exchange budget.
+  next-action: Owner proposal and design, then the allowlisted production correction and independent integrated-candidate review.
+  landing-blocker: Minimal production correction, deterministic unit regressions and independent review.
+  cleanup-evidence: Retained for active work. No landing or abandonment route exists yet.

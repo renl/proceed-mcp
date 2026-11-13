@@ -31,7 +31,6 @@ import {
   LocalRequestError,
   SecureChannelError,
 } from '../http/local-client.js';
-import { LOCAL_REQUEST_TIMEOUT_MS } from '../http/local-client.js';
 import { createToolExecutor } from '../mcp/execution.js';
 import { createRegistrationBinding } from '../mcp/registration.js';
 import { runMcpServer } from '../mcp/server.js';
@@ -673,7 +672,9 @@ async function runPair(argv, { stdout, env }) {
       method: 'POST',
       path: '/v1/pairing',
       body: {},
-      timeoutMs: LOCAL_REQUEST_TIMEOUT_MS,
+      // The ordinary exchange spends the remaining original attempt budget, so
+      // slow protected reads are charged to the deadline this call already holds.
+      timeoutMs: remainingStartupBudget(attemptStart),
     });
   } catch (error) {
     throw channelCliFailure(error);
@@ -752,6 +753,10 @@ async function runMcp(argv, { env }) {
       port: config.broker.port,
       lockFile: paths.brokerLockFile,
       token: credential,
+      // One construction-time snapshot of the remaining original startup budget:
+      // this long-lived adapter holds no per-command deadline, so recomputing a
+      // remainder per request would shrink toward zero and refuse a healthy exchange.
+      timeoutMs: remainingStartupBudget(attemptStart),
     }),
     availability,
   );
@@ -877,6 +882,9 @@ async function runStatus(argv, { stdout, env }) {
   });
   noPositionals(positionals, 'status');
 
+  // One command deadline, started after argument validation and before the first
+  // state read, supplies the ordinary exchange budget below.
+  const commandStart = performance.now();
   const paths = commandStatePaths(options, env);
   const config = await loadPortableConfiguration(paths);
   const control = await readLocalCredential(paths.controlCredentialFile, 'the control credential');
@@ -889,7 +897,7 @@ async function runStatus(argv, { stdout, env }) {
       token: control,
       method: 'GET',
       path: '/v1/status',
-      timeoutMs: LOCAL_REQUEST_TIMEOUT_MS,
+      timeoutMs: remainingStartupBudget(commandStart),
     });
   } catch (error) {
     throw channelCliFailure(error);
@@ -926,6 +934,8 @@ async function runRetry(argv, { env }) {
     throw invalidArgument('retry requires exactly one request_id');
   }
 
+  // Same shape as `status`: one command deadline supplies the exchange budget.
+  const commandStart = performance.now();
   const paths = commandStatePaths(options, env);
   await loadPortableConfiguration(paths);
   const control = await readLocalCredential(paths.controlCredentialFile, 'the control credential');
@@ -939,7 +949,7 @@ async function runRetry(argv, { env }) {
       method: 'POST',
       path: `/v1/requests/${encodeURIComponent(positionals[0])}/retry`,
       body: {},
-      timeoutMs: LOCAL_REQUEST_TIMEOUT_MS,
+      timeoutMs: remainingStartupBudget(commandStart),
     });
   } catch (error) {
     throw channelCliFailure(error);
