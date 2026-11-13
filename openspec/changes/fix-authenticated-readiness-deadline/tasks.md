@@ -25,6 +25,7 @@ Normal MCP use should reach authenticated broker readiness within the remaining 
 
 - [x] 2.1 Record immutable implementation head/base and inspect the complete changed/untracked set. Verify the allowlist, focused formatting and syntax checks, affected unit results and CLI structural validation below. Reuse trustworthy unchanged evidence by revision and assertion scope. Record failures honestly and route corrections through the delivery coordinator.
 - [ ] 2.2 Complete independent unit/static candidate review before owner finalization, archive or merge routing. Confirm any later finalization delta is docs-only or revalidate affected code, tests, dependencies, configuration or baseline. Verify candidate-specific landing/exposure risk disposition is recorded in the status log by its owner. Unit-only evidence is not runtime or release readiness.
+  - Verification portion complete: final affected workflow/candidate review below is PASS. This combined task stays incomplete pending the candidate-specific landing/exposure decision and its status-log record. No acceptance or delivery authorization is inferred.
 
 ## 3. Existing CI unit-selection amendment
 
@@ -39,7 +40,7 @@ This bounded correction keeps regression coverage in the same change and draft P
 
 Implementation constraints: preserve workflow name `ci`, `pull_request` trigger, job identity `validate`, Ubuntu `24.04`, job timeout 15 minutes, Node `24.22.2`, both action commit pins, `permissions: contents: read`, `persist-credentials: false`, `npm ci --ignore-scripts`, existing step deadlines and the format-before-units order. Do not change authentication, permissions, dependencies, tool versions or other jobs. No wildcards, directory discovery, `npm test`, new tests, harnesses, workflow frameworks or non-unit commands. Commit the workflow delta in a new commit on the same branch/PR, not a new change. Task checkboxes/evidence may be updated without redefining criteria. No source, test, README, spec, design, proposal, metadata, archive, status, AGENTS, runtime, native, global configuration, state or token changes are authorized by this amendment. It grants no push, archive, merge, installation or publication authority.
 
-Boundary delta: none. This selects already approved unit assertions without changing the contract, fake, transport or security behavior. No mandatory Architect replay. Real-boundary and installed behavior remain UNRUN / UNVERIFIED under the unit-only restriction. Prior Linux CI and local results are historical evidence, not proof that the amended workflow has run. All three amendment tasks remain incomplete until their stated checks are executed and recorded.
+Boundary delta: none. This selects already approved unit assertions without changing the contract, fake, transport or security behavior. No mandatory Architect replay. Real-boundary and installed behavior remain UNRUN / UNVERIFIED under the unit-only restriction. Amendment execution is established by the exact-head CI evidence below, not by earlier local results.
 
 ## Test mapping and run sequence
 
@@ -94,6 +95,14 @@ Preparation evidence: CLI v1.15.0 strict validation passes and apply instruction
 
 Founder-visible proof is a successful normal installed MCP interaction with the expected human outcome. Focused unit assertions are direct proof of the modeled deadline invariant but proxies for that live outcome. The historical timeout's exact runtime cause remains unproven.
 
+### Final affected workflow and integrated-candidate review, 2026-11-13
+
+- Verdict: PASS within complete-candidate unit/static scope, no hotfix needed. Reviewed head `2d1cc68ca739fbf6a1c141de8d512f5304d61d47`, base `837f360afe67caac1c8011939d7b9ad2481f0a47`. Tracked/untracked state was clean. Since reviewed complete candidate `3c51702c9d8fd929ff53e0976199e78fc8df309e`, only the four-line CI selection and active task evidence change. Production/readiness tests remain unchanged from `7d5a30c6081a02074e5873a38762c8f9167dddfa`. Metadata, README, reconciled release tests, dependencies, proposal, design and change metadata remain unchanged from the prior complete-candidate review.
+- Workflow guardrails PASS by independent diff review: only the exact approved two-file Node unit command is appended, with TAP reporter and one-minute deadline. Existing commands and experimental flags, format-before-units order, workflow/check identity, trigger, Ubuntu/Node versions, action pins, job/step deadlines, read-only contents permission, disabled checkout credential persistence and scripts-disabled dependency installation are unchanged. No secrets reference, permission expansion, wildcard, discovery or non-unit command is added. No contract or fake delta requires another architecture review.
+- Actual GitHub evidence independently retrieved: [run 43436060479](https://github.com/renl/proceed-mcp/actions/runs/43436060479) is completed/success at the exact reviewed head. Its Ubuntu 24.04 validate job reports Node v24.22.2 and passing workflow formatting. Log totals per unit step are 117, 87, 44, 1, 131, 30, 147, 1 and 27, totaling 585 PASS. Every step reports zero failures, cancellations, skips and TODOs. The last step executes the 18 readiness plus 9 metadata records. Earlier successful run `43435887155` at `14020253cf2776bb4bb559e52c0688c40ac007f0` is corroboration, not another 585 distinct records. Its delta to the reviewed head is task evidence only.
+- Reused prior independent 18/18 readiness and 9/9 metadata unit/static evidence at the revisions above, including modeled cleanup assertions and strict OpenSpec PASS with informational `skip_specs` notice. No units or unchanged structural checks were replayed for this review. Baseline-to-candidate whitespace check PASS. This evidence edit is docs-only and changes no verification input.
+- Assertion status PASS for the assigned unit/static scope. Modeled cleanup assertions PASS by reused unit evidence. No owned runtime resources were started or require teardown. Worktree cleanup remains pending because the change is active and unmerged. Native protected reads, real TLS/actual socket cleanup, installed readiness and Telegram outcomes remain UNRUN / UNVERIFIED. The historical runtime cause is not established. Task 2.2 remains open only for the candidate-specific risk disposition. Archive, merge, publication, installation and runtime actions remain separately unauthorized by this review.
+
 ## Worktree lifecycle
 
 - Path: `.worktree/fix-authenticated-readiness-deadline`
@@ -101,8 +110,8 @@ Founder-visible proof is a successful normal installed MCP interaction with the 
 - Owner: test engineering
 - Status: active, complete-candidate unit/static review PASS within assigned scope, finalization incomplete, not landed
 - Mergeable outcome: authenticated readiness uses remaining original startup time with every existing guard and cleanup obligation intact.
-- Nearest landing blocker: actual exact-final-head Linux unit CI, then required owner/risk/authorization gates.
-- Next action: route the frozen preview.6 candidate for authorized PR/CI preparation and required owner/risk/authorization decisions. Runtime remains unverified.
+- Nearest landing blocker: candidate-specific landing/exposure risk decision, then required finalization/authorization gates. Exact reviewed-head Linux unit CI and independent unit/static review PASS.
+- Next action: route the reviewed preview.6 candidate on draft PR #14 for the user delivery decision and required finalization gates. Runtime remains unverified.
 - Cleanup evidence: retained for active work. No cleanup attempted. Lifecycle ownership continues through verified landing or explicit abandonment and safe removal.
 
 ## Workflow follow-up
