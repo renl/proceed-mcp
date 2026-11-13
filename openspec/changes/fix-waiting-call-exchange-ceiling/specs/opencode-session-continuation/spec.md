@@ -1,11 +1,5 @@
 # Delta for opencode-session-continuation
 
-A waiting call stays open for the human outcome for as long as the caller's own call and transport remain active and the request is actionable. No product-internal exchange, attempt, poll or command duration bounds that wait. The internal duration this delta removes is the waiting exchange's own. The request-create exchange and the registration exchanges made inside the same invocation keep their existing ordinary exchange budget, which this delta neither changes nor claims as resolved. Parent: [proposal](../../proposal.md).
-
-## Direction Check
-
-Subject: the operator and their agents waiting on an actionable request against their configured broker. Outcome: the human's actual outcome reaches that still-active waiting call. Problem: a product-internal duration ceiling, spent on protected work before an outcome can be read, ends the wait while the caller is still waiting. The change removes that internal ceiling as a bound and leaves the caller's own limits and the request's disclosed expiry in place.
-
 ## MODIFIED Requirements
 
 ### Requirement: Portable waiting-call outcome delivery
