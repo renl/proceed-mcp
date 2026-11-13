@@ -22,13 +22,13 @@ None.
 
 ### Modified Capabilities
 
-None at the requirements level. The affected implementation serves [opencode-session-continuation](../../specs/opencode-session-continuation/spec.md#requirement-automatic-broker-availability-for-normal-mcp-use), whose existing contract already requires verified readiness within a finite startup deadline. Its scenarios cover safely stopped startup, healthy reuse and readiness never arriving. Existing ownership, confidential admission, first-use and durable-work requirements remain unchanged.
+None at the requirements level. The affected implementation serves `openspec/specs/opencode-session-continuation/spec.md`, specifically "Automatic broker availability for normal MCP use", whose existing contract already requires verified readiness within a finite startup deadline. Its scenarios cover safely stopped startup, healthy reuse and readiness never arriving. Existing ownership, confidential admission, first-use and durable-work requirements remain unchanged. This repository-root reference remains valid after archive.
 
-**Delta applicability verdict:** no capability delta is needed. This restores existing contract conformance without adding a guarantee, changing the deadline or relaxing admission. Recommend `skip_specs: true` for this genuinely specification-unchanged correction. Metadata is not changed by this proposal.
+**Delta applicability verdict:** accepted for pre-archive owner review. No capability delta or baseline spec update is needed. The proposal, design and tasks preserve the current contract without adding a guarantee, changing the deadline or relaxing admission. The existing approved `skip_specs: true` declaration is appropriate for this specification-unchanged correction. No manual spec sync is needed.
 
 ## Impact
 
 - Scope: readiness deadline handling in `src/broker/availability.js` and focused deterministic regressions in `tests/authenticated-readiness-deadline.test.mjs`.
 - Existing supported setup remains the path from an empty installation to the first approval interaction. Existing installations retain state, pairing, keys and pending work without reinitialization.
 - Verification remains unit-only with independent review. Installed runtime operation and Telegram delivery remain unverified, and this correction does not establish the exact cause of the reported live timeout.
-- Eventual preview.6 patch metadata is routine delivery preparation, not authority to publish, install or merge.
+- Preview.6 patch metadata is delivery preparation, not runtime proof. Archive, final CI, fresh merge checks, preview publication and installation follow the separately recorded PR #14 authorization with `latest` unchanged. Terminal delivery evidence belongs on [PR #14](https://github.com/renl/proceed-mcp/pull/14) or in the live status log, not in this proposal after archive.

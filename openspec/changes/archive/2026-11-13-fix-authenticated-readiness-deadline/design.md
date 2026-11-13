@@ -1,6 +1,6 @@
 ## Context
 
-The [proposal](proposal.md) restores existing [automatic availability](../../specs/opencode-session-continuation/spec.md#requirement-automatic-broker-availability-for-normal-mcp-use) and [confidential admission](../../specs/opencode-session-continuation/spec.md#requirement-private-local-authority-requires-authenticated-confidential-admission). It changes no capability contract. `skip_specs: true` is consistent with that scope. The metadata owner must record it through the authorized workflow.
+The [proposal](proposal.md) restores existing [automatic availability](/openspec/specs/opencode-session-continuation/spec.md#requirement-automatic-broker-availability-for-normal-mcp-use) and [confidential admission](/openspec/specs/opencode-session-continuation/spec.md#requirement-private-local-authority-requires-authenticated-confidential-admission). It changes no capability contract. `skip_specs: true` is consistent with that scope.
 
 `src/broker/availability.js` currently gives the complete authenticated readiness exchange the same 1,000 ms cap as credential-free occupancy. `src/http/local-client.js` correctly charges protected reads, TLS and HTTP to that supplied exchange budget. Consequently, a protected read alone can exhaust the incorrectly shortened budget before TLS starts, even with time left in the original startup attempt.
 
@@ -53,4 +53,4 @@ The first useful increment is the complete readiness deadline correction plus it
 
 No global timeout increase, ownership-read elimination, cached rejection recovery, retry framework, logging framework, setup/migration, live-broker operation or durable-state change is included. Existing operational brokers remain untouched.
 
-After this design, test engineering can define the bounded implementation task using the approved units. Required independent candidate review remains, but unchanged boundary/test-fake approval needs no separate replay. Only unit checks are permitted. This review ran no commands or tests and establishes neither live MCP readiness nor Telegram delivery. Merge, archive, publication and installation require their existing separate authorization.
+Implementation and independent candidate review are complete for pre-archive finalization. The unchanged boundary/test-fake approval needs no replay. Only unit checks are permitted. This design finalization ran no commands or tests and establishes neither live MCP readiness nor Telegram delivery. Current verification evidence, scoped authorization, accepted runtime uncertainty and timing risk, and delivery status belong in the [status log](/docs/status_log.md), not this historical design. Archive and merge do not establish installation, publication or confirmed runtime operation.
