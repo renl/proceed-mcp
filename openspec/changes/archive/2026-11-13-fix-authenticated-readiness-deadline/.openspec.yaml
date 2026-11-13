@@ -1,0 +1,14 @@
+schema: spec-driven
+created: 2026-11-13
+skip_specs: true
+x-worktree:
+  path: .worktree/fix-authenticated-readiness-deadline
+  branch: fix-authenticated-readiness-deadline
+  change: fix-authenticated-readiness-deadline
+  owner: test engineering
+  status: active
+  baseline: 837f360afe67caac1c8011939d7b9ad2481f0a47
+  outcome: Authenticate readiness within the remaining original startup deadline without weakening guards.
+  next-action: Complete owner proposal and design, resolve spec applicability, then define tasks and implement the minimal correction.
+  landing-blocker: Production correction, deterministic unit regressions and independent review.
+  cleanup-evidence: Retained for active work. No landing or abandonment route exists yet.

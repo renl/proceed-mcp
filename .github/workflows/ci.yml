@@ -55,3 +55,7 @@ jobs:
         run: |
           node --test tests/proceed-setup-package-unit.test.mjs
         timeout-minutes: 1
+      - shell: bash
+        run: |
+          node --test --test-reporter=tap tests/authenticated-readiness-deadline.test.mjs tests/release-metadata.test.mjs
+        timeout-minutes: 1

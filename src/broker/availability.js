@@ -222,12 +222,10 @@ export async function awaitSecureAvailability({
     } else if (record.schemaVersion === 1) {
       throw upgradeGuidance('the running broker uses the legacy local channel');
     } else {
-      const result = await attemptReadiness(
-        record,
-        token,
-        Math.min(PROBE_TIMEOUT_MS, Math.max(1, remaining())),
-        signal,
-      );
+      // The authenticated exchange is the readiness proof itself, so it receives
+      // the remaining original startup budget. Only credential-free occupancy and
+      // TLS establishment keep the shorter probe cap, each clipped to this time.
+      const result = await attemptReadiness(record, token, Math.max(1, remaining()), signal);
       // Adoption is authority, not an observation: cancellation or expiry while
       // readiness was pending is refused before the record is reused.
       ensureActive();
