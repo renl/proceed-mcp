@@ -22,7 +22,7 @@ Normal MCP use should reach authenticated broker readiness within the remaining 
 
 ## 2. Independent integrated-candidate review
 
-- [ ] 2.1 Record immutable implementation head/base and inspect the complete changed/untracked set. Verify the allowlist, focused formatting and syntax checks, affected unit results and CLI structural validation below. Reuse trustworthy unchanged evidence by revision and assertion scope. Record failures honestly and route corrections through the delivery coordinator.
+- [x] 2.1 Record immutable implementation head/base and inspect the complete changed/untracked set. Verify the allowlist, focused formatting and syntax checks, affected unit results and CLI structural validation below. Reuse trustworthy unchanged evidence by revision and assertion scope. Record failures honestly and route corrections through the delivery coordinator.
 - [ ] 2.2 Complete independent unit/static candidate review before owner finalization, archive or merge routing. Confirm any later finalization delta is docs-only or revalidate affected code, tests, dependencies, configuration or baseline. Verify candidate-specific landing/exposure risk disposition is recorded in the status log by its owner. Unit-only evidence is not runtime or release readiness.
 
 ## Test mapping and run sequence
@@ -50,6 +50,15 @@ Category: real local transport boundary plus existing normative availability/adm
 
 Preparation evidence: CLI v1.15.0 strict validation passes and apply instructions report `ready` with one of six tracked tasks complete. Scripts-disabled formatter bootstrap completed with no manifest/lock changes. Explicit task/metadata formatting and test syntax checks pass. No units were rerun. The unchanged approved test SHA-256 is `64b36103ae704bb23e98a43b59c3a657c585d561330dd7bc0f17ba813a64b4a2`. No production, runtime or native checks were executed.
 
+### Independent focused review, 2026-11-13
+
+- Verdict: PASS within the assigned readiness unit/static scope, with no correction needed. Immutable code/test head `7d5a30c6081a02074e5873a38762c8f9167dddfa`, base `837f360afe67caac1c8011939d7b9ad2481f0a47`. Initial tracked/untracked state is clean. The complete six-path delta contains active change metadata/proposal/design/tasks, the focused test and only `src/broker/availability.js` in production. Dependencies, configuration, versions and target baseline are unchanged.
+- Independently executed on Windows with Node v26.13.0: focused units 18 PASS, 0 FAIL, 0 skipped. Source Prettier, both source/test syntax checks and baseline-to-candidate `git diff --check` PASS. Strict OpenSpec validation PASS with informational `skip_specs` notice. Apply instructions report `ready`, three of six tasks complete before this evidence update. Structural success is not behavioral proof.
+- Reviewed remaining-time propagation through the unchanged secure client: initial discovery consumes the startup budget, all exchange phases share the supplied remainder, TLS and occupancy retain their clipped 1,000 ms subcaps, and retry spacing/global 150,000 ms budget are unchanged. Initial discovery plus all three stable-record comparisons, expiry/cancellation admission checks, pre-Authorization authentication, lifecycle identity validation, response bound and error classifications remain intact. Only the readiness argument and explanatory comment change. No guard or cleanup is removed, reordered or cached.
+- Assertion/cleanup mapping: slow protected reads and near-expiry cases prove modeled budget propagation. Read-phase expiry/cancellation tables and deadline-time HTTP settlement refuse later work/adoption. Ownership substitution and lifecycle mismatch refuse reuse. All 18 cases assert modeled timer/socket/agent/abort-listener cleanup and synthetic-secret nondisclosure. Cleanup assertions PASS. No real transport or process was created by these units, and no live broker, manager or durable state was queried or changed.
+- Reused evidence, not additional executions: the supplied baseline 16 PASS / 2 expected RED and unchanged boundary/fake approval. The implementation's additional startup-token-environment run is reported as 44 PASS only after correcting the missing module-mocks flag. Its initial plain-Node invocation failed and remains failed historical invocation evidence, not a product regression or a passing run. Linux-gated checkpoint/admission checks were not established on win32 and are not counted as passed. No additional unit records are claimed from these reports in this review's executed count.
+- Task 2.2 remains incomplete because coupled preview.6 metadata/README preparation, affected metadata-test reconciliation, final candidate review of that delta, actual Linux CI and candidate-specific landing/exposure risk disposition remain pending as applicable. This review does not authorize archive, merge or exposure. A later evidence-only task edit is docs-only. Any later code/test/dependency/configuration/baseline change needs affected revalidation. Native protected reads, real TLS/wire cleanup, installed readiness and Telegram outcomes remain UNRUN / UNVERIFIED. No runtime-cause or release-readiness claim is made.
+
 | Stage        | Required observation / current state                                                                                                                                                            | Failure, owner and trigger                                                                                                                   |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pre-merge    | Focused units green after implementation, scoped format/syntax, structural validation and independent candidate review. Baseline remains 16 PASS / 2 RED, reused only for regression readiness. | Incorrect authenticated exchange budget. Implementation owner corrects before final review. Failed/unrun checks remain incomplete.           |
@@ -64,10 +73,10 @@ Founder-visible proof is a successful normal installed MCP interaction with the 
 - Path: `.worktree/fix-authenticated-readiness-deadline`
 - Branch/change: `fix-authenticated-readiness-deadline`
 - Owner: test engineering
-- Status: active, ready for bounded implementation, not verified or landed
+- Status: active, readiness unit/static review PASS at the pinned candidate, finalization incomplete, not landed
 - Mergeable outcome: authenticated readiness uses remaining original startup time with every existing guard and cleanup obligation intact.
-- Nearest landing blocker: production correction, green deterministic regressions and independent candidate review, then required owner/risk/authorization gates.
-- Next action: implement tasks 1.2-1.3 on this branch, then settle coupled version preparation and return the immutable candidate for independent review.
+- Nearest landing blocker: coupled version preparation and affected review, actual Linux CI, then required owner/risk/authorization gates.
+- Next action: settle preview.6 metadata/README and test-owner reconciliation, review the affected finalization delta, then complete owner/risk/authorization routing.
 - Cleanup evidence: retained for active work. No cleanup attempted. Lifecycle ownership continues through verified landing or explicit abandonment and safe removal.
 
 ## Workflow follow-up
