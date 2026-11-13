@@ -2,104 +2,183 @@
 
 ## Outcome and scope
 
-Normal MCP use and the ordinary operator commands must reach the configured broker when its protected ownership reads are slow. The mergeable outcome: the ordinary authenticated local exchange uses the remaining original startup or command deadline instead of a fixed short per-exchange budget, preserving every ownership, key, identity, expiry, cancellation and cleanup safeguard. The first independently landable increment is that budget correction with its focused regressions, delivered in one OpenSpec PR into `main`.
+The ordinary authenticated local exchange must reach the configured broker when its protected
+ownership reads are slow. Mergeable outcome: the ordinary authenticated local exchange uses the
+remaining original startup or command deadline instead of a fixed short per-exchange budget, with
+every ownership, key, identity, expiry, cancellation and cleanup safeguard unchanged. One change,
+one PR into `main`, archive inside the PR.
 
-- Baseline: `main` at `daf0cf49d4782597b0c5e485165441fdcc6565ae`. No stacked parent and no other active-change dependency.
+- Baseline: `main` at `daf0cf49d4782597b0c5e485165441fdcc6565ae`. No stacked parent, no other active-change dependency.
 - Change folder: `openspec/changes/fix-ordinary-exchange-deadline/` on branch `fix-ordinary-exchange-deadline` in `.worktree/fix-ordinary-exchange-deadline`.
-- Inputs: [approved implementation record of the readiness correction](../archive/2026-11-13-fix-authenticated-readiness-deadline/design.md) and the existing [availability contract at the unchanged baseline](../../specs/opencode-session-continuation/spec.md#requirement-automatic-broker-availability-for-normal-mcp-use).
-- Owner artifacts still to write: `proposal.md` (product manager) and `design.md` (software architect). Task and test engineering owns `tasks.md` and the runnable tests only. Spec applicability (`skip_specs`) is the product author's decision, not this file's.
-- Production allowlist: `src/cli/main.js` and `src/http/local-client.js`. Any needed production change outside that allowlist returns to the delivery coordinator.
-- Test ownership: `tests/ordinary-exchange-deadline.test.mjs`. Test criteria stay with test engineering.
-- Excluded on purpose: raising the global startup budget, removing or shortening any ownership, key, identity, profile or protection check, retries or a retry framework, a logging framework, capturing child stdio, changes to pairing, provisioning, state or credentials, public error wording changes, refactors and live-broker operations. Honest error classification is a separate follow-up owned by product and architecture and is not part of this change.
+- Owner inputs already complete: [proposal](proposal.md), [design](design.md), and the recorded `skip_specs: true` change metadata. `openspec validate fix-ordinary-exchange-deadline --strict` exits 0 with the informational no-delta notice.
+- Test engineering owns this file and `tests/ordinary-exchange-deadline.test.mjs` only. Production design and implementation stay with the software engineer, which may update task checkboxes and evidence text in this file and may not change criteria.
+- First independently landable increment: this budget correction plus its focused regressions. It is the whole change. It exposes no new state, option or message, so no unexposed foundation slice is planned.
+- Nearest landing blocker: the four allowlisted budget arguments, the focused suite at 7 of 7 on the corrected candidate, and independent integrated-candidate review that diff-reviews the three non-executable call sites.
 
-## Reported field defect
+### Founder-visible success and proof class
 
-After preview.6 installation, the adapter fails one step later than before. The ordinary exchange keeps a fixed 10,000 ms budget, while roughly 33 seconds of Windows protected-record reads occur in the same command path outside it. A maintained status run returned `BROKER_UNAVAILABLE` after 42.7 seconds while broker PID 29232, parent 12464, port 43189 and ownership instance `da93cd25bcffcdb386aed440e10d5ce3` all remained consistent. A TLS or profile mismatch would have classified as `BROKER_INSTANCE_CONFLICT` and was not observed. The generic MCP message is an unmapped fallback, so classification honesty is not evidence about the cause.
+Founder-visible success: an installed operator's normal `status`, `retry` and `pair` commands and
+normal MCP adapter traffic reach the broker they configured and correctly own, instead of failing
+after about ten seconds of correct protected reads.
 
-Read-only source trace at the baseline:
+- Direct proof available now: the focused unit suite asserts the deadline invariant through the real `run(['status'])` dispatch and the real secure-exchange sequencing over a synthetic clock, record, TLS socket and HTTP reply.
+- Proxy, not proof: every other caller. `runPair`, `runRetry` and the `runMcp` ordinary client have no executable assertion, so their conformance is established by diff review in task 3.1.
+- Not established by this change: real Windows protected reads, real TLS, OS socket closure, installed startup, Linux execution of this suite, Telegram delivery, and any working `request_approval` wait on a host whose protected reads exceed 32,000 ms. Those stay UNRUN and UNVERIFIED.
 
-- `src/http/local-client.js` gives one exchange an absolute budget (`exchangeDeadline`) and refuses any phase whose remaining time is spent. That behavior is correct and stays.
-- `src/cli/main.js` ordinary exchanges (status, retry, pair) and the MCP adapter's ordinary client pass the fixed `LOCAL_REQUEST_TIMEOUT_MS` of 10,000 ms. `awaitSecureAvailability` and the readiness exchange already receive the remaining original budget, so only the ordinary exchange still starts a short fresh budget.
-- `src/state/ownership.js` protected reads (`verifyWindowsProtection`, path protection and the opened-handle checks) are not cancellable and cost about 11 seconds each on the affected host, so three such reads alone exceed 10,000 ms.
+## Approved contract
 
-## 1. Focused regressions
+Supplied by [design](design.md), fixed for implementation. The value passed is the raw remaining
+time. Existing exchange admission refuses a spent remainder before the first protected read and
+existing timer rounding clamps its own timers, so no new clamp, new constant or new deadline is
+added.
 
-- [x] 1.1 Write the memory-only, Linux-compatible unit suite at `tests/ordinary-exchange-deadline.test.mjs` that drives the real production CLI dispatch and the real secure-exchange sequencing over synthetic collaborators only. Require no native query, PowerShell, real process, real state or credential.
-  - Evidence: registration of hooks covers only these seams: ownership reads for `src/cli/main.js` and `src/http/local-client.js`, CLI configuration and control-credential reads, and the `node:tls`/`node:http` transports used by `src/http/local-client.js`. Production `secureExchange`, its deadline accounting, its guard and its cleanup stay unmodified and under test. `node --check tests/ordinary-exchange-deadline.test.mjs` passes.
-- [x] 1.2 Record the red baseline result for the right reason, then prove the assertions are satisfiable without delivering a production change.
-  - Evidence, baseline: `node --test tests/ordinary-exchange-deadline.test.mjs` reports 7 tests, 6 pass, 1 fail. The failing case is `ORDINARY-EXCHANGE: status completes when its protected reads cost the measured 33 seconds`: exit code 3, stderr `proceed-mcp: the secure broker is not reachable`, `reads=2`, `requests=0`, modelled elapsed 22,000 ms. The fixed 10,000 ms exchange budget expires during the second protected read, which is the reported defect class at the first phase where it bites. The six passing cases are guard and cleanup preservation assertions, not defect proof.
-  - Evidence, satisfiability check: in a disposable copy under ignored `.scratch/` (now removed), one minimal correction of the `runStatus` ordinary exchange budget -> the existing `STARTUP_BUDGET_MS` gives 7 pass, 0 fail, with the same production code and tests. This proves the suite is satisfiable by the intended correction and is not an unreachable assertion. It patched only the `status` call site, so it demonstrates satisfiability, not correction completeness, and the adapter caller still depends on review per task 3.1. It is a throwaway check, was never committed, and is not a delivered production edit.
+| Call site in `src/cli/main.js` | Required ordinary exchange budget |
+| --- | --- |
+| `runStatus` | Remaining time of one command deadline captured at command entry after argument validation and before the first state read, of `STARTUP_BUDGET_MS` magnitude |
+| `runRetry` | Same as `runStatus` |
+| `runPair` | `remainingStartupBudget(attemptStart)` of the existing attempt |
+| `runMcp` ordinary client (the one without `timeoutMs`) | `remainingStartupBudget(attemptStart)` evaluated once when that client is constructed, reused as that client's per-exchange ceiling |
+| `runMcp` wait client (`timeoutMs: LOCAL_WAIT_TIMEOUT_MS`) | Deliberately unchanged, see "Decided exclusion" |
+| `runStop` readiness and shutdown exchanges, `awaitSecureAvailability`, readiness exchange, harness operator helper | Unchanged, already budgeted by their own remaining original budget |
 
-## 2. Production correction
+The adapter value is a snapshot taken once at construction, not a recomputation per call. A
+long-lived adapter holds no enclosing command deadline, so a per-call remainder from launch would
+shrink toward zero and eventually refuse a healthy exchange.
 
-- [ ] 2.1 Give the ordinary authenticated local exchange the remaining original startup or command deadline instead of the fixed 10,000 ms per-exchange budget, in the allowlisted files. `awaitSecureAvailability`, the readiness exchange, the 1,000 ms occupancy and TLS subcaps, the 100 ms retry spacing and the global 150,000 ms startup budget stay exactly as they are.
-  - Acceptance: `node --test tests/ordinary-exchange-deadline.test.mjs` reports 7 pass, 0 fail, 0 skipped.
-  - The MCP adapter's ordinary client in `runMcp`, and the CLI `status`, `retry` and `pair` ordinary exchanges, are the affected callers. A correction that fixes one caller while another keeps the short fixed budget is incomplete. The adapter caller is verified by diff review in task 3.1, because driving it would need a stdio server run that the unit-only restriction excludes.
-  - Do not satisfy a case by removing a protected-record comparison, a profile/key/identity check, a cancellation or expiry gate, a socket/agent/timer teardown, or the response bound.
-- [ ] 2.2 Re-run the focused suite and the existing related unit suites that consume the touched modules, then record the implementation commit. Reuse unchanged baseline evidence by revision rather than replaying unrelated suites.
-  - Acceptance: affected suites pass with the corrected source. Report actual counts.
+## 1. Focused regressions (complete)
 
-## 3. Independent integrated-candidate review
+- [x] 1.1 Memory-only, Linux-compatible unit suite at `tests/ordinary-exchange-deadline.test.mjs` that drives real production CLI dispatch and real secure-exchange sequencing over synthetic collaborators only.
+  - Evidence: module hooks replace only ownership, credential and configuration/store reads for the two production modules, plus the `node:tls` and `node:http` transports for `src/http/local-client.js`, and deregister after the run. Production `secureExchange`, its deadline accounting, its socket guard and its cleanup execute unmodified. No native query, PowerShell, real process, real state, credential or network access.
+- [x] 1.2 Record the red baseline for the right reason, at the defect class and the first phase where it bites.
+  - Evidence, re-confirmed on this branch: `node --test tests/ordinary-exchange-deadline.test.mjs` reports 7 tests, 6 pass, 1 fail. The single failure is `ORDINARY-EXCHANGE: status completes when its protected reads cost the measured 33 seconds`, with exit code 3, stderr `proceed-mcp: the secure broker is not reachable`, `reads=2`, `requests=0`, modelled elapsed 22,000 ms. The fixed 10,000 ms exchange budget expires inside the second protected read.
+  - The six passing cases are guard, classification and cleanup preservation assertions, not defect proof.
+- [x] 1.3 Satisfiability already shown by a throwaway check in a disposable ignored copy: correcting only the `runStatus` budget yields 7 pass, 0 fail with the same tests and production code. That check patched one call site, so it proved the suite is reachable and satisfiable, not that the correction is complete, and it was never committed.
 
-- [ ] 3.1 Record the immutable implementation head and base, inspect the complete changed and untracked set, confirm the production allowlist, and verify the focused suite, syntax and formatting checks below independently. Explicitly confirm by diff review that the MCP adapter's ordinary client and every CLI ordinary exchange caller received the remaining deadline, since only the CLI `status` caller has an executable unit assertion. Report failures honestly and route corrections through the delivery coordinator.
-- [ ] 3.2 Confirm any later finalization delta is docs-only, or revalidate affected code, tests, dependencies, configuration and baseline. Unit-only evidence is not runtime or release readiness.
+## 2. Production correction (software engineer)
+
+- [ ] 2.1 Give the ordinary authenticated local exchange the remaining original command or startup deadline instead of the fixed 10,000 ms per-exchange budget, in the allowlist below, and change nothing else.
+  - Acceptance: `node --test tests/ordinary-exchange-deadline.test.mjs` reports 7 pass, 0 fail, 0 skipped. Report the actual counts in the evidence line.
+  - A correction that fixes one caller while another keeps the fixed budget is incomplete. All four sites shall be corrected in this one commit series.
+
+  **Production allowlist, exhaustive.** Only `src/cli/main.js`. Four edits, at the `timeoutMs` argument of each ordinary exchange:
+
+  1. `runStatus`, at the `secureExchange` call. Capture a command deadline start after `noPositionals` and before `commandStatePaths`, and pass its remaining time. The natural minimal form is `remainingStartupBudget(commandStart)` with `commandStart` captured at that point, or an arithmetically identical expression. Do not start it earlier than argument validation and do not start it after the first state read.
+  2. `runRetry`, same shape, captured after the `retry requires exactly one request_id` argument check and before `commandStatePaths`.
+  3. `runPair`, the `secureExchange` call for `/v1/pairing`, using the existing `attemptStart`.
+  4. `runMcp`, the ordinary `createSecureLocalClient` construction that has no `timeoutMs` today: pass one `remainingStartupBudget(attemptStart)` snapshot taken at that construction, not a value recomputed per request.
+  5. If no ordinary call site still references `LOCAL_REQUEST_TIMEOUT_MS`, narrow the import on the `../http/local-client.js` import line to what remains referenced. That import narrowing is the only other permitted edit in the file.
+
+  **Not permitted:**
+
+  - `src/http/local-client.js`. Allowlisted but expected to need no change, because `secureExchange` and `createSecureLocalClient` already accept and honor a supplied budget. Any required change there touches frozen guard and accounting code and returns to the delivery coordinator before editing.
+  - `src/state/ownership.js`, `src/broker/availability.js`, `src/harness/**`, `tests/**`, `proposal.md`, `design.md`, `.openspec.yaml`, `.github/workflows/ci.yml`, README and every other path.
+  - The `runMcp` wait client's `timeoutMs: LOCAL_WAIT_TIMEOUT_MS`, the `runStop` exchanges, `awaitSecureAvailability` and the harness operator helper stay as they are.
+  - Any new budget constant, clamp, retry, fallback, log line, message wording, exit-code change or refactor. `LOCAL_REQUEST_TIMEOUT_MS` keeps its value and stays the default of `createLocalClient` and `createSecureLocalClient`.
+
+- [ ] 2.2 Run the bounded sequence in "Test mapping and run sequence", record the implementation commit and the actual counts, and stop.
+  - Acceptance: `node --check src/cli/main.js` exits 0, the focused suite is 7 pass and 0 fail, `git diff --check` is clean, and the diff touches only allowlisted paths.
+  - Do not run `npm test`, directory discovery, the readiness suite, integration, e2e, build, pack, install or any broker, status or state command. Do not edit the tests to fit the implementation. Do not push, merge or archive.
+
+## 3. Independent verification (test engineering)
+
+- [ ] 3.1 Record the immutable implementation head and base, inspect the complete changed and untracked set, confirm the production allowlist, and execute the focused suite and static checks independently.
+  - Required diff review, because only the `status` call site has an executable assertion: confirm `runPair`, `runRetry` and the `runMcp` ordinary client each received the remaining original deadline, that the `runMcp` ordinary value is one construction-time snapshot rather than a per-request recompute, that the `runMcp` wait client still passes `LOCAL_WAIT_TIMEOUT_MS`, and that no call site in scope still passes the fixed 10,000 ms budget.
+  - Required diff review of the invariants in "Preserved safeguards": no guard, comparison, admission gate, ceiling, teardown, classification, exit code or budget value changed.
+  - Acceptance: focused suite 7 pass and 0 fail on the verified head, allowlist respected, both diff reviews PASS. Report failures honestly and route corrections through the delivery coordinator.
+- [ ] 3.2 Confirm any later finalization delta is docs-only, or revalidate affected code, tests, dependencies, configuration and baseline.
+
+## Preserved safeguards
+
+The correction changes which budget argument is supplied and nothing else. Each item below shall
+remain exactly as it is, and the focused suite asserts the subset named in brackets.
+
+- All ownership and identity validation: the initial protected ownership read and the three stable-record comparisons before TLS, after TLS before the Authorization header, and after a readiness response. No read is removed, reordered, cached across a call, deduplicated or satisfied by an earlier result. [reads counts and `requests` counts per case]
+- Key and TLS profile checks: `TLSv1.2` min and max, `PSK-AES256-GCM-SHA384`, identity `proceed-mcp-local-v1`, `rejectUnauthorized`, no tickets, no session reuse, disabled renegotiation, and the 1,000 ms handshake subcap clipped to the remaining exchange time. [asserted on every socket]
+- Expiry and cancellation admission before each phase and after each awaited boundary, the owned-socket guard that destroys a live transport during a non-cancellable read window, and refusal of a late result. [cancelled-caller, in-exchange-exhaustion and pre-socket cases]
+- Response ceiling: the 64 KiB operator bound, the general client's larger allowance and the response-size bound.
+- Socket, HTTP agent, timer and abort-listener cleanup on every settlement, refusal paths included. [teardown assertions after each case]
+- Secret-free diagnostics and refusal text: no credential, token or channel key in output or in a thrown message. [asserted]
+- Existing error classification and exit codes: failed secure admission or expired exchange stays `BROKER_UNAVAILABLE`, an unprovable channel stays `BROKER_INSTANCE_CONFLICT`, public wording unchanged, no plaintext or unauthenticated fallback. [asserted codes]
+- No retry, no second attempt, no fresh budget per phase, no new attempt.
+- Unchanged global startup budget at 150,000 ms, unchanged 1,000 ms occupancy and TLS subcaps, unchanged 100 ms retry spacing, unchanged `LOCAL_WAIT_TIMEOUT_MS` at 32,000 ms.
+- Unchanged durable-state semantics: launch-at-most-once, exclusive ownership, expiry, cancellation, single resolution, pending and timed-out requests granting nothing.
+- Unchanged availability, stop and harness operator paths.
+
+## Decided exclusion: the waiting exchange
+
+The `runMcp` wait client keeps `LOCAL_WAIT_TIMEOUT_MS` at 32,000 ms and is deliberately excluded.
+The primary spec author ruled it a separate contract change with its own delta, and the coordinator
+recorded that decision. It is not an oversight and must not be folded into this correction.
+
+- This change therefore claims no working `request_approval` wait where one ordinary exchange's protected reads exceed the waiting budget. Measured Windows protected reads cost roughly 33 seconds inside one exchange, so on that host a waiting call can still end before its required protected work completes, even after this correction.
+- Do not describe this change as fixing approval waiting, and do not let a green focused suite or a merged PR stand for a working wait.
+- Recorded follow-up, outside this change and not authorized here: a delta against `opencode-session-continuation` that states what bounds a waiting call and how that bound is disclosed, keeps the preserved obligations unchanged, promises no indefinite wait and claims no automatic resumption or late delivery. It needs that delta rather than `skip_specs`, and its success criterion is a waiting call returning the matching human outcome while the request stays actionable.
+- Preserved into that follow-up unchanged: a client timeout does not cancel the durable request, a pending or timed-out request grants nothing, expiry and explicit cancellation return their non-approval closure, failures are never reported as human decisions or successful delivery.
 
 ## Test mapping and run sequence
 
-All commands run from the change worktree with that worktree as the working directory. Native unit and static commands are bounded to 60 seconds each. No server, native helper, wire or live broker is started, and no state directory, credential or token is read.
+Run from the change worktree with that worktree as the working directory. Each command is bounded to
+60 seconds. No wildcard, directory discovery, server, native helper, wire, live broker, state
+directory, credential or token access. Run only these.
 
-1. Syntax: `node --check tests/ordinary-exchange-deadline.test.mjs`.
-2. Focused units: `node --test tests/ordinary-exchange-deadline.test.mjs`.
-   - Expect 7 pass, 0 fail after task 2.1. Baseline is 6 pass and 1 fail, and that failure is the defect.
-   - Case mapping: the measured-33-second case is the direct modelled proof of the deadline invariant. The pre-socket slow-read, in-exchange exhaustion, substitution, cancelled-caller and absent-record cases are preservation assertions for the existing guards. The fast-exchange case proves a remaining budget still admits exactly one authenticated exchange.
-   - Every case also asserts teardown: timers cleared, owned sockets destroyed, HTTP agents destroyed, abort listeners detached, and no synthetic credential or channel key in command output or refusal text.
-3. Existing related unit suites, only after task 2.1 changes source, using explicit file paths and no wildcards: the readiness suite `tests/authenticated-readiness-deadline.test.mjs`, because it shares `src/broker/availability.js` and `src/http/local-client.js`. Do not run `npm test`, directory discovery or any integration, end-to-end, renderer, harness, build, pack or install suite.
-4. Formatting: the repository formatter is not installed in a fresh worktree and `.prettierignore` excludes `tests/` and `openspec/`, so the maintained format gate does not cover this change's artifacts. CI checks formatting only for `.github/workflows/ci.yml`, which this change does not touch. If the coordinator wants explicit formatting anyway, the authorized bootstrap is `npm ci --ignore-scripts --cache .scratch/ordinary-exchange-setup/npm-cache --no-audit --no-fund` with the lockfile unchanged, then an explicit file list with `--check` or `--write` for owned files only. Never format the repository or the archive.
-5. Whitespace and diff hygiene: `git diff --check`.
-6. Structural check: `openspec validate fix-ordinary-exchange-deadline --strict` and `openspec instructions apply --change fix-ordinary-exchange-deadline --json`. Structural success is not behavioral proof, and advisory warnings do not create another gate.
+1. `node --check src/cli/main.js` after the correction, and `node --check tests/ordinary-exchange-deadline.test.mjs` unchanged.
+2. `node --test tests/ordinary-exchange-deadline.test.mjs`. Expect 7 pass, 0 fail, 0 skipped after task 2.1. Baseline is 6 pass and 1 fail, and that failure is the defect.
+   - Case mapping: the measured-33-second case is the direct modelled proof of the deadline invariant through the real `status` dispatch, requiring at least three protected reads, at least 33,000 ms charged, and exactly one `/v1/status` request. The pre-socket slow read, in-exchange exhaustion, substitution, cancelled-caller and absent-record cases are preservation assertions for the existing guards. The fast-exchange case proves a remaining budget still admits exactly one authenticated exchange.
+   - Do not run the suite twice for the same head. One run per changed revision is the record, and a rerun is warranted only after a real input change or a failure.
+3. `git diff --check` for whitespace and conflict hygiene on the changed paths.
+4. `openspec validate fix-ordinary-exchange-deadline --strict`, expected exit 0 with the informational `skip_specs` notice. Structural validity is not behavioral proof.
+5. Do not run `tests/authenticated-readiness-deadline.test.mjs`. It shares `src/http/local-client.js`, which this change does not touch, so its recorded 18 pass at the baseline is reused by revision and artifact. Run it only if `src/http/local-client.js` actually changes, which returns to the coordinator first.
+6. Formatting is not applicable to this change's owned paths: `.prettierignore` excludes `tests/` and `openspec/`, the formatter is not installed in this worktree, and CI checks formatting only for `.github/workflows/ci.yml`. Do not bootstrap the formatter and do not format the repository or the archive.
 
-## Boundary Verification
+## Boundary verification
 
-Category: none required. This is a private, implementation-owned seam inside an already reviewed and unchanged contract. No wire protocol, URL, TLS profile, key, payload, route, public error code or CLI output shape changes. The only intended difference is which existing budget value an ordinary exchange receives, so there is no normative public or cross-component contract delta, no new external boundary, and no spec requirement delta for the product author to author.
+Category: no boundary block applies. This is a purely private, implementation-owned seam. The diff
+supplies a different value to an existing, already-reviewed parameter. No wire route, URL, TLS
+profile, key, identity, payload, header placement, public error code, exit code or CLI output shape
+changes, so there is no normative public or cross-component contract delta, no new external
+boundary and no delta for a capability author to write. The design records the same verdict on the
+test fake, and ran no command or runtime operation to establish it.
 
-- Unchanged wire and admission: TLSv1.2 with `PSK-AES256-GCM-SHA384`, identity `proceed-mcp-local-v1`, `rejectUnauthorized`, no tickets or session reuse, disabled renegotiation, Bearer authority only after a stable-record comparison, three stable-record comparisons, the 64 KiB operator response ceiling, and every expiry and cancellation gate.
-- Real-boundary proof: UNRUN and UNVERIFIED under the project unit-only restriction. The suite models protected reads, the clock and the transport. It does not prove real Windows protection calls, real TLS, actual OS socket closure, installed startup or any Telegram outcome.
-- Decomposition checklist: all five cross-unit triggers are NO. This is one correction, one shared suite with self-contained synthetic collaborators, no new persisted state, no new receiver and no split proof chain.
-- Boundary review signal: a combined Architect boundary and test-fake review is not required in the test owner's judgment, because no contract, payload or name changes and the realism gap is the already accepted unit-only restriction. If the coordinator disagrees, the only question for architecture is whether a unit-only fake surface is acceptable for a budget-only correction.
+- Unchanged wire and admission detail for reference: TLSv1.2 with `PSK-AES256-GCM-SHA384`, identity `proceed-mcp-local-v1`, three stable-record comparisons, Bearer authority only after them, the 64 KiB operator ceiling, every expiry and cancellation gate.
+- Real-boundary proof: UNRUN and UNVERIFIED under the project unit-only restriction. The suite models the clock, the protected read, the transport and the reply.
+- Decomposition checklist: all cross-unit triggers are NO. One correction, one shared suite with self-contained synthetic collaborators, no new persisted state, no new receiver, no split proof chain, so no Architect decomposition review is triggered.
 
 ## Checks and evidence
 
-Preparation evidence, executed in this worktree on Windows with Node v26.13.0, all bounded to 60 seconds:
+Preparation evidence on Windows with Node v26.13.0, each command bounded to 60 seconds:
 
 - `node --check tests/ordinary-exchange-deadline.test.mjs` exits 0.
-- `node --test tests/ordinary-exchange-deadline.test.mjs` reports 7 tests, 6 pass, 1 fail. The single failure is the intended red with the reason recorded in task 1.2.
-- `node --test tests/authenticated-readiness-deadline.test.mjs` reports 18 pass, 0 fail, confirming the unaffected related suite is green at this baseline.
-- Trailing-whitespace scan and `git diff --check` are clean for the changed paths.
-- `openspec validate fix-ordinary-exchange-deadline --strict` exits non-zero with exactly one issue: no delta specs and no `skip_specs: true` declaration. `openspec status --change fix-ordinary-exchange-deadline` reports tasks complete with proposal, specs and design blocked by the unwritten proposal, and apply instructions report `ready`. This is the product author's spec-applicability decision plus the two unwritten owner artifacts. The test owner did not declare `skip_specs` or write a requirement delta, because neither is a test-engineering decision and inventing either would change accepted contract meaning. Remedy is one recorded choice by the product author.
-- No formatter, formatter bootstrap, integration, end-to-end, renderer, harness, build, pack, install, runtime, broker, status, state, token or global-configuration command was executed. The repository formatter is absent from this worktree and `.prettierignore` excludes this change's owned paths.
+- `node --test tests/ordinary-exchange-deadline.test.mjs` reports 7 tests, 6 pass, 1 fail, the intended red recorded in task 1.2.
+- `openspec validate fix-ordinary-exchange-deadline --strict` exits 0 and reports the informational `skip_specs` no-delta notice.
+- `git diff --check` is clean.
+- No formatter, formatter bootstrap, integration, e2e, renderer, harness, build, pack, install, runtime, broker, status, state, token or global-configuration command was executed in this task-authoring step.
 
-| Stage        | Required observation / current state                                                                                                                                                    | Failure, owner and trigger                                                                                                                       |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Pre-merge    | Focused suite 7/7 on the corrected candidate, related readiness suite passing, production diff inside the allowlist, independent review PASS, owner proposal and design complete. | Wrong budget or a weakened guard. Implementation owner corrects before landing. Stop on drift, failed checks or conflicts.                      |
-| Pre-exposure | Not applicable beyond this project's recorded unit-only acceptance. No version, metadata or README change is planned here.                                                              | If an exposure step is later added, its owner records the risk decision in the status log first.                                                |
-| Post-deploy  | Owner manual verification of installed MCP and normal status behavior stays UNRUN and UNVERIFIED. Publication and installation do not satisfy it.                                      | The live failure may persist for another reason. Operator verifies after deployment without bypassing guards.                                   |
-| Deferred     | Real protected reads, real TLS and OS socket closure, installed readiness, cross-platform runtime and Telegram outcomes stay UNRUN and UNVERIFIED.                                      | Fake-only evidence cannot prove real boundary operation. Test engineering and the operator revisit when non-unit testing is authorized.          |
+| Stage | Required observation / current state | Failure, owner and trigger |
+| --- | --- | --- |
+| Pre-merge | Focused suite 7 pass and 0 fail on the corrected candidate, static checks clean, production diff inside the four-site allowlist with no local-client or ownership change, independent diff review PASS for `runPair`, `runRetry` and the `runMcp` ordinary client, wait client still on `LOCAL_WAIT_TIMEOUT_MS`, `openspec validate --strict` exit 0. | Wrong or partial budget correction, a weakened guard, or an out-of-allowlist edit: implementation owner corrects before landing. Any needed `src/http/local-client.js` change: corrected through the delivery coordinator. |
+| Pre-merge, CI coverage | `tests/ordinary-exchange-deadline.test.mjs` is not in the explicit file lists in `.github/workflows/ci.yml`, so CI will not run the focused suite. Current state: UNRUN in CI. | Coordinator decision required, owner delivery coordinator: either authorize adding that one test path to the existing unit step, as a test-only config change recorded in the change, or record landing on the independently executed suite plus green unchanged CI. Not an implementation-owner action. |
+| Pre-exposure | Not applicable beyond the project's recorded unit-only acceptance. No version, metadata or README change is planned. | If an exposure step is added, its owner records the risk decision in the status log first. |
+| Post-deploy | Owner manual verification of installed MCP traffic and a normal `status` command stays UNRUN and UNVERIFIED. Installation and publication do not satisfy it. | The live failure may persist for another reason, including the excluded waiting exchange. Operator verifies after deployment without bypassing guards. |
+| Deferred | Real Windows protected reads, real TLS negotiation, OS socket closure, installed readiness, Linux CI execution of this suite, cross-platform runtime and Telegram outcomes stay UNRUN and UNVERIFIED. | Fake-only evidence cannot prove real-boundary operation. Test engineering and the operator revisit when non-unit testing is authorized or CI coverage is decided. |
 
-Founder-visible proof is a normal installed MCP interaction and a normal `status` command completing against the protected broker. The focused unit assertions are direct proof of the modelled deadline invariant and proxies for that live outcome.
+| Stage | Unrun or waived item | Owner | Trigger to complete |
+| --- | --- | --- | --- |
+| Deferred | Linux execution of the focused suite (local evidence is Windows Node v26.13.0, primary CI is Ubuntu 24.04 on Node 24.22.2) | Test engineering | CI coverage decision, or the next authorized Linux unit run |
+| Deferred | Every real-boundary behavior above | Test engineering and operator | Non-unit testing authorized, or post-deploy manual verification |
 
 ## Worktree lifecycle
 
 - Path: `.worktree/fix-ordinary-exchange-deadline`
-- Branch/change: `fix-ordinary-exchange-deadline`
+- Branch and change: `fix-ordinary-exchange-deadline`
 - Owner: test engineering
 - Baseline: `daf0cf49d4782597b0c5e485165441fdcc6565ae`
-- Status: active, tests written and red for the right reason, production correction pending
-- Mergeable outcome: the ordinary authenticated local exchange uses the remaining original startup or command deadline instead of a fixed short per-exchange budget, with every existing safeguard and cleanup obligation intact.
-- Nearest landing blocker: the minimal production correction, its deterministic unit result and independent review. Owner proposal and design are also unwritten.
-- Next action: owner proposal and design, then the allowlisted production correction and independent integrated-candidate review. Preserve lifecycle ownership through landing or an explicit abandonment.
-- Cleanup evidence: retained for active work. No cleanup attempted.
+- Status: active. Tests written and red for the right reason, proposal and design complete, tasks ready for the software-engineer dispatch, production correction pending.
+- Mergeable outcome: ordinary authenticated local exchanges use the remaining original deadline with every safeguard intact, delivered as one PR into `main` with the archive inside it.
+- Nearest landing blocker: the four-site production correction, its 7 of 7 focused result, independent integrated-candidate review, and the CI coverage decision above.
+- Next action: software-engineer dispatch against task 2.1, then independent verification per task 3.1.
+- Cleanup evidence: retained for active work. No landing or abandonment route exists yet. Cleanup happens only after the change PR merges, and terminal evidence is recorded outside archived change content.
 
-## Workflow follow-up
+## Completion signal
 
-- No commit, push, PR, archive, merge, publication, installation, runtime operation or cleanup is performed by this task-authoring step. Those actions remain with their authorized owners and recorded gates.
-- Record terminal landing and cleanup evidence outside immutable archive content. Preserve the live broker, protected state, credentials and every other retained worktree.
+- Production edits, push, PR, archive, merge, deploy, publish and cleanup remain with their authorized owners and recorded gates. This task-authoring step performed none.
+- Preserve the live broker, protected state, credentials and every other retained worktree.
