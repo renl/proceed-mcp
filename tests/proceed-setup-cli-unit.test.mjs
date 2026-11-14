@@ -156,36 +156,40 @@ test('SETUP-LIFECYCLE: partial setup and premature close release acquired resour
   }
 });
 
-test('SETUP-LIFECYCLE: completion output failure rejects safely after releasing input', { timeout: 1000 }, async (t) => {
-  const timersReleased = trackTimers(t);
-  m.reset();
-  const stream = m.terminal([], { onRead() {} });
-  t.after(() => stream.destroy());
-  const result = readTokenFromTerminal(stream, {
-    stderr: {
-      write(text) {
-        if (text === '\n') throw new Error(SECRET);
+test(
+  'SETUP-LIFECYCLE: completion output failure rejects safely after releasing input',
+  { timeout: 1000 },
+  async (t) => {
+    const timersReleased = trackTimers(t);
+    m.reset();
+    const stream = m.terminal([], { onRead() {} });
+    t.after(() => stream.destroy());
+    const result = readTokenFromTerminal(stream, {
+      stderr: {
+        write(text) {
+          if (text === '\n') throw new Error(SECRET);
+        },
       },
-    },
-  }).then(
-    () => ({ succeeded: true }),
-    (error) => ({ error }),
-  );
-  await nextTurn();
-  assert.doesNotThrow(
-    () => stream.emit('data', Buffer.from(`${SECRET}\r`)),
-    'output failure must settle the reader rather than escape the input callback',
-  );
-  const { error } = await result;
-  assert.ok(error, 'output failure rejects');
-  assert.ok(!error.message.includes(SECRET), 'raw exception content stays private');
-  timersReleased();
-  assert.equal(stream.isRaw, false);
-  assert.equal(stream.isPaused(), true);
-  assert.equal(stream.destroyed, false);
-  for (const name of ['data', 'end', 'error', 'close'])
-    assert.deepEqual(stream.listeners(name), []);
-});
+    }).then(
+      () => ({ succeeded: true }),
+      (error) => ({ error }),
+    );
+    await nextTurn();
+    assert.doesNotThrow(
+      () => stream.emit('data', Buffer.from(`${SECRET}\r`)),
+      'output failure must settle the reader rather than escape the input callback',
+    );
+    const { error } = await result;
+    assert.ok(error, 'output failure rejects');
+    assert.ok(!error.message.includes(SECRET), 'raw exception content stays private');
+    timersReleased();
+    assert.equal(stream.isRaw, false);
+    assert.equal(stream.isPaused(), true);
+    assert.equal(stream.destroyed, false);
+    for (const name of ['data', 'end', 'error', 'close'])
+      assert.deepEqual(stream.listeners(name), []);
+  },
+);
 
 test('SETUP-PRIVATE: Proceed enters private mode before input and restores it after submit', async () => {
   let prompt;
