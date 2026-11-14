@@ -2,10 +2,31 @@
 // Public CLI dispatch with memory-only dependencies. No terminal/OS proof.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { memory, SECRET, ENV_NAME } from './fixtures/proceed-credential-memory.mjs';
 const m = await memory();
 const credential = await import('../src/state/credential-file.js');
+const { readTokenFromTerminal } = await import('../src/cli/terminal-input.js');
 const count = (name) => m.current.events.filter(([event]) => event === name).length;
+function trackTimers(t) {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const outstanding = new Set();
+  const schedule = globalThis.setTimeout;
+  const clear = globalThis.clearTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+    const timer = schedule(() => {
+      outstanding.delete(timer);
+      callback(...args);
+    }, delay);
+    outstanding.add(timer);
+    return timer;
+  });
+  t.mock.method(globalThis, 'clearTimeout', (timer) => {
+    outstanding.delete(timer);
+    return clear(timer);
+  });
+  return () => assert.equal(outstanding.size, 0, 'no reader deadline remains scheduled');
+}
 function restored(result) {
   assert.equal(result.stream.isRaw, result.originalRaw, 'original terminal mode restored');
   for (const name of ['data', 'end', 'error', 'close', 'keypress'])
@@ -14,7 +35,161 @@ function restored(result) {
       new Map(result.listeners).get(name) ?? 0,
       `owned ${name} listeners released`,
     );
+  if (count('input') > 0 && !result.stream.destroyed && !result.stream.readableEnded)
+    assert.equal(result.stream.isPaused(), true, 'reader-started input activity stopped');
 }
+
+// Design decisions 1-2: real Node Readable behavior, synthetic terminal mode only.
+// These units prove ownership cleanup, not native terminal enforcement or exit.
+test('SETUP-LIFECYCLE: release idle input and preserve caller-active input', async (t) => {
+  for (const prior of ['idle', 'paused', 'flowing']) {
+    for (const outcome of ['submit', 'cancel']) {
+      await t.test(`${prior} ${outcome}`, async (t) => {
+        const timersReleased = trackTimers(t);
+        m.reset();
+        const stream = m.terminal([], { isRaw: prior === 'flowing', onRead() {} });
+        t.after(() => stream.destroy());
+        const received = [];
+        const callerData = (chunk) => received.push(chunk.toString());
+        const callerEnd = () => {};
+        stream.on('end', callerEnd);
+        if (prior === 'flowing') {
+          stream.on('data', callerData);
+          await nextTurn();
+        } else if (prior === 'paused') stream.pause();
+        const originalRaw = stream.isRaw;
+        const listeners = stream.eventNames().map((name) => [name, stream.listeners(name)]);
+        const pending = readTokenFromTerminal(stream, { stderr: { write() {} } });
+        let completed = false;
+        const result = pending.then(
+          (value) => {
+            completed = true;
+            return { value };
+          },
+          (error) => {
+            completed = true;
+            return { error };
+          },
+        );
+        await nextTurn();
+        stream.push(Buffer.from(outcome === 'submit' ? `${SECRET}\r` : '\x03'));
+        await nextTurn();
+        const completedFromInput = completed;
+        if (!completed) t.mock.timers.tick(60000);
+        const settled = await result;
+        timersReleased();
+        assert.equal(completedFromInput, true, 'reader consumes input without caller restart');
+        if (outcome === 'submit') assert.equal(settled.value, SECRET);
+        else assert.equal(settled.error?.name, 'CliError');
+        assert.equal(stream.isRaw, originalRaw);
+        assert.equal(stream.destroyed, false, 'shared input stays open');
+        for (const name of ['data', 'end', 'error', 'close'])
+          assert.deepEqual(stream.listeners(name), new Map(listeners).get(name) ?? []);
+        if (prior === 'flowing') {
+          stream.push(Buffer.from('caller-after-cleanup'));
+          await nextTurn();
+          assert.ok(received.includes('caller-after-cleanup'), 'caller continues without restart');
+        } else {
+          assert.equal(stream.isPaused(), true, 'input acquired by reader stops');
+          stream.on('data', callerData);
+          stream.resume();
+          stream.push(Buffer.from('reused-after-cleanup'));
+          await nextTurn();
+          assert.ok(received.includes('reused-after-cleanup'), 'input can be reused');
+        }
+        assert.equal(stream.listeners('end').includes(callerEnd), true);
+      });
+    }
+  }
+});
+
+test('SETUP-LIFECYCLE: partial setup and premature close release acquired resources', async (t) => {
+  for (const failure of ['raw acquisition', 'listener installation', 'prompt output', 'close']) {
+    await t.test(failure, async (t) => {
+      const timersReleased = trackTimers(t);
+      m.reset();
+      const stream = m.terminal([], { onRead() {} });
+      t.after(() => stream.destroy());
+      const callerEnd = () => {};
+      stream.on('end', callerEnd);
+      const setRawMode = stream.setRawMode.bind(stream);
+      if (failure === 'raw acquisition') {
+        stream.setRawMode = (value) => {
+          setRawMode(value);
+          if (value) throw new Error(SECRET);
+          return stream;
+        };
+      }
+      const on = stream.on.bind(stream);
+      if (failure === 'listener installation') {
+        stream.on = (name, listener) => {
+          on(name, listener);
+          if (name === 'end') throw new Error(SECRET);
+          return stream;
+        };
+      }
+      const result = readTokenFromTerminal(stream, {
+        stderr: {
+          write() {
+            if (failure === 'prompt output') throw new Error(SECRET);
+          },
+        },
+      }).then(
+        () => ({ succeeded: true }),
+        (error) => ({ error }),
+      );
+      if (failure === 'close') {
+        await nextTurn();
+        stream.emit('close');
+      }
+      const { error } = await result;
+      timersReleased();
+      assert.ok(error, 'failure rejects');
+      assert.ok(!error.message.includes(SECRET), 'failure does not expose exception content');
+      assert.equal(stream.isRaw, false, 'partial raw-mode acquisition restored');
+      assert.equal(stream.destroyed, false);
+      for (const name of ['data', 'error', 'close']) assert.deepEqual(stream.listeners(name), []);
+      assert.deepEqual(stream.listeners('end'), [callerEnd]);
+      if (failure !== 'raw acquisition')
+        assert.equal(stream.isPaused(), true, 'acquired input activity released');
+    });
+  }
+});
+
+test(
+  'SETUP-LIFECYCLE: completion output failure rejects safely after releasing input',
+  { timeout: 1000 },
+  async (t) => {
+    const timersReleased = trackTimers(t);
+    m.reset();
+    const stream = m.terminal([], { onRead() {} });
+    t.after(() => stream.destroy());
+    const result = readTokenFromTerminal(stream, {
+      stderr: {
+        write(text) {
+          if (text === '\n') throw new Error(SECRET);
+        },
+      },
+    }).then(
+      () => ({ succeeded: true }),
+      (error) => ({ error }),
+    );
+    await nextTurn();
+    assert.doesNotThrow(
+      () => stream.emit('data', Buffer.from(`${SECRET}\r`)),
+      'output failure must settle the reader rather than escape the input callback',
+    );
+    const { error } = await result;
+    assert.ok(error, 'output failure rejects');
+    assert.ok(!error.message.includes(SECRET), 'raw exception content stays private');
+    timersReleased();
+    assert.equal(stream.isRaw, false);
+    assert.equal(stream.isPaused(), true);
+    assert.equal(stream.destroyed, false);
+    for (const name of ['data', 'end', 'error', 'close'])
+      assert.deepEqual(stream.listeners(name), []);
+  },
+);
 
 test('SETUP-PRIVATE: Proceed enters private mode before input and restores it after submit', async () => {
   let prompt;
@@ -45,6 +220,20 @@ test('SETUP-EDIT: backspace removes a byte without displaying it and preserves p
   assert.equal(result.code, 0);
   assert.equal(m.current.entries.get(m.file)?.bytes.toString(), `${SECRET}\n`);
   restored(result);
+});
+
+test('SETUP-LIFECYCLE: credential write failure occurs after input release', async () => {
+  m.reset({ writeFailure: true });
+  const stream = m.terminal([SECRET, '\r']);
+  try {
+    const result = await m.invoke({ stream });
+    assert.notEqual(result.code, 0);
+    assert.equal(count('write'), 1, 'accepted input reaches persistence failure');
+    restored(result);
+    assert.equal(stream.destroyed, false, 'persistence failure does not close shared input');
+  } finally {
+    stream.destroy();
+  }
 });
 
 test('SETUP-INPUT-REFUSAL: cancellation, EOF, invalid bytes and stream errors never write', async (t) => {
