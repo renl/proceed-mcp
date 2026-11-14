@@ -107,7 +107,15 @@ export function readTokenFromTerminal(
       if (settled) return;
       settled = true;
       release();
-      stderr?.write?.('\n');
+      try {
+        stderr?.write?.('\n');
+      } catch {
+        // The completion newline cannot be shown; settle with a secret-free
+        // failure instead of letting the output exception escape the input
+        // callback and leave the exchange pending.
+        reject(unavailable());
+        return;
+      }
       try {
         resolve(parseTokenInput(Buffer.from(entered)));
       } catch (error) {
