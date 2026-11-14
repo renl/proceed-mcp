@@ -1,6 +1,24 @@
 # proceed-mcp
 
-Proceed sends an agent's approval request to your private Telegram chat and returns the human decision to the waiting MCP call. Only an explicit Approve grants approval. Proceed records the outcome and never executes the action.
+**Answer your agent's approval questions from Telegram, not just the terminal.**
+
+Useful agents sometimes need your judgment before taking the next step. Proceed sends their questions to your private Telegram chat, so you do not have to watch the terminal constantly.
+
+Proceed is a Model Context Protocol (MCP) server for agent apps that can launch local stdio MCP servers, not an OpenCode-only plugin. You tell your agent when to ask. Proceed does not automatically intercept tools or enforce the app's native permissions.
+
+## When it helps
+
+- Before deploying, the agent asks you to approve the target and timing.
+- When work needs to go beyond the agreed scope, the agent asks before making those changes.
+- Before spending money or deleting data, the agent asks for explicit approval.
+
+## How it works
+
+The agent requests approval -> you answer in Telegram -> the decision returns to the same waiting MCP call while it remains active. Proceed records the outcome. The agent, not Proceed, performs any approved action under its normal permissions.
+
+Only **Approve** authorizes the requested action. **Reject** does not authorize it. **Respond** supplies instructions, not approval, even if you type "yes".
+
+**Preview limits:** a timeout can end the wait without cancelling the request. Recorded outcomes remain retrievable, but answering later cannot wake the agent. See [Limits](#limits).
 
 This guide matches source version `0.1.0-preview.7`. Check that this exact version is available from npm before installing.
 
@@ -84,7 +102,7 @@ The command starts or reuses the secure broker and prints a one-use code that ex
 
 ## Connect an MCP client
 
-Configure a local stdio server in any MCP client to run:
+In an MCP client that supports launching local stdio servers, configure it to run:
 
 ```console
 proceed-mcp mcp --owner <owner-id> --state-dir <absolute-state-dir>
@@ -162,7 +180,8 @@ Exit codes are `0` for completion, `2` for invalid arguments or configuration, `
 
 ## Limits
 
-- This source has unit-level verification only. Installed startup, native platform permission behavior, actual Telegram delivery, login or reboot startup and multi-client compatibility remain unverified.
+- Normal MCP startup and a Telegram Approve returning to the waiting call were exercised once on Windows with OpenCode. This does not establish crash/reboot recovery, other platforms or other clients. Optional TUI operation remains unverified.
+- Automated coverage is unit-level. Native platform permission behavior and general platform compatibility remain unqualified. Other decision paths and failure cases are not covered by this check.
 - One paired Telegram human and one bot token per broker, and one broker per state directory. A separate owner is a separate transport principal, not another human or bot.
 - The product does not execute actions and does not enforce your client's permission rules. Approval is cooperative.
 - A client timeout does not cancel the request. There is no automatic continuation after a timeout, no session reattachment and no agent wake-up from retrieval.
