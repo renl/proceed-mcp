@@ -5,13 +5,13 @@
 One independent change and one PR to `main`. Prerequisite: none.
 Baseline: `2bbce072314fc046ad9c089514b386edb8a6957b` (fresh `main` and `origin/main`).
 Mergeable outcome: provisioning releases its input activity without disrupting caller input.
-Nearest landing blocker: separately authorized delivery/finalization and preview.8 version disposition. Independent unit/static candidate review and scoped formatting pass.
+Nearest landing blocker: draft PR and exact-head Linux CI, then separately authorized finalization and landing. Preview.8 assignment and independent complete-candidate unit/static review are complete.
 
 - Path: `.worktree/fix-provision-terminal-lifecycle`
 - Branch/change: `fix-provision-terminal-lifecycle`
 - Lifecycle owner: test engineering
 - Status: active, independent unit/static candidate review PASS
-- Next action: authorized PR delivery, version disposition and finalization. No archive or merge authority is granted by this review.
+- Next action: draft PR and exact-head Linux CI. No archive or merge authority is granted by this review.
 - Cleanup evidence: not eligible, no landed or abandoned outcome.
 
 The user-visible success condition is regaining the shell after provisioning without Ctrl+C.
@@ -104,11 +104,24 @@ Decomposition checklist: all five cross-unit triggers NO. One correction and one
 ### Authorized version alignment
 
 - CoS version decision: `0.1.0-preview.8`, because `preview.7` is already public. Aligned only the existing coupled version values: `package.json` version, both `package-lock.json` version fields, both `server.json` version fields, and the two existing README version tokens (source pin and install command). All other words, claims and availability-neutral presentation are unchanged.
-- Public exact lookup: `https://registry.npmjs.org/@meshimize%2Fproceed-mcp/0.1.0-preview.8` returned HTTP 404 (absent), with `0.1.0-preview.7` returning HTTP 200 as a positive control. No publication conflict at decision time.
+- Historical supplied lookup observations: the exact preview.8 registry URL reportedly returned HTTP 404, with preview.7 returning HTTP 200 as a positive control. The implementation handoff also reports a denied web-fetch request followed by another HTTP route. That route is not endorsed as authorized evidence and does not clear the publication gate. Version assignment comes from coordination, not a new availability check. Before publication, the release owner must obtain a fresh conflict check through an authorized native permission path. No lookup was repeated during independent review.
 - No dependency resolution, install, repack or lockfile dependency edit occurred. The pre-existing approved local dependency state is preserved.
 - Static checks on explicit paths: JSON parse PASS for `package.json`, `package-lock.json` and `server.json`, Prettier `--check` PASS for those three files plus `README.md`, `git diff --check` PASS.
-- Stale test literals remain and require SDET update before any revalidation can pass: `tests/release-metadata.test.mjs` (lines 17 and 103), plus non-unit installed/pack literals `tests/release-installed.test.mjs:159` and `tests/release-pack.mjs:113-114`. These were not run and not edited.
+- At the metadata checkpoint, stale test literals remained in `tests/release-metadata.test.mjs`, `tests/release-installed.test.mjs` and `tests/release-pack.mjs`. The independent reconciliation below supersedes that pending work. Non-unit suites remain unrun.
 - Production source, tests and assertions are unchanged. This is a value-only version alignment, not a normative behavior change, and it carries no archive, merge, install or publication authorization.
+
+### Complete-candidate preview.8 reconciliation
+
+- Input clean HEAD: `f4e207fca43038d10bc242993a8234421d6c2e51`, parent `92f539f73086d3ddf00d2783b424c744205c999e`. Production remains `5149d2b2cc96b3fcc2491b82bc4ea007c61ddcf7`, base `2bbce072314fc046ad9c089514b386edb8a6957b`. This reconciliation commits only this task evidence and the three release test files.
+- Changed exactly five expected constants from preview.7 to preview.8: two metadata unit literals, one installed-test literal and the pack version/filename pair. An exact-text comparison against input HEAD confirms version substitution only, with no assertion, skip, timeout or control-flow changes. Installed and pack suites were not executed.
+- Independently reviewed the complete input delta: exactly five version fields in three JSON files and two README version tokens, plus task evidence. README meaning and availability caveat are unchanged. Dependency entries, production, workflow and lifecycle test inputs are unchanged from the prior reviewed checkpoint. No proposal, design, delta or baseline edits were made.
+- Configured Prettier equivalence independently PASS: the current lifecycle test equals formatting of the code-revision test using repository configuration. Its SHA256 still matches `2D8856FCE5920A28EEE3BD277E527527ED36D1A1D5FA8FE1DF9A424299DEBFF9`. Reused the recorded post-format 44 PASS / 0 FAIL, zero skipped/cancelled result at that hash and unchanged production/fixture inputs. The 44-record suite was not rerun.
+- Executed `node --test --test-reporter=tap tests/release-metadata.test.mjs`: exit 0, 9 PASS / 0 FAIL, zero skipped/cancelled, Windows Node `v26.13.0`. These are portable unit assertions, not actual Linux execution.
+- Executed syntax checks for production, lifecycle test and all three changed release test files: PASS. Pinned Prettier `3.9.10` with `--ignore-path .gitignore` passes on production, lifecycle test, three release tests, three JSON files, README and the active change directory. `git diff --check` and installed OpenSpec `1.15.0` strict change validation PASS. Structural checks do not prove runtime behavior.
+- Read-only CI review: `.github/workflows/ci.yml:48` selects the 44-record focused file, and line 60 includes the nine metadata units in its final selected-unit step. Both have one-minute timeouts on Ubuntu 24.04 / Node 24.22.2. Workflow unchanged. Exact-head Linux CI remains PENDING, not passed.
+- Independent verdict: CLEAN for complete-candidate authorized unit/static scope, ready for draft PR preparation. Prior code review and product delta approval remain valid. Actual Windows natural exit, installed behavior, package execution and external boundaries remain deferred and UNVERIFIED. No runtime, pack, installed, integration or e2e proof is claimed.
+- Assertion status: PASS within unit/static scope, with execution versus reuse separated above. No external runtime resources acquired. Unit cleanup assertions pass in reused evidence. Worktree cleanup remains pending landing. The previously reported 24 moderate dependency vulnerabilities remain unremediated baseline diagnostics, not security qualification or a new gate.
+- Later finalization must stay docs-only or receive affected revalidation. Archive, merge, deployment, installation and publication remain separately gated. The release owner must resolve the fresh authorized prepublication conflict check. No network, token, state or runtime action was performed in this reconciliation.
 
 ## Workflow follow-up
 
