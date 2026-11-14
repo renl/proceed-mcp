@@ -31,7 +31,7 @@ None.
 
 ### Modified Capabilities
 
-- `opencode-session-continuation`: explicitly require provisioning completion and preservation of unrelated caller input use. See the [delta](specs/opencode-session-continuation/spec.md) and [current contract](../../specs/opencode-session-continuation/spec.md).
+- `opencode-session-continuation`: explicitly require provisioning completion and preservation of unrelated caller input use. See the [delta](specs/opencode-session-continuation/spec.md) and [current contract](../../../specs/opencode-session-continuation/spec.md).
 
 ## Impact
 

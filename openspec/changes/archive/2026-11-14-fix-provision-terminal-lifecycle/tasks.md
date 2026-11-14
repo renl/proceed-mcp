@@ -5,18 +5,18 @@
 One independent change and one PR to `main`. Prerequisite: none.
 Baseline: `2bbce072314fc046ad9c089514b386edb8a6957b` (fresh `main` and `origin/main`).
 Mergeable outcome: provisioning releases its input activity without disrupting caller input.
-Nearest landing blocker: draft PR and exact-head Linux CI, then separately authorized finalization and landing. Preview.8 assignment and independent complete-candidate unit/static review are complete.
+Nearest landing blocker: finish active owner finalization, then one authorized CLI archive, final-head green CI and freshness-checked merge of [PR #18](https://github.com/renl/proceed-mcp/pull/18). Preview.8 alignment, independent complete-candidate unit/static review and prearchive exact-head Linux CI are complete.
 
 - Path: `.worktree/fix-provision-terminal-lifecycle`
 - Branch/change: `fix-provision-terminal-lifecycle`
 - Lifecycle owner: test engineering
-- Status: active, independent unit/static candidate review PASS
-- Next action: draft PR and exact-head Linux CI. No archive or merge authority is granted by this review.
+- Status: active, independent unit/static candidate review PASS. Candidate-specific deferred-proof acceptance recorded below.
+- Next action: complete pending owner finalization, archive once through the authorized executor, then final-head CI and authorized fresh merge.
 - Cleanup evidence: not eligible, no landed or abandoned outcome.
 
 The user-visible success condition is regaining the shell after provisioning without Ctrl+C.
 Unit stream behavior proves owned cleanup only, a proxy for installed natural exit.
-No runtime, real token, provisioning, installation, publication or merge is authorized.
+The user has authorized this candidate's archive, final green CI and freshness-checked merge, followed by preview.8 npm publication, matching Registry update and global installation from clean merged `main`. This task finalization executes none of those actions. Provisioning must not be rerun. Never read, hash, overwrite or delete the existing token. Pairing, state and keys remain unchanged, as does npm `latest`.
 
 ## 1. Terminal lifecycle correction
 
@@ -52,9 +52,9 @@ Decomposition checklist: all five cross-unit triggers NO. One correction and one
 
 ## Checks and evidence
 
-- Pre-merge: focused units, syntax/format, structural validation and independent candidate review required. Failure owner: implementation for production failures, test engineering for test defects. Trigger: this handoff and completed candidate.
-- Pre-exposure: candidate-specific decision for unverified native behavior remains with the project owner before deployment. Unit results do not authorize exposure.
-- Post-deploy/deferred: owner manual Windows natural-exit and terminal restoration verification after separately authorized deployment. Named risk: command may still retain a native resource despite unit cleanup. UNVERIFIED, not passed.
+- Pre-merge: focused units, syntax/format, structural validation and independent candidate review PASS within the recorded scope. Prearchive exact-head Linux CI PASS. Final archived-head CI and immediate head/target, required-check, review and mergeability checks remain required and unrun for the future revision. Failure owner: implementation for production failures, test engineering for test defects, delivery owner for landing checks. Trigger: finalization and merge.
+- Pre-exposure: the project owner explicitly accepts this candidate's deferred Windows natural-exit proof for archive, merge and preview.8 delivery. This is scoped risk acceptance, not a passing native check or release-readiness qualification. Release owner must obtain a fresh authorized version-conflict check before publication and deliver from clean merged `main`.
+- Post-deploy/deferred: owner manual Windows natural-exit and terminal restoration verification remains UNVERIFIED, not passed. Named risk: command may still retain a native resource despite unit cleanup. Owner: project owner. Trigger: a separately authorized safe manual check after deployment, or a new exit/restoration failure. Do not rerun provisioning or access the saved token to obtain proof. Installed/package execution and real external behavior for preview.8 also remain UNVERIFIED under the unit-only restriction, not inferred from earlier preview runtime proof.
 - Baseline evidence: Node v26.13.0 on Windows, synthetic Linux memory dependencies. Syntax check PASS (exit 0). Final focused unit run exit 1, 43 Node records, 22 PASS / 21 FAIL including parent summaries, zero skipped/cancelled. Linux execution itself is not claimed.
 - RED findings: idle input stays active after submit/cancel, explicitly paused input is not consumed without caller restart, partial raw acquisition is not restored, listener/prompt setup errors expose the synthetic exception, premature close retains activity, and command success/input failures/persistence failure retain reading. Already-flowing caller input continues on submit/cancel. No production code was edited.
 - First exploratory run: 42 records, 23 PASS / 19 FAIL. One test-owner defect incorrectly required pausing input never acquired during private-mode refusal. Corrected to require activity release only after acquisition. Subsequent run and final timer-tracking run: 43 records, 22 PASS / 21 FAIL. These are red development runs, not verification passes.
@@ -123,7 +123,19 @@ Decomposition checklist: all five cross-unit triggers NO. One correction and one
 - Assertion status: PASS within unit/static scope, with execution versus reuse separated above. No external runtime resources acquired. Unit cleanup assertions pass in reused evidence. Worktree cleanup remains pending landing. The previously reported 24 moderate dependency vulnerabilities remain unremediated baseline diagnostics, not security qualification or a new gate.
 - Later finalization must stay docs-only or receive affected revalidation. Archive, merge, deployment, installation and publication remain separately gated. The release owner must resolve the fresh authorized prepublication conflict check. No network, token, state or runtime action was performed in this reconciliation.
 
+### Prearchive freshness and candidate-specific decision
+
+- Fresh read-only checks on 2026-11-14 confirm local HEAD and PR #18 head `367583b9b275c835b1e24168d6adc9693f775213`, PR base and live remote `main` `2bbce072314fc046ad9c089514b386edb8a6957b`. PR is OPEN, draft and MERGEABLE. Production `src/` is byte-unchanged from reviewed code `5149d2b2cc96b3fcc2491b82bc4ea007c61ddcf7` by `git diff --exit-code`. No production, test or dependency re-execution was needed for this evidence-only finalization.
+- [Linux CI run 43602499783](https://github.com/renl/proceed-mcp/actions/runs/43602499783), exact head above, is COMPLETED/SUCCESS with `validate` SUCCESS. The focused step actually passes all 44 Node records, including parent summaries. The nine metadata unit records actually pass inside the existing final selected-unit group, not a separate nine-record CI job. The earlier PENDING entries are historical and superseded by this result. Current CI does not prove native Windows terminal exit.
+- Reuse the unchanged independent complete-candidate review, focused assertion evidence and version-only reconciliation above. `PROVISION-OUTPUT-001` remains CLOSED after correction attempt 1. Completion-output rejection and resource cleanup assertions pass. README version alignment is complete for preview.8 without a new README behavior claim. README PR #17 remains independent.
+- Decision source: the current summary in the canonical [status log](https://github.com/renl/proceed-mcp/blob/main/docs/status_log.md), recording the user's explicit PR #18 proceed authorization. Scope is this reviewed candidate against the base above, archive/final CI/fresh merge and subsequent preview.8 npm/Registry/global delivery with `latest` unchanged. The user accepts deferred Windows natural-exit/manual proof and the disclosed no-merge-queue timing risk. Acceptance is not PASS, does not establish installed operation, and does not waive failed required checks, branch protection, native permissions or production safety.
+- Mitigation and review trigger: preserve ownership-limited cleanup and secret-free failure handling, require final-head green CI and immediate revision/check/review/mergeability verification before head-pinned merge. Stop on drift, conflicts or failed checks. Acceptance expires for an affected code, test, dependency, configuration or baseline change, or a newly observed native failure, pending affected revalidation and owner decision. Project owner owns deferred manual acceptance. Delivery owner owns fresh landing and publication checks.
+- The 24 moderate dependency vulnerabilities remain unremediated baseline informational diagnostics. No remediation or security qualification is claimed. Approval does not weaken credential, state, pairing or key protections.
+- Task criteria and test mapping are unchanged. Other owners' pending proposal/design/delta finalization must finish before archive. Preserve their dirty files. All in-folder content and move-stable links must be final before the move. The relative delta/design links above survive the archive move. [PR #18](https://github.com/renl/proceed-mcp/pull/18) is the durable pointer for subsequent final-head, merge and cleanup evidence, which must not be backfilled into archived tasks.
+- Assertion status: PASS only for the recorded unit/static scope. Deferred native/runtime status: accepted risk, UNVERIFIED. Cleanup status: unit assertions pass, no external resources acquired by this finalization, worktree cleanup pending verified landing. Archive, final CI, merge, publication and installation have not been performed by this task.
+
 ## Workflow follow-up
 
-- Owner delta review and formatter gate are complete. After separate authorization and version disposition, perform one CLI archive inside the single PR.
-- Merge only with authorization. Verify landing and safely remove the worktree afterward.
+- Independent review, prior product delta approval, formatter gate, preview.8 alignment and prearchive exact-head CI are complete. Pending owner finalization must finish before the authorized executor performs one CLI archive inside PR #18.
+- Confirm the archive/finalization delta is docs-only or revalidate affected inputs. Pass final-head CI and fresh landing checks before the already authorized merge. Record later evidence on PR #18 or the live status log, never inside the archive.
+- Verify landing and safely remove the worktree afterward. Cleanup remains pending, not completed by archive or merge authorization.
