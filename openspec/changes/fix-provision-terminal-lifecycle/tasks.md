@@ -101,6 +101,15 @@ Decomposition checklist: all five cross-unit triggers NO. One correction and one
 - Version disposition: preview.7 is already public. A new preview.8 is needed for delivery of changed behavior. Manifest, lockfile, Registry metadata and README changes are outside this evidence refresh and remain for authorized owners. This candidate is unit/static reviewed, not release-ready or authorized to archive, merge, install or publish.
 - Finalization after this review must be confirmed docs-only. Any later code, test, dependency, configuration, version or baseline change requires affected revalidation. Archive has not run.
 
+### Authorized version alignment
+
+- CoS version decision: `0.1.0-preview.8`, because `preview.7` is already public. Aligned only the existing coupled version values: `package.json` version, both `package-lock.json` version fields, both `server.json` version fields, and the two existing README version tokens (source pin and install command). All other words, claims and availability-neutral presentation are unchanged.
+- Public exact lookup: `https://registry.npmjs.org/@meshimize%2Fproceed-mcp/0.1.0-preview.8` returned HTTP 404 (absent), with `0.1.0-preview.7` returning HTTP 200 as a positive control. No publication conflict at decision time.
+- No dependency resolution, install, repack or lockfile dependency edit occurred. The pre-existing approved local dependency state is preserved.
+- Static checks on explicit paths: JSON parse PASS for `package.json`, `package-lock.json` and `server.json`, Prettier `--check` PASS for those three files plus `README.md`, `git diff --check` PASS.
+- Stale test literals remain and require SDET update before any revalidation can pass: `tests/release-metadata.test.mjs` (lines 17 and 103), plus non-unit installed/pack literals `tests/release-installed.test.mjs:159` and `tests/release-pack.mjs:113-114`. These were not run and not edited.
+- Production source, tests and assertions are unchanged. This is a value-only version alignment, not a normative behavior change, and it carries no archive, merge, install or publication authorization.
+
 ## Workflow follow-up
 
 - Owner delta review and formatter gate are complete. After separate authorization and version disposition, perform one CLI archive inside the single PR.
