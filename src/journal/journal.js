@@ -91,6 +91,14 @@ export class Journal {
       );
     }
 
+    // The read is only this instance's history while the path still names the
+    // object this instance opened. A replacement observed after the read is
+    // discarded here, before any sequence or format is published as recovered.
+    await verifyStorageIdentity(this.filePath, this.#identity, {
+      expected: 'file',
+      description: `the journal at ${this.filePath}`,
+    });
+
     if (buffer.length === 0) {
       const header = createFileHeader();
       // A journal this attempt created is empty but not yet observed as ordinary
@@ -368,6 +376,24 @@ export class Journal {
     let handle;
     try {
       handle = await open(this.filePath, 'r+', POSIX_FILE_MODE);
+      // The dedicated mutation handle must still name the journal this instance
+      // opened, and the path must still name that same object, before any byte is
+      // removed. A replacement opened here is refused and left intact instead of
+      // being truncated as if it were this instance's history.
+      const opened = await handle.stat();
+      if (
+        this.#identity !== null &&
+        (opened.dev !== this.#identity.dev || opened.ino !== this.#identity.ino)
+      ) {
+        throw storageFailure(
+          `the journal at ${this.filePath} changed identity before its incomplete tail was removed`,
+          'STORAGE_FAILURE',
+        );
+      }
+      await verifyStorageIdentity(this.filePath, this.#identity, {
+        expected: 'file',
+        description: `the journal at ${this.filePath}`,
+      });
       await handle.truncate(validLength);
       await handle.sync();
       await syncDirectory(dirname(this.filePath));
