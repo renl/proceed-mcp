@@ -25,9 +25,9 @@ Problem: custom permission checks and protection-query prerequisites obstruct se
 
 The first useful independently landable outcome is the complete Windows setup-to-approval path plus continued operation over existing state under ordinary OS access. This is a user-visible change, not an unexposed foundation.
 
-It can land independently against `main` and relies on the current [delivery capability](../../specs/opencode-session-continuation/spec.md) and [distribution capability](../../specs/npm-distribution/spec.md). It has no dependency on another configuration session or its unknown cleanup state.
+It can land independently against `main` and relies on the current [delivery capability](../../../specs/opencode-session-continuation/spec.md) and [distribution capability](../../../specs/npm-distribution/spec.md). It has no dependency on another configuration session or its unknown cleanup state.
 
-This supersedes the Windows filesystem admission policy recorded in [enforce-windows-secret-protection](../archive/2026-11-10-enforce-windows-secret-protection/proposal.md). The separate token policy recorded in [simplify-telegram-credential-storage](../archive/2026-11-12-simplify-telegram-credential-storage/proposal.md) remains unchanged. Those records remain historical.
+This supersedes the Windows filesystem admission policy recorded in [enforce-windows-secret-protection](../2026-11-10-enforce-windows-secret-protection/proposal.md). The separate token policy recorded in [simplify-telegram-credential-storage](../2026-11-12-simplify-telegram-credential-storage/proposal.md) remains unchanged. Those records remain historical.
 
 Excluded: POSIX security changes, token-policy changes, automatic stale-lock deletion, authentication or network changes, pairing redesign, storage migration, permission bypass flags, native helpers, services, compilers and new protection frameworks. Publication, installation and runtime mutation require separate authority.
 
