@@ -27,7 +27,7 @@ const FAILURES = new Map([
     {
       code: 'STORAGE_FAILURE',
       message:
-        'protected broker storage could not be verified; select dedicated protected storage or repair it explicitly outside startup',
+        'broker storage checks failed. Preserve the state directory and investigate OS access, file type, path identity and storage separation before a new attempt. POSIX state/key ownership and permission requirements still apply.',
     },
   ],
   [
@@ -35,7 +35,7 @@ const FAILURES = new Map([
     {
       code: 'STORAGE_FAILURE',
       message:
-        'protected broker storage or journal state failed; preserve the state directory and investigate storage before a new attempt',
+        'broker storage or journal state failed. Preserve the state directory and investigate storage before a new attempt. POSIX state/key ownership and permission requirements still apply.',
     },
   ],
   [
