@@ -2,7 +2,7 @@
 
 Remove custom Windows permission admission throughout setup and subsequent storage operations, without removing storage correctness or application authority.
 
-Parent: [proposal](proposal.md). Behavior: [delivery delta](specs/opencode-session-continuation/spec.md) and [distribution delta](specs/npm-distribution/spec.md). These deltas intentionally supersede the merged Windows protection requirement. The merged [delivery](../../specs/opencode-session-continuation/spec.md) and [distribution](../../specs/npm-distribution/spec.md) specs remain authoritative until this change merges.
+Parent: [proposal](proposal.md). Behavior: [delivery delta](specs/opencode-session-continuation/spec.md) and [distribution delta](specs/npm-distribution/spec.md). These deltas intentionally supersede the merged Windows protection requirement. The merged [delivery](../../../specs/opencode-session-continuation/spec.md) and [distribution](../../../specs/npm-distribution/spec.md) specs remain authoritative until this change merges.
 
 The production caller inventory below is based on the current source, not historical designs. `protection.js` currently combines permission policy with object-kind and redirection checks inside its Windows metadata query. Removing its calls without retaining those correctness checks would remove more than the approved policy.
 
