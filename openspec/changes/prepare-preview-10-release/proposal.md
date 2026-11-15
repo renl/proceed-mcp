@@ -32,7 +32,7 @@ None.
 
 ### Modified Capabilities
 
-None. The existing [npm-distribution contract](../../specs/npm-distribution/spec.md) already requires truthful current-version guidance and consistent package/Registry identity. Its preview.9 change-specific references are historical context, not a requirement to reuse an immutable published version.
+None. The existing [npm-distribution contract](../../../specs/npm-distribution/spec.md) already requires truthful current-version guidance and consistent package/Registry identity. Its preview.9 change-specific references are historical context, not a requirement to reuse an immutable published version.
 
 **No-capability-delta decision:** `skip_specs: true` is justified because this change updates release versions and pinned expectations only. It adds no runtime behavior, contract, dependency, security posture or global setting. Do not invent a capability delta or edit current specs to satisfy structural validation.
 
