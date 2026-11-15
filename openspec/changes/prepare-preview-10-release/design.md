@@ -2,7 +2,7 @@
 
 [Proposal](proposal.md): prepare `@meshimize/proceed-mcp@0.1.0-preview.10` without changing behavior. Base is merged `main` at `a26897ae6b4b764988b4494b8992c4f1b25dd6ee`. Dependencies PR #20 and PR #21 are already merged. This change can land independently in one release-preparation PR.
 
-The existing [npm-distribution contract](../../specs/npm-distribution/spec.md) remains unchanged. Use top-level `skip_specs: true`, no capability delta and no manual baseline spec edits. Archive through the authorized CLI operation inside the same PR.
+The existing [npm-distribution contract](../../../specs/npm-distribution/spec.md) remains unchanged. Use top-level `skip_specs: true`, no capability delta and no manual baseline spec edits. Archive through the authorized CLI operation inside the same PR.
 
 ## Decisions and exact edit allowlist
 

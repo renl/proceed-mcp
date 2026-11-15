@@ -25,7 +25,7 @@ Scope and criteria: [proposal](proposal.md), [design](design.md).
 ## 2. Integrated candidate
 
 - [x] 2.1 Independently review the immutable complete candidate against the baseline and exact allowlist. Run focused metadata units and scoped static checks in the sequence below. Record head, target, assertion results and unrun checks before owner final review or archive.
-- [ ] 2.2 Confirm existing exact-head permitted CI passes, including its existing metadata unit selection. No CI edits or broad test execution. Confirm later finalization is docs-only or revalidate affected inputs.
+- [x] 2.2 Confirm existing exact-head permitted CI passes, including its existing metadata unit selection. No CI edits or broad test execution. Confirm later finalization is docs-only or revalidate affected inputs.
 
 ## Checks and sequence
 
@@ -80,3 +80,5 @@ Candidate: base `a26897ae6b4b764988b4494b8992c4f1b25dd6ee`, test engineering set
 - Non-unit literal maintenance remains unrun and unverified. No pack, installed, skill, native-helper, integration, renderer, e2e, preflight, build, install, publish or runtime checks were executed. Older runtime/non-unit deferrals remain unchanged. Preview.9 hashes cannot qualify preview.10 bytes. Operations owns new artifact admission and public readbacks from clean merged source.
 - Finalization: this evidence changes only this active tasks file. Subsequent owner link repairs, CLI archive and live status/link updates must remain docs-only, with unchanged production, tests, dependencies, configuration and baseline, or affected checks require revalidation. Exact-head CI must be recorded before archive and merge. No push, PR, archive, merge or cleanup was performed here.
 - Assertion status: bounded metadata PASS, unchanged README whole-file formatting FAIL, CI pending, non-unit/runtime/artifact proof unverified. Cleanup status: no test resources or scratch created, worktree remains active and lifecycle cleanup pending until verified landing.
+- Exact-head CI evidence for task 2.2: workflow `ci` run `43717137965` (job `132820994428`) completed with conclusion SUCCESS on head `a92bc208e383066fc9d9ddea76f6bb882d473533`, including its existing `tests/release-metadata.test.mjs` selection. No CI edit and no broad or non-unit execution accompanied it.
+- Finalization check for task 2.2: the commits after that verified head are docs-only. They carry the owner link repairs, this task tick and evidence, the authorized CLI `openspec archive prepare-preview-10-release --yes` result under `skip_specs: true` (no baseline spec write) and the change-folder move. Production source, tests, dependencies, CI, configuration and baseline `a26897ae6b4b764988b4494b8992c4f1b25dd6ee` are unchanged, so prior implementation and CI evidence stays valid.
