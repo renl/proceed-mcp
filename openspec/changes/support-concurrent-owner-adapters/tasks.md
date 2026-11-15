@@ -11,9 +11,9 @@ First mergeable outcome: two legitimate same-owner adapters independently prepar
 - Baseline: `main` at `4a7448523075c41a026cd311c1761b348cee9f27`
 - Prerequisite: none
 - Lifecycle owner: test engineering
-- Status: active, executable setup and combined architecture review complete
-- Nearest landing blocker: production implementation and independent candidate review
-- Next action: coordinated implementation against this brief
+- Status: active, implementation and independent unit/static candidate review complete
+- Nearest landing blocker: primary-author delta review, exact-head Linux CI and candidate-specific landing/exposure decision for unverified boundaries
+- Next action: coordinated owner review and bounded finalization decisions
 - Cleanup evidence: no landing or abandonment, retain the active worktree. After authorized landing, verify merged content and safely remove through the normal lifecycle.
 
 Founder-visible success: two OpenCode directories sharing one owner can complete independent approval interactions and close independently without losing pending work.
@@ -36,7 +36,7 @@ Proof would be both actual original calls returning their own human decisions, m
 
 ## 3. Integrated candidate review
 
-- [ ] 3.1 Freeze the implementation-complete revision and independently review all changed production, tests and artifacts. Run the bounded sequence below. Record pass/fail counts, source-pruning review and candidate-specific remaining risk without counting unrun boundaries passed.
+- [x] 3.1 Freeze the implementation-complete revision and independently review all changed production, tests and artifacts. Run the bounded sequence below. Record pass/fail counts, source-pruning review and candidate-specific remaining risk without counting unrun boundaries passed. Evidence: independent review below, unit/static scope only.
 - [ ] 3.2 Obtain the primary capability author's delta review against latest merged specs after independent review. Verify any later finalization delta is docs-only, otherwise revalidate affected evidence. Candidate-specific landing/exposure acceptance is required through coordination for the unverified real boundary under the unit-only restriction.
 
 ## Implementation filebrief
@@ -153,6 +153,37 @@ No conditional production path needed a change: the binding, executor, server, C
 Run sequence at `a7e3ada`, from the assigned worktree: step 1 syntax checks pass and the explicit-path Prettier check passes for the two tests, this tasks file, `proposal.md`, the capability delta, `src/broker/registration.js` and the edited CI file; step 2 passes 6 records; step 3 passes 5 records; step 4 passes 95 records, each with zero failures, skips or cancellations; step 5 has a clean `git diff --check` and `openspec validate support-concurrent-owner-adapters --strict` exits 0. Combined: 106 records, 106 passed.
 
 Remaining unverified and outside this brief: exact-head Ubuntu execution of the extended CI step, the real wire/TLS, first-use and host-closure boundaries listed above, and the pre-existing non-unit suites that still assert a duplicate live owner returns `409 OWNER_IN_USE` (`tests/portable-registration-http.test.mjs`, `tests/portable-registration-public.test.mjs`, `tests/portable-public-delivery.test.mjs`, `tests/portable-wait.test.mjs`). Those files are outside the authorized test allowlist and execution selection, and they encode the behavior this change replaces, so replacing them is an owner decision before that class is run.
+
+### Independent candidate review
+
+Reviewed immutable candidate `8736134aef5afcfa5234ea5278301c24bb00721b`, production/CI revision `a7e3ada139eb3dc4b77be97359054c066b55c6af`, against `main` and merge-base `4a7448523075c41a026cd311c1761b348cee9f27`. Initial branch and clean tracked/untracked state match the brief. The implementation-to-candidate delta contains only this tasks file. Proposal, design, capability delta, changed tests, production diff and CI selection were reviewed. Verdict: PASS within authorized unit/static scope, no production hotfix identified. This is not real-boundary, release or merge authorization.
+
+Independent execution on Windows Node v26.13.0: production and both changed test syntax checks PASS, explicit-path pinned Prettier check PASS, changed registry/composition selection 11/11 PASS with zero failures/cancellations/skips, base-to-candidate whitespace check PASS, strict OpenSpec validation PASS. The two changed unit selections were combined into one bounded invocation after cheap checks. Reused implementation evidence at `a7e3ada` for the unchanged binding/cancellation/wait selection: 95/95 PASS, zero failures/cancellations/skips. Those files and their production inputs are unchanged at the candidate. Total selected coverage is 106 records, not 106 independent re-executions.
+
+Source review confirms create prunes the current ID map once before allocation using one captured time. The pass has no await, insertion or rescan and deletes only the visited expired record through an identity check. Live siblings remain untouched. Targeted lookup expires before owner/secret comparison. Close clears the sole map and permanently fences operations. The existing random-ID collision retry is not the expiry pass and no constant-time creation or concurrency quota is claimed. Memory reclamation is source proof, not inferred from authority-denial tests.
+
+Executed composed cases reach both waits before reverse decisions and assert distinct outcomes, original executor invocation routing, matching request identities, independent idempotent acknowledgement, surviving sibling wait, capability transfer and explicit recovery. They do not exercise JSON-RPC framing or durable media. Unknown-create/release injections confirm remote creation and held-exchange entry before close, bounded abort, no guessed release, exact orphan expiry and no late new activity. Existing reviewed binding tests explicitly wait for held heartbeat/replacement entry before close. Their unchanged execution evidence is reused. The late original-result callback is independently exercised after executor close and starts no report.
+
+No new failure occurred in independent execution. Earlier history remains: one corrected synthetic create-response fixture defect, five expected baseline same-owner admission failures, and corrected strict-delta validation warnings. None is reported as a current product failure or erased by the GREEN result.
+
+#### Read-only stale non-unit assessment
+
+These are known obsolete expectations inferred from source, not observed test-run failures. No non-unit test was run or edited.
+
+| Location                                            | Disposition needed when separately authorized                                                                                                                                                                                                                                                        |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/portable-registration-http.test.mjs:85`      | Replace duplicate-owner rejection with distinct successful registration and sibling-safe authority checks. Preserve adjacent role, Origin, parser and tuple denials.                                                                                                                                 |
+| `tests/portable-registration-public.test.mjs:44-56` | The entire duplicate-admission block needs a narrow coordinated rewrite, not just the error assertion. Successful prepare adds a reservation, changes journal expectations and contributes its own captured DELETE. Preserve lazy single-flight, independent release and no cancellation assertions. |
+| `tests/portable-public-delivery.test.mjs:148`       | Success/duplicate lease branches use owner occupancy as a liveness probe. Replace it with an operation targeting the existing registration, preserving before/exact deadline and renewal observations.                                                                                               |
+| `tests/portable-wait.test.mjs:185,216,241,243`      | Replace occupancy-based lease probes with named-registration validity checks that do not accidentally renew or shift the tested deadline. Preserve attached-success renewal and stale-incarnation isolation.                                                                                         |
+
+`WAIT_ALREADY_ACTIVE` conflicts at `portable-wait.test.mjs:165,176` and `DECISION_MISMATCH` at `portable-public-delivery.test.mjs:133,147` remain valid. They concern a request's waiter or terminal decision, not owner occupancy. The unit binding's synthetic `OWNER_IN_USE` compatibility-decoding cases also remain valid, without asserting that the current registry emits that code.
+
+Smallest safe disposition now: retain these assertions as explicit deferred test debt, owned by test engineering, triggered before non-unit verification is re-enabled or a broad-suite claim is made. They are excluded from the actual explicit-path CI workflow, so they do not block truthful current unit/static verification or that selection. `package.json` still defines broad `npm test` discovery, which includes them. No broad-suite PASS is claimed. Coordination must clarify authoring scope before correcting these four files. Future correction must preserve the valid conflict cases and renewal invariants, not skip suites or weaken production.
+
+Exact-head Ubuntu 24.04 / Node 24.22.2 CI remains pending. TLS/wire admission, actual multi-directory original-call JSON-RPC delivery, natural host closure, first use, broker/poller start races, disk/crash durability and Telegram remain unverified. Candidate-specific landing/exposure acceptance and primary-author review are still required through coordination. The supplied worktree status snapshot predates this change, so it is not evidence of current landing authority. Worktree lifecycle stays active, retained and not cleanup-ready.
+
+Process exception: implementation reported using a one-command `core.hooksPath=/dev/null` override for its first commit despite the hook-bypass ban. Independent read-only inspection finds `core.hooksPath` unset and only `.sample` hook files. This does not retroactively authorize the override. No override or history rewrite is used in this review.
 
 ## Workflow follow-up
 
