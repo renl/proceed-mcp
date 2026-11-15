@@ -2,10 +2,11 @@
 //
 // The token is read from a trusted terminal with echo disabled before any secret
 // character is consumed. Only one fixed prompt reaches the operator, nothing is
-// echoed, no length or masking character is shown, and the original terminal mode
-// plus every owned listener are released on success and on every failure path.
-// Losing the private facility is a prerequisite refusal, never a fallback to
-// echoed input.
+// echoed, no length or masking character is shown, and the original terminal mode,
+// every owned listener and the input activity this attempt started are released on
+// success and on every failure path. Input use the caller already had is captured
+// before acquisition and is never paused, destroyed or closed. Losing the private
+// facility is a prerequisite refusal, never a fallback to echoed input.
 import { blockedPrerequisite, invalidArgument } from '../errors.js';
 import {
   MAX_TOKEN_BYTES,
@@ -45,10 +46,18 @@ export function readTokenFromTerminal(
   if (stream.isTTY !== true) return Promise.reject(wrongInputMode());
   if (typeof stream.setRawMode !== 'function') return Promise.reject(unavailable());
   const originalRaw = stream.isRaw === true;
+  // Capture the caller's input use before acquisition changes it (decision 1).
+  const callerFlowing = stream.readableFlowing === true;
   try {
     // Echo is disabled before a single secret character is consumed.
     stream.setRawMode(true);
   } catch {
+    // Raw mode may already have changed; restore it without consuming input.
+    try {
+      stream.setRawMode(originalRaw);
+    } catch {
+      // The terminal is already gone; nothing is left to restore.
+    }
     return Promise.reject(unavailable());
   }
   return new Promise((resolve, reject) => {
@@ -56,11 +65,32 @@ export function readTokenFromTerminal(
     const owned = [];
     let settled = false;
     let timer = null;
+    // Ownership-limited cleanup: release only what this attempt acquired and
+    // attempt every applicable action even if one restoration action fails.
     const release = () => {
-      for (const [name, handler] of owned) stream.removeListener(name, handler);
+      for (const [name, handler] of owned) {
+        try {
+          stream.removeListener(name, handler);
+        } catch {
+          // Keep releasing the remaining owned resources.
+        }
+      }
       owned.length = 0;
       if (timer !== null) clearTimeout(timer);
       timer = null;
+      // Stop reading this attempt started, without disabling caller input use.
+      if (
+        !callerFlowing &&
+        typeof stream.pause === 'function' &&
+        !stream.destroyed &&
+        !stream.readableEnded
+      ) {
+        try {
+          stream.pause();
+        } catch {
+          // The terminal is already gone; nothing is left to stop.
+        }
+      }
       try {
         stream.setRawMode(originalRaw);
       } catch {
@@ -77,7 +107,15 @@ export function readTokenFromTerminal(
       if (settled) return;
       settled = true;
       release();
-      stderr?.write?.('\n');
+      try {
+        stderr?.write?.('\n');
+      } catch {
+        // The completion newline cannot be shown; settle with a secret-free
+        // failure instead of letting the output exception escape the input
+        // callback and leave the exchange pending.
+        reject(unavailable());
+        return;
+      }
       try {
         resolve(parseTokenInput(Buffer.from(entered)));
       } catch (error) {
@@ -111,17 +149,28 @@ export function readTokenFromTerminal(
       owned.push([name, handler]);
       stream.on(name, handler);
     };
-    listen('data', onData);
-    listen('end', () =>
-      fail(invalidArgument('the Telegram token input ended before the token was submitted')),
-    );
-    listen('error', () =>
-      fail(invalidArgument('the Telegram token input could not be read from the terminal')),
-    );
-    listen('close', () =>
-      fail(invalidArgument('the Telegram token input ended before the token was submitted')),
-    );
-    stderr?.write?.(prompt);
+    try {
+      listen('data', onData);
+      listen('end', () =>
+        fail(invalidArgument('the Telegram token input ended before the token was submitted')),
+      );
+      listen('error', () =>
+        fail(invalidArgument('the Telegram token input could not be read from the terminal')),
+      );
+      listen('close', () =>
+        fail(invalidArgument('the Telegram token input ended before the token was submitted')),
+      );
+      // Reading starts for this attempt even when the caller paused input, and
+      // cleanup stops it again when the caller was not already consuming input.
+      if (!callerFlowing && typeof stream.resume === 'function' && !stream.destroyed)
+        stream.resume();
+      stderr?.write?.(prompt);
+    } catch {
+      // Partial setup failures restore the terminal and reject without echoing
+      // the underlying exception, which may carry supplied input.
+      fail(unavailable());
+      return;
+    }
     // The deadline starts at prompt readiness and covers the whole exchange.
     timer = setTimeout(() => {
       fail(invalidArgument('the Telegram token input did not complete within 60 seconds'));
