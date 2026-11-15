@@ -366,7 +366,7 @@ Provisioning and startup MUST NOT echo the token or expose it through CLI argume
 
 ### Requirement: Credential provisioning and loading fail closed
 
-Telegram token-file provisioning and loading MUST use ordinary OS file access without token-specific ACL, owner, inheritance, exact-mode or local-fixed-NTFS protection admission. These operations MUST NOT query or repair token-file or dedicated credential-parent permissions as a prerequisite, require a special protected parent, or refuse solely because other OS principals have access. They MUST NOT perform token-specific chmod repair. Ordinary OS permissions, I/O errors and native permission prompts still apply. This exception MUST NOT weaken protection for approval state, journals, control/owner credentials, confidential-channel keys, operator keys or private request authority.
+Telegram token-file provisioning and loading MUST use ordinary OS file access without token-specific ACL, owner, inheritance, exact-mode or local-fixed-NTFS protection admission. These operations MUST NOT query or repair token-file or dedicated credential-parent permissions as a prerequisite, require a special protected parent, or refuse solely because other OS principals have access. They MUST NOT perform token-specific chmod repair. Ordinary OS permissions, I/O errors and native permission prompts still apply. This token-file policy MUST NOT weaken POSIX protection for approval state, journals, control/owner credentials, confidential-channel keys, operator keys or private request authority. Windows state and local keys instead follow the ordinary-access policy under `Windows state and credential admission verifies required protection`. Authentication and request-authority checks remain required on both platforms.
 
 Provisioning MUST verify command prerequisites, destination separation, destination absence and usable private input before consuming token input. Separation MUST cover the eventual destination even when parent directories do not yet exist and MUST NOT be bypassed by path resolution or redirection. Existing destinations MUST NOT be opened for content comparison, adopted as successful provisioning or overwritten. Creation MUST be exclusive. Ordinary file type, identity and write-completion checks MUST prevent reporting success for a different destination or an incomplete write. They MUST NOT become owner-only protection gates or a promise of resistance to hostile local mutation. Loading MUST establish required storage separation and load a valid selected file for broker startup without permission-protection snapshots. Observed file replacement or incomplete access MUST produce failure rather than successful loading. No native handle-pinning or adversarial race-protection framework is required.
 
@@ -434,7 +434,7 @@ Missing, empty, invalid or unreadable selected credentials and invalid selected 
 
 ### Requirement: Credential limitations and foreground compatibility remain explicit
 
-The product MUST document that the separate Telegram token file is ordinary plaintext. Any OS principal able to read the file can obtain and misuse the token. Proceed MUST NOT promise owner-only access, encryption, an OS credential store, historical confidentiality or resistance to local file mutation. It MUST disclose trusted runtime/package assumptions and exposure through administrators, other processes with OS access and backups. These token-file limitations MUST be distinguished from the unchanged protection of approval state, journals, control/owner credentials, channel/operator keys, pairing and request/decision authority.
+The product MUST document that the separate Telegram token file is ordinary plaintext. Any OS principal able to read the file can obtain and misuse the token. Proceed MUST NOT promise owner-only access, encryption, an OS credential store, historical confidentiality or resistance to local file mutation. It MUST disclose trusted runtime/package assumptions and exposure through administrators, other processes with OS access and backups. These token-file limitations MUST be distinguished from unchanged POSIX state/key protection and from operator-managed Windows state, journals, ownership records and local keys. Windows readers can obtain and misuse local key authority, and Windows writers can tamper with approval records. Proceed MUST NOT promise protection against that local access. Pairing, authenticated confidential channels and request/decision authority checks remain required, but MUST NOT be described as preventing misuse of stolen keys or tampered local records.
 
 Environment-mode instructions MUST disclose that the trusted host and MCP startup process may hold the token and that each fresh launch requires the trusted launch environment to supply it again. They MUST NOT require global or user-wide token persistence or promise one-time persistent, login or reboot setup for environment mode. Persisted-mode instructions MUST explain one-time private Proceed provisioning of the plaintext file, storage separation, consistent explicit-path selection and removal of higher-priority tokens from the actual launch environment to use the default file. Persisted credentials MUST remain available when the operator next starts the harness after login or reboot, without installing an automatic service. Existing foreground broker use with a token supplied only through its own process environment MUST remain supported without persistent token provisioning. Legacy HTTP foreground serving MUST remain available to legacy clients. Secure foreground serving MUST permit upgraded-client reuse without a token file. Changing a launch token or file selection MUST NOT be described as rotating an already running broker's token. Rotation requires supported broker stop and replacement without ownership takeover.
 
@@ -454,7 +454,7 @@ Environment-mode instructions MUST disclose that the trusted host and MCP startu
 
 #### Scenario: Persisted setup survives a later login or reboot
 
-- **GIVEN** supported persisted setup with an unchanged usable plaintext credential and protected state paths
+- **GIVEN** supported persisted setup with an unchanged usable plaintext credential and state paths satisfying the platform's storage policy
 - **WHEN** the operator next launches a supported harness after login or reboot without a Telegram token in its actual environment or configuration
 - **THEN** normal MCP startup can use the persisted credential without token re-entry or a separate broker terminal
 - **AND** no automatic login/reboot service, harness integration or native permission bridge is required or installed.
@@ -463,7 +463,8 @@ Environment-mode instructions MUST disclose that the trusted host and MCP startu
 
 - **GIVEN** documentation or evidence for the persisted route
 - **WHEN** Windows or POSIX storage and setup success are described
-- **THEN** plaintext exposure and the absence of token-specific permission protection are explicit, with protected state/key requirements separately retained
+- **THEN** plaintext token exposure and the absence of token-specific permission protection are explicit
+- **AND** Windows state, journal and local-key security is explicitly the operator's responsibility, including key theft and record tampering by principals with OS access, while POSIX state/key protections remain required
 - **AND** source review and controlled unit results are not presented as proof of terminal privacy, fresh-launch behavior, installed first use or Telegram delivery
 - **AND** unrun outcomes and compatibility checks remain unverified rather than inheriting preview.3 acceptance.
 
@@ -510,34 +511,27 @@ reuse or stored-data migration is permitted. Old clients MUST NOT gain access to
 
 ### Requirement: Startup preserves local authority and truthful readiness
 
-Automatic startup MUST preserve owner-only state protection, authenticated local access,
-transport-principal separation and private request authority. The product MUST distinguish local
-broker readiness from Telegram availability, completed pairing, human receipt and confirmed outcome
-delivery.
+Automatic startup MUST preserve POSIX owner-only state protection, authenticated local access, transport-principal separation and private request authority. Windows storage MUST follow the ordinary-access policy under `Windows state and credential admission verifies required protection`, without owner-only permission admission. The product MUST distinguish local broker readiness from Telegram availability, completed pairing, human receipt and confirmed outcome delivery.
 
 #### Scenario: Local listener works but Telegram cannot operate
 
-- **GIVEN** a reachable local broker with missing or rejected Telegram credentials, unavailable
-  Telegram transport or a competing Telegram consumer
+- **GIVEN** a reachable local broker with missing or rejected Telegram credentials, unavailable Telegram transport or a competing Telegram consumer
 - **WHEN** startup or approval operation status is reported
-- **THEN** the product identifies the missing or failed prerequisite and an applicable operator action
-  without exposing credentials
-- **AND** local connectivity alone is not reported as working Telegram approval, human receipt,
-  approval or confirmed delivery
-- **AND** existing pending requests and recorded decisions retain their existing durable-state and
-  expiry semantics.
+- **THEN** the product identifies the missing or failed prerequisite and an applicable operator action without exposing credentials
+- **AND** local connectivity alone is not reported as working Telegram approval, human receipt, approval or confirmed delivery
+- **AND** existing pending requests and recorded decisions retain their existing durable-state and expiry semantics.
 
 #### Scenario: Required local authority or state protection is unavailable
 
-- **GIVEN** missing or invalid local credentials, an unknown transport principal or state that does not
-  satisfy required owner-only protection
+- **GIVEN** missing or invalid local credentials, an unknown transport principal, an ordinary OS access failure, a storage correctness failure or POSIX state that does not satisfy required owner-only protection
 - **WHEN** automatic startup or request access is attempted
 - **THEN** the operation fails closed with an actionable diagnostic
-- **AND** no unauthenticated fallback, cross-principal access or weakened state protection is used.
+- **AND** no unauthenticated fallback, cross-principal access, bypass of ordinary OS denial or weakening of POSIX state protection is used
+- **AND** Windows permissions allowing additional OS principals are not themselves an admission failure.
 
 ### Requirement: First-use and restart preserve the approval workflow
 
-An empty installation MUST remain unpaired with no requests or decisions until supported setup and approval actions create them. The documented installed-product setup path MUST create required protected state, a transport principal, either private launch-environment token supply or broker-only plaintext-file credential provisioning, and operator-authorized private pairing without manual stored-data editing. Windows and POSIX persisted setup MUST include explicit private Proceed provisioning without token-specific permission preparation and subsequent normal MCP startup without harness token supply. After setup, normal MCP use with the selected source available MUST support the first useful approval interaction with no separate manual broker launch. Setup instructions MUST distinguish environment supply on each fresh launch from one-time file provisioning. Existing safe state, keys and pairing MUST remain usable without reinitialization. Credential setup MUST NOT enable disabled integrations, create human decision authority or alter native harness permissions.
+An empty installation MUST remain unpaired with no requests or decisions until supported setup and approval actions create them. The documented installed-product setup path MUST create required state under the platform's storage policy, a transport principal, either private launch-environment token supply or broker-only plaintext-file credential provisioning, and operator-authorized private pairing without manual stored-data editing. Windows initialization and subsequent state, journal, ownership-record and local-key operations MUST need only ordinary OS file access plus existing correctness and authority prerequisites, not special permission preparation. POSIX state/key protections remain required. Windows and POSIX persisted setup MUST include explicit private Proceed provisioning without token-specific permission preparation and subsequent normal MCP startup without harness token supply. After setup, normal MCP use with the selected source available MUST support the first useful approval interaction with no separate manual broker launch. Setup instructions MUST distinguish environment supply on each fresh launch from one-time file provisioning. Existing usable state, keys and pairing MUST remain usable without reinitialization, migration, rotation or re-pairing. Credential setup MUST NOT enable disabled integrations, create human decision authority or alter native harness permissions.
 
 #### Scenario: Complete setup and first useful action from empty state
 
@@ -546,7 +540,8 @@ An empty installation MUST remain unpaired with no requests or decisions until s
 - **THEN** the waiting call returns the matching explicit approval through the existing tool contract without a separate manual broker launch
 - **AND** environment-mode setup and first use require no token file
 - **AND** no proprietary host API, direct stored-data editing, `doctor` or delivery retry is required
-- **AND** setup and startup alone never create a request or grant approval.
+- **AND** setup and startup alone never create a request or grant approval
+- **AND** Windows initialization and all subsequent operations in this path impose no custom filesystem protection admission or repair.
 
 #### Scenario: Setup or pairing is incomplete
 
@@ -557,8 +552,8 @@ An empty installation MUST remain unpaired with no requests or decisions until s
 
 #### Scenario: First persisted approval follows a fresh token-free launch
 
-- **GIVEN** an empty Windows or POSIX installation meeting protected-state and external prerequisites, with ordinary OS access to a separated token destination
-- **WHEN** the operator uses supported setup for protected state, a transport principal, private Proceed plaintext credential provisioning and authorized private-chat pairing
+- **GIVEN** an empty Windows or POSIX installation meeting platform storage and external prerequisites, with ordinary OS access to a separated token destination
+- **WHEN** the operator uses supported setup for state, a transport principal, private Proceed plaintext credential provisioning and authorized private-chat pairing
 - **AND** safely stops the broker and starts a fresh supported harness without a Telegram token in its environment or configuration
 - **AND** normal MCP use prepares private authority and requests approval, and the paired human selects Approve while the call remains active
 - **THEN** the same waiting call returns the matching explicit approval without token re-entry, token-specific permission preparation or a separate broker terminal
@@ -566,9 +561,9 @@ An empty installation MUST remain unpaired with no requests or decisions until s
 
 #### Scenario: Existing setup retains its authority boundary
 
-- **GIVEN** safe existing state with keys, pairing, pending requests and recorded decisions
-- **WHEN** the operator configures a new separate credential destination or later uses the persisted route
-- **THEN** existing state remains usable without reinitialization or migration, and durable work keeps its existing expiry and single-resolution semantics
+- **GIVEN** usable existing state with keys, pairing, pending requests and recorded decisions
+- **WHEN** the operator upgrades to the ordinary-access Windows storage policy, configures a new separate credential destination or later uses the persisted route
+- **THEN** existing state remains usable without reinitialization, migration, key rotation or re-pairing, and durable work keeps its existing expiry and single-resolution semantics
 - **AND** credential setup does not enable a disabled integration, enroll a human decision-maker, bypass native permissions or take over uncertain broker ownership.
 
 ### Requirement: Automatic startup preserves existing durable work
@@ -607,13 +602,13 @@ Harness decisions MUST require an operator-configured trusted harness interactio
 
 ### Requirement: Harness interaction preserves merged delivery safeguards
 
-The existing delivery requirements in `openspec/specs/opencode-session-continuation/spec.md` for protected storage, authenticated confidential admission on every connection, private capability and principal boundaries, truthful readiness and shared-broker lifecycle MUST remain effective. This is a repository-relative path.
+The existing delivery requirements in `openspec/specs/opencode-session-continuation/spec.md` for platform-specific storage policy, authenticated confidential admission on every connection, private capability and principal boundaries, truthful readiness and shared-broker lifecycle MUST remain effective. Windows storage uses ordinary OS file access under `Windows state and credential admission verifies required protection`. POSIX storage protection remains unchanged. This is a repository-relative path.
 
 #### Scenario: Preserve safeguards with the harness channel enabled
 
 - **GIVEN** the trusted harness channel is configured
 - **WHEN** setup, connection, request handling, status reporting or shared-broker lifecycle operations occur
-- **THEN** all merged delivery baseline safeguards remain effective without weakened protection, admission, authority boundaries, readiness reporting or lifecycle guarantees.
+- **THEN** all merged delivery baseline safeguards remain effective under the Windows ordinary-access exception without weakening POSIX protection, authenticated confidential admission, authority boundaries, readiness reporting or lifecycle guarantees.
 
 ### Requirement: One request on two human surfaces
 
@@ -771,12 +766,12 @@ The README MUST explain trusted-harness setup, the additional local operator's a
 
 ### Requirement: Windows environment startup and trusted TUI setup work
 
-With documented prerequisites and safe storage, Windows setup MUST establish protected state, control and owner credentials, the confidential-channel key and the operator key required by the existing trusted TUI enrollment path. Normal MCP startup MUST support the privately supplied environment-token route without a Telegram token file or separate broker terminal. Refusing every Windows operation MUST NOT satisfy this requirement. Existing token-source precedence, confidentiality, non-persistence, helper environment filtering and trusted-human authority requirements MUST remain effective.
+With documented prerequisites and ordinary OS file access, Windows setup MUST establish state, control and owner credentials, the confidential-channel key and the operator key required by the existing trusted TUI enrollment path. Normal MCP startup MUST support the privately supplied environment-token route without a Telegram token file or separate broker terminal. Refusing every Windows operation MUST NOT satisfy this requirement. Existing token-source precedence, transport confidentiality, environment-token non-persistence, helper environment filtering and trusted-human authority requirements MUST remain effective. Windows local file confidentiality is operator-managed, not a prerequisite enforced by Proceed.
 
 #### Scenario: Complete Windows environment setup and first approval
 
 - **GIVEN** a clean Windows installation with documented prerequisites and no configuration, pairing, requests or decisions
-- **WHEN** supported setup creates protected state, a transport principal and operator-authorized private pairing without manual stored-data edits
+- **WHEN** supported setup creates state, a transport principal and operator-authorized private pairing without manual stored-data edits or custom filesystem protection preparation
 - **AND** the trusted launch environment privately supplies a valid token, with no explicit token-file selection and no token file
 - **AND** normal MCP use calls `prepare_approval`, then `request_approval` with its returned private authority, and the paired human approves while the call remains active
 - **THEN** the waiting call returns the matching explicit approval without a separate broker terminal
@@ -785,40 +780,47 @@ With documented prerequisites and safe storage, Windows setup MUST establish pro
 
 #### Scenario: Protected operator setup supports trusted TUI use
 
-- **GIVEN** safe Windows storage and an operator configuring the existing trusted TUI interaction
+- **GIVEN** ordinary Windows file access and an operator configuring the existing trusted TUI interaction
 - **WHEN** supported enrollment creates the operator key and the configured TUI connects
-- **THEN** the key and local channel satisfy existing protection and authenticated confidential admission requirements
+- **THEN** key creation and subsequent access need no custom Windows protection admission or repair, and the local channel still satisfies authenticated confidential admission requirements
 - **AND** existing request-bound human decisions work without changing pairing, principal boundaries or decision authority.
 
 ### Requirement: Windows state and credential admission verifies required protection
 
-Windows setup and admission MUST verify required ownership, ACLs, safe ancestry and redirected-path protection for affected state, control/owner credentials, channel keys and operator keys. Unsafe or unverifiable protection MUST cause refusal before secret reads, secret writes, private-authority disclosure or readiness through affected storage. Missing, null, empty or unreadable ACL evidence MUST NOT count as verified owner-only protection. Diagnostics MUST be actionable and secret-free and MUST NOT claim protection that was not verified.
+Windows initialization and all subsequent operations involving state, journals, broker ownership records, control/owner credentials, confidential-channel keys and operator keys MUST use ordinary OS file access. Proceed MUST NOT query, verify, require or repair ACLs, ownership, modes, inheritance, owner-only ancestry or local-fixed-NTFS protection as an admission prerequisite. Unavailable protection queries or access by additional OS principals MUST NOT cause refusal. No permission gate under a different name, bypass flag, native helper, service, compiler or new protection framework is required or authorized.
+
+File type, path identity, required storage separation, no-overwrite and exclusive creation, atomicity, flush and journal integrity MUST remain correctness requirements. They MUST NOT become secret-permission gates. Ordinary OS access denials and I/O errors MUST still fail with actionable secret-free diagnostics. Broker locking, exclusive ownership, liveness and supported stale-ownership recovery MUST remain unchanged, without automatic lock deletion or uncertain ownership takeover. Authentication, capability/principal checks, TLS, network scope and pairing authority MUST remain unchanged.
+
+References to protected state, protected local credentials or safe storage elsewhere in this capability MUST mean this ordinary-access and correctness policy on Windows, not owner-only filesystem admission. POSIX state/key protections and the separate ordinary Telegram-token file policy MUST remain unchanged. Windows file security is the operator's responsibility. Proceed MUST NOT claim verified owner-only protection, encryption or resistance to local key theft or record tampering.
 
 #### Scenario: Safe Windows storage is admitted
 
-- **GIVEN** Windows state and required local credentials satisfy the applicable owner-only and ancestry protection requirements
-- **WHEN** supported setup or startup verifies that protection
-- **THEN** the operation can proceed without skipping Windows checks or weakening authenticated local access
+- **GIVEN** ordinary Windows OS file access is sufficient and storage satisfies the existing correctness and authority prerequisites
+- **WHEN** supported initialization, startup or normal state/journal/ownership-record/control/owner/operator/channel-key operations use that storage
+- **THEN** operations can proceed without custom ACL, owner, mode, inheritance, protection-query or local-fixed-NTFS admission or permission repair
+- **AND** authenticated local access remains required
 - **AND** local readiness alone does not claim Telegram availability, pairing, human receipt or confirmed delivery.
 
 #### Scenario: Unsafe or unverifiable Windows storage is refused
 
-- **GIVEN** affected Windows storage has an unsafe owner, ACL, ancestry or redirection, or required protection cannot be verified
-- **WHEN** setup, startup or trusted TUI access attempts to use it
-- **THEN** admission refuses before secret reads, secret writes, private-authority disclosure or readiness through that storage
-- **AND** no assumed-safe ancestor, empty permission result or unsupported check authorizes access.
+- **GIVEN** Windows permissions allow additional principals or protection cannot be queried, while ordinary OS access, storage correctness and authority prerequisites remain usable
+- **WHEN** setup, startup or trusted TUI access attempts to use that storage
+- **THEN** those permission conditions alone do not cause refusal, permission repair or a protection query
+- **AND** an actual OS access denial, file identity/type failure, integrity failure or other retained correctness or authority failure still refuses without bypass or false success
+- **AND** diagnostics do not claim owner-only protection was verified.
 
 ### Requirement: Windows protection correction preserves existing storage
 
-Protection correction MUST NOT automatically repair unsafe storage, overwrite existing credential or key destinations, rewrite or migrate existing journal or pairing, or remove uncertain broker ownership records to succeed. Safe existing Windows state MUST remain usable without reinitialization or manual stored-data migration. Existing durable work, create-only credential/key behavior and POSIX file/environment safeguards MUST remain effective.
+The Windows ordinary-access policy MUST NOT automatically repair permissions, overwrite existing credential or key destinations, rewrite or migrate existing journal or pairing, rotate keys, require re-pairing or remove uncertain broker ownership records to succeed. Existing Windows state usable under ordinary OS access and retained correctness requirements MUST remain usable without reinitialization or manual stored-data migration. Existing durable work, create-only credential/key behavior and POSIX file/environment safeguards MUST remain effective.
 
 #### Scenario: Existing state or credential destination is encountered
 
 - **GIVEN** existing Windows state, keys, credentials or an uncertain ownership record
 - **WHEN** setup or admission encounters them
-- **THEN** create-only operations refuse existing destinations without overwrite or automatic repair
-- **AND** admissible existing state retains pairing, pending work and recorded outcomes under existing expiry and single-resolution rules
-- **AND** unsafe or unverifiable storage is refused without rewriting durable work or deleting uncertain ownership records.
+- **THEN** create-only operations refuse existing destinations without overwrite or automatic permission repair
+- **AND** existing state satisfying ordinary access and retained correctness requirements keeps its keys, pairing, pending work and recorded outcomes under existing expiry and single-resolution rules without reinitialization, migration, rotation or re-pairing
+- **AND** additional-principal permissions or unverifiable protection alone do not cause refusal
+- **AND** actual access, correctness or authority failures refuse without rewriting durable work, automatically deleting locks or taking over uncertain ownership.
 
 ### Requirement: Provisioning releases its input lifecycle without disrupting callers
 
