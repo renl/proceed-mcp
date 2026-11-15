@@ -24,7 +24,7 @@ As an operator using Proceed in multiple OpenCode directories, I want each adapt
 
 This is one independently landable behavior change against `main`. The first useful increment is two same-owner adapters completing separate approval interactions, with either adapter able to close without interrupting the other. Registration lifecycle handling belongs in this change because concurrency without independent retirement would leave that outcome unsafe.
 
-There is no dependency on another active change. The change relies on the merged [delivery and lifecycle contracts](../../specs/opencode-session-continuation/spec.md) and [durable human-decision contracts](../../specs/telegram-approval/spec.md). Existing initialized state, owner credentials and pairing remain usable through supported setup without manual stored-data edits.
+There is no dependency on another active change. The change relies on the merged [delivery and lifecycle contracts](../../../specs/opencode-session-continuation/spec.md) and [durable human-decision contracts](../../../specs/telegram-approval/spec.md). Existing initialized state, owner credentials and pairing remain usable through supported setup without manual stored-data edits.
 
 ### Exclusions
 
