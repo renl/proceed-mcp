@@ -5,7 +5,7 @@
 import { open, readFile, rename, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { storageFailure } from '../errors.js';
-import { verifyWindowsProtection } from '../state/protection.js';
+import { verifyStorageIdentity, verifyStorageObject } from '../state/protection.js';
 import { utcTimestamp } from '../util/values.js';
 import {
   FILE_FORMAT_VERSION,
@@ -23,6 +23,8 @@ const POSIX_FILE_MODE = 0o600;
 export class Journal {
   #handle;
 
+  #identity = null;
+
   #sequence;
 
   #formatVersion;
@@ -37,10 +39,14 @@ export class Journal {
   }
 
   static async open(filePath) {
-    // Windows: the journal and its existing ancestry are admitted before the
-    // file is opened for replay, truncation or append. A missing journal is this
-    // attempt's creation and is admitted through its parent.
-    await verifyWindowsProtection([filePath], { allowMissingTail: true });
+    // On Windows the journal and its existing ancestry must be ordinary storage
+    // before the file is opened for replay, truncation or append. A missing
+    // journal is this attempt's creation.
+    await verifyStorageObject(filePath, {
+      allowMissingTail: true,
+      expected: 'file',
+      description: `the journal at ${filePath}`,
+    });
     let handle;
     try {
       handle = await open(filePath, 'a', POSIX_FILE_MODE);
@@ -50,6 +56,7 @@ export class Journal {
 
     const journal = new Journal(filePath, handle, 0, FILE_FORMAT_VERSION);
     try {
+      journal.#identity = process.platform === 'win32' ? await handle.stat() : null;
       const { validLength } = await journal.recover();
       await journal.#truncateTail(validLength);
     } catch (error) {
@@ -86,12 +93,18 @@ export class Journal {
 
     if (buffer.length === 0) {
       const header = createFileHeader();
-      // A journal this attempt created is empty but not yet admitted: the empty
-      // object is admitted before its first header byte, then re-observed after
-      // the header is durable and before any replay or append uses it.
-      await verifyWindowsProtection([this.filePath]);
+      // A journal this attempt created is empty but not yet observed as ordinary
+      // storage: the empty object is compared with its path before the first
+      // header byte, then re-observed after the header is durable.
+      await verifyStorageIdentity(this.filePath, this.#identity, {
+        expected: 'file',
+        description: `the journal at ${this.filePath}`,
+      });
       await this.#writeAndFlush(header);
-      await verifyWindowsProtection([this.filePath]);
+      await verifyStorageIdentity(this.filePath, this.#identity, {
+        expected: 'file',
+        description: `the journal at ${this.filePath}`,
+      });
       buffer = header;
     }
 
@@ -140,10 +153,13 @@ export class Journal {
     if (!Array.isArray(mutations) || mutations.length === 0) {
       throw storageFailure('a journal transaction needs at least one mutation', 'STORAGE_FAILURE');
     }
-    // Every append is a new effect: the journal is admitted again before this
-    // record's bytes are written, so no sequence is advanced or acknowledged
-    // from a file whose protection can no longer be observed.
-    await verifyWindowsProtection([this.filePath]);
+    // Every append is a new effect: the journal must still be the object this
+    // instance opened before this record's bytes are written, so no sequence is
+    // advanced or acknowledged from a path that changed underneath it.
+    await verifyStorageIdentity(this.filePath, this.#identity, {
+      expected: 'file',
+      description: `the journal at ${this.filePath}`,
+    });
 
     const sequence = this.#sequence + 1;
     const frame = encodeFrame({
@@ -153,6 +169,12 @@ export class Journal {
       schemaVersion: recordSchemaFor(this.#formatVersion),
     });
     await this.#writeAndFlush(frame);
+    // The record is acknowledged only while the path still names the same
+    // journal it was flushed to.
+    await verifyStorageIdentity(this.filePath, this.#identity, {
+      expected: 'file',
+      description: `the journal at ${this.filePath}`,
+    });
     this.#sequence = sequence;
     return { sequence, committedAt, bytes: frame.length };
   }
@@ -167,9 +189,12 @@ export class Journal {
     if (this.#closed) throw storageFailure('the journal is closed', 'STORAGE_FAILURE');
     if (this.#formatVersion === HARNESS_FILE_FORMAT_VERSION) return false;
 
-    // The upgrade reads, replaces and reopens the file, so the same admission
-    // applies before any of those steps on Windows.
-    await verifyWindowsProtection([this.filePath]);
+    // The upgrade reads, replaces and reopens the file, so the path must still
+    // name the journal this instance opened before any of those steps.
+    await verifyStorageIdentity(this.filePath, this.#identity, {
+      expected: 'file',
+      description: `the journal at ${this.filePath}`,
+    });
 
     let buffer;
     try {
@@ -221,14 +246,17 @@ export class Journal {
     ]);
 
     const temporary = `${this.filePath}.upgrade`;
+    const description = `the journal replacement for ${this.filePath}`;
     let tempHandle;
+    let created = null;
     try {
       // An existing sibling is content this attempt did not create, so it is
       // never deleted: the exclusive create refuses and the history is preserved
-      // untouched. The new empty child is admitted before its first byte and
-      // again after the flush, and the published destination is re-observed.
+      // untouched. The new empty child is observed as ordinary storage before its
+      // first byte and again after the flush, and the published destination is
+      // re-observed.
       tempHandle = await open(temporary, 'wx', POSIX_FILE_MODE);
-      await verifyWindowsProtection([temporary]);
+      await verifyStorageObject(temporary, { expected: 'file', description });
       let written = 0;
       while (written < rewritten.length) {
         const { bytesWritten } = await tempHandle.write(
@@ -240,11 +268,11 @@ export class Journal {
         written += bytesWritten;
       }
       await tempHandle.sync();
-      await verifyWindowsProtection([temporary]);
-      const created = await tempHandle.stat();
+      created = await tempHandle.stat();
       if (created.size !== rewritten.length) {
         throw new Error('journal upgrade replacement length mismatch');
       }
+      await verifyStorageIdentity(temporary, created, { expected: 'file', description });
       await tempHandle.close();
       tempHandle = null;
     } catch (cause) {
@@ -277,12 +305,17 @@ export class Journal {
       );
     }
 
-    // The published journal is re-observed before this instance reports it as
-    // the upgraded history; a failed check leaves the caller without authority.
-    await verifyWindowsProtection([this.filePath]);
+    // The published journal must still be the replacement this attempt flushed
+    // before this instance reports it as the upgraded history; a failed check
+    // leaves the caller without authority and preserves the observed object.
+    await verifyStorageIdentity(this.filePath, created, {
+      expected: 'file',
+      description: `the journal at ${this.filePath}`,
+    });
 
     try {
       this.#handle = await open(this.filePath, 'a', POSIX_FILE_MODE);
+      this.#identity = process.platform === 'win32' ? await this.#handle.stat() : null;
     } catch (cause) {
       // The complete version-3 history is already installed; the next ordinary
       // open reads it. This instance reports the uncertain handle only.
@@ -326,8 +359,12 @@ export class Journal {
   async #truncateTail(validLength) {
     const info = await stat(this.filePath).catch(() => null);
     if (info === null || info.size <= validLength) return;
-    // Truncation changes the journal, so the object is admitted again here.
-    await verifyWindowsProtection([this.filePath]);
+    // Truncation changes the journal, so the path must still name the object this
+    // instance opened before the tail is removed.
+    await verifyStorageIdentity(this.filePath, this.#identity, {
+      expected: 'file',
+      description: `the journal at ${this.filePath}`,
+    });
     let handle;
     try {
       handle = await open(this.filePath, 'r+', POSIX_FILE_MODE);
