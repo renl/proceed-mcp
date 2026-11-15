@@ -192,11 +192,33 @@ claude mcp add --scope user --transport stdio proceed -- proceed-mcp mcp --owner
 
 Everything after `--` is passed to Proceed unchanged. This writes to `~/.claude.json`; do not also add `proceed` to a project `.mcp.json`. Start a new Claude Code session, then check with `claude mcp list` or `/mcp`. Official reference: [Claude Code MCP](https://code.claude.com/docs/en/mcp).
 
+### Load the Proceed skill
+
+The npm package and the MCP entry above install the Proceed tools only. They do not install the agent skill, which is separate guidance that tells an agent when and how to use those tools. Install it as a setup step in each project where the agent should have it.
+
+Source: [skills/proceed/SKILL.md](https://github.com/renl/proceed-mcp/blob/main/skills/proceed/SKILL.md) on `main`.
+
+Copy that file unchanged into your client's project skill location. Keep the file name `SKILL.md` and its `name` and `description` frontmatter, so the skill ID stays `proceed`:
+
+| Client | Path within your project | Official reference |
+|---|---|---|
+| OpenCode V2 | `.opencode/skills/proceed/SKILL.md` | [OpenCode skills](https://opencode.ai/docs/skills) |
+| OpenAI Codex CLI | `.agents/skills/proceed/SKILL.md` | [Codex skills](https://developers.openai.com/codex/skills) |
+| Anthropic Claude Code | `.claude/skills/proceed/SKILL.md` | [Claude Code skills](https://code.claude.com/docs/en/skills) |
+
+Each client reads its own location, so copy the file into each project and client you use. Load it once explicitly to confirm the client found it:
+
+- OpenCode V2: ask the agent to load the `proceed` skill, or mention `@proceed` in your prompt.
+- OpenAI Codex CLI: mention `$proceed`, or run `/skills` to list available skills.
+- Anthropic Claude Code: run `/proceed`.
+
+The skill is guidance, not enforcement. It restates the approval flow and safety rules for the agent, while the five tools still come from the MCP server. Neither the skill nor Proceed enforces your client's permission rules, and installing the skill is not a guarantee that the model follows it. Approval remains cooperative.
+
 ### Check the connection
 
 Ask the agent to call `prepare_approval`, then `request_approval` with an `action` such as `Connection test - no action will be taken`. Approve that question in Telegram. The `approved` resolution returns to the original waiting call, and its `decision_id` is the one to pass to `acknowledge_approval`. OpenCode's `/mcps` and Claude Code's `/mcp` show the server and its connection state.
 
-If the test times out first, nothing was approved. Keep the request id and capability from the result and read the recorded outcome later with `get_approval`. Answering later does not wake the agent or resume the call.
+If the test times out first, that call received no approval. A timeout does not cancel the request, so a later decision is recorded and can be read only with the same private authority: keep the request id and capability from the result and read the outcome later with `get_approval`. Answering later does not wake the agent or resume the call.
 
 ## Approval tools
 
