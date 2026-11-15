@@ -4,7 +4,7 @@
 
 Useful agents sometimes need your judgment before taking the next step. Proceed sends their questions to your private Telegram chat, so you do not have to watch the terminal constantly.
 
-Proceed is a Model Context Protocol (MCP) server for agent apps that can launch local stdio MCP servers, not an OpenCode-only plugin. You tell your agent when to ask. Proceed does not automatically intercept tools or enforce the app's native permissions.
+Proceed is a Model Context Protocol (MCP) server for agent apps that can launch local stdio MCP servers, not an OpenCode-only plugin. You tell your agent when to ask. Proceed does not automatically intercept tools or enforce the app's native permissions. Setup for OpenCode V2, OpenAI Codex CLI and Anthropic Claude Code is in [Connect an MCP client](#connect-an-mcp-client).
 
 ## When it helps
 
@@ -103,15 +103,122 @@ The command starts or reuses the secure broker and prints a one-use code that ex
 
 ## Connect an MCP client
 
-In an MCP client that supports launching local stdio servers, configure it to run:
+Proceed is one local stdio server. Each client below launches the same executable against the same state directory, so installation, `init`, `telegram provision` and `pair` stay one-time steps. The adapter starts a broker when the state is safely unowned, or reuses a matching running broker, so no separate broker terminal is needed. Startup waits up to 150 seconds for local readiness, and your client may time out sooner. A startup error is never a human decision.
+
+If `proceed-mcp` is not on `PATH`, use `node` plus the absolute entry point from [Install](#install) in place of the single `proceed-mcp` command.
+
+### One owner per client
+
+An owner is the transport principal an MCP adapter authenticates as, not a person, a second bot or a second pairing. Your clients share one broker, one bot and one private chat. Give each client its own owner id so their adapter credentials stay separate:
+
+- OpenCode V2: `opencode`.
+- OpenAI Codex CLI: `codex`.
+- Anthropic Claude Code: `claude`.
+
+`owner add` refuses while a broker ownership record exists for this state directory. Run the supported stop command first, then add only the owners you need:
 
 ```console
-proceed-mcp mcp --owner <owner-id> --state-dir <absolute-state-dir>
+proceed-mcp stop --state-dir <absolute-state-dir>
+proceed-mcp owner add codex --label "Codex CLI" --state-dir <absolute-state-dir>
 ```
 
-For OpenCode V2, add a local server under `mcp.servers` in `opencode.jsonc` that runs the same command, and set `codemode: false` to expose the tools directly. Do not add a token to that file.
+`stop` reports `No broker is running for this state directory.` when none is reachable. Only that report lets you skip the `stop` line and run `owner add` alone. A closed client or an absent process is not that report. Repeat `owner add` with the owner id for each client you use.
 
-The adapter starts a broker when the state is safely unowned, or reuses a matching running broker, so no separate broker terminal is needed. It connects only to the local broker and needs no OpenCode API, password or provider credential. Startup waits up to 150 seconds for local readiness, and your client may time out sooner. A startup error is never a human decision.
+Each call creates one owner record and one owner credential and starts nothing. Do not put an owner credential, the bot token or a password in any client configuration. The broker alone loads the Telegram token.
+
+In the JSON and TOML examples below, write a Windows state path with forward slashes, for example `C:/Users/you/proceed-mcp-state`.
+
+### Non-default token file
+
+The examples below assume the default token file, so they need no extra option. If you provisioned with `--telegram-token-file <absolute-token-file>`, that path is not the default, and each client entry that can start a broker must name it too. It is a file path, never the token value.
+
+- OpenCode V2: add `"--telegram-token-file", "<absolute-token-file>"` to the `command` array.
+- OpenAI Codex CLI: add `"--telegram-token-file", "<absolute-token-file>"` to `args`.
+- Anthropic Claude Code: append `--telegram-token-file <absolute-token-file>` after `--state-dir <absolute-state-dir>`.
+
+A running broker that already loaded the path is reused without reading the file again. The next automatic start after that broker stops must receive the same path, or another selected source, because a selected source that fails does not fall back.
+
+### OpenCode V2
+
+Add one global local server to `~/.config/opencode/opencode.jsonc`, or to `$XDG_CONFIG_HOME/opencode/opencode.jsonc` when `XDG_CONFIG_HOME` is set:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "proceed": {
+        "type": "local",
+        "command": [
+          "proceed-mcp",
+          "mcp",
+          "--owner",
+          "opencode",
+          "--state-dir",
+          "<absolute-state-dir>"
+        ],
+        "codemode": false
+      }
+    }
+  }
+}
+```
+
+Keep every existing entry under `mcp.servers`. `codemode: false` exposes the five Proceed tools directly instead of through Code Mode. Global configuration applies to all projects, so do not add a second `proceed` entry to a project `opencode.jsonc`.
+
+No API key, provider credential or password is needed in this entry. The adapter connects only to the local broker.
+
+OpenCode reloads MCP configuration after a save, and `/reload` forces a full reload. Check the server with `opencode mcp list` or `/mcps`. Official reference: [OpenCode MCP servers](https://opencode.ai/docs/mcp-servers).
+
+### OpenAI Codex CLI
+
+Add one user-level server to `~/.codex/config.toml`, creating the file if it does not exist:
+
+```toml
+[mcp_servers.proceed]
+command = "proceed-mcp"
+args = ["mcp", "--owner", "codex", "--state-dir", "<absolute-state-dir>"]
+```
+
+Keep your other tables and settings. Codex CLI, the IDE extension and the desktop app on this host share this file, so the entry is needed once. Do not also add `proceed` to a project `.codex/config.toml`. Start a new Codex session so it loads the file and starts the server. Official reference: [OpenAI Codex MCP](https://developers.openai.com/codex/extend/mcp).
+
+### Anthropic Claude Code
+
+Add one user-scoped stdio server, which stays private and applies to all your projects:
+
+```console
+claude mcp add --scope user --transport stdio proceed -- proceed-mcp mcp --owner claude --state-dir <absolute-state-dir>
+```
+
+Everything after `--` is passed to Proceed unchanged. This writes to `~/.claude.json`; do not also add `proceed` to a project `.mcp.json`. Start a new Claude Code session, then check with `claude mcp list` or `/mcp`. Official reference: [Claude Code MCP](https://code.claude.com/docs/en/mcp).
+
+### Load the Proceed skill
+
+The npm package and the MCP entry above install the Proceed tools only. They do not install the agent skill, which is separate guidance that tells an agent when and how to use those tools. Install it as a setup step in each project where the agent should have it.
+
+Source: [skills/proceed/SKILL.md](https://github.com/renl/proceed-mcp/blob/main/skills/proceed/SKILL.md) on `main`.
+
+Copy that file unchanged into your client's project skill location. Keep the file name `SKILL.md` and its `name` and `description` frontmatter, so the skill ID stays `proceed`:
+
+| Client | Path within your project | Official reference |
+|---|---|---|
+| OpenCode V2 | `.opencode/skills/proceed/SKILL.md` | [OpenCode skills](https://opencode.ai/docs/skills) |
+| OpenAI Codex CLI | `.agents/skills/proceed/SKILL.md` | [Codex skills](https://developers.openai.com/codex/skills) |
+| Anthropic Claude Code | `.claude/skills/proceed/SKILL.md` | [Claude Code skills](https://code.claude.com/docs/en/skills) |
+
+Each client reads its own location, so copy the file into each project and client you use. Load it once explicitly to confirm the client found it:
+
+- OpenCode V2: ask the agent to load the `proceed` skill, or mention `@proceed` in your prompt.
+- OpenAI Codex CLI: mention `$proceed`, or run `/skills` to list available skills.
+- Anthropic Claude Code: run `/proceed`.
+
+The skill is guidance, not enforcement. It restates the approval flow and safety rules for the agent, while the five tools still come from the MCP server. Neither the skill nor Proceed enforces your client's permission rules, and installing the skill is not a guarantee that the model follows it. Approval remains cooperative.
+
+### Check the connection
+
+Ask the agent to call `prepare_approval`, then `request_approval` with an `action` such as `Connection test - no action will be taken`. Approve that question in Telegram. The `approved` resolution returns to the original waiting call, and its `decision_id` is the one to pass to `acknowledge_approval`. OpenCode's `/mcps` and Claude Code's `/mcp` show the server and its connection state.
+
+If the test times out first, that call received no approval. A timeout does not cancel the request, so a later decision is recorded and can be read only with the same private authority: keep the request id and capability from the result and read the outcome later with `get_approval`. Answering later does not wake the agent or resume the call.
 
 ## Approval tools
 
@@ -189,7 +296,7 @@ Exit codes are `0` for completion, `2` for invalid arguments or configuration, `
 - The product does not execute actions and does not enforce your client's permission rules. Approval is cooperative.
 - A client timeout does not cancel the request. There is no automatic continuation after a timeout, no session reattachment and no agent wake-up from retrieval.
 - Token provisioning is create-only. There is no overwrite, rotation or deletion command, so replacing a token means choosing a new destination and using it everywhere.
-- OpenCode V2 is the configuration example. No multi-client compatibility is claimed.
+- Client setup follows each vendor's documented local stdio configuration for OpenCode V2, OpenAI Codex CLI and Anthropic Claude Code. The Codex CLI and Claude Code entries are documented, not runtime verified, and no broader compatibility is claimed.
 
 ## License
 
