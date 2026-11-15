@@ -4,7 +4,7 @@ Permit independent adapter lifetimes under one authenticated owner without chang
 
 ## Context and boundary
 
-Parent: [proposal](proposal.md). Behavior: [delta](specs/opencode-session-continuation/spec.md). Preserved contracts: [delivery and recovery](../../specs/opencode-session-continuation/spec.md) and [human decisions](../../specs/telegram-approval/spec.md).
+Parent: [proposal](proposal.md). Behavior: [delta](specs/opencode-session-continuation/spec.md). Preserved contracts: [delivery and recovery](../../../specs/opencode-session-continuation/spec.md) and [human decisions](../../../specs/telegram-approval/spec.md).
 
 This is one independently landable change against `main`, based on `4a7448523075c41a026cd311c1761b348cee9f27`. It has no stacked parent or dependency on README PR #20. The useful outcome is two same-owner adapters preparing and waiting independently, receiving reverse-order decisions on their own invocations, and closing independently. Registration retirement is part of that outcome, not a separate foundation.
 
