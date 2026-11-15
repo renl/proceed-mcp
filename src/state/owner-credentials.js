@@ -1,6 +1,6 @@
 // Owner transport-principal credentials (design section 2). Each owner gets an
-// independent 256-bit random token in its own protected file, named from the
-// validated owner record rather than supplied by a tool or a model argument.
+// independent 256-bit random token in its own file, named from the validated
+// owner record rather than supplied by a tool or a model argument.
 // Additive for the portable owner model; the authorized consumer switch wires
 // creation into setup and reads into the MCP adapter.
 import { open, unlink } from 'node:fs/promises';
@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { invalidArgument, storageFailure } from '../errors.js';
 import { generateCredentialToken, readLocalCredential } from './credentials.js';
 import { posix } from './path-trust.js';
-import { verifyWindowsProtection } from './protection.js';
+import { verifyStorageIdentity, verifyStorageObject } from './protection.js';
 import { validateOwnerId } from '../config/portable-config.js';
 
 export const OWNER_CREDENTIAL_PREFIX = 'owner.';
@@ -20,8 +20,8 @@ export function ownerCredentialFileName(ownerId) {
   return `${OWNER_CREDENTIAL_PREFIX}${validateOwnerId(ownerId)}${OWNER_CREDENTIAL_SUFFIX}`;
 }
 
-// The directory is explicit so the caller decides which protected credentials
-// directory applies; only the file name is derived from the owner record.
+// The directory is explicit so the caller decides which credentials directory
+// applies; only the file name is derived from the owner record.
 export function ownerCredentialPath(credentialsDir, ownerId) {
   return join(credentialsDir, ownerCredentialFileName(ownerId));
 }
@@ -29,10 +29,15 @@ export function ownerCredentialPath(credentialsDir, ownerId) {
 // An existing credential file is never replaced, so a repeated owner setup
 // leaves the original bytes untouched. The token stays in the file: the caller
 // receives the path only, and the value never enters a result, argument or log.
-// On Windows the destination directory must already be admitted, and the new
-// empty file must satisfy the same admission before the secret is written.
+// On Windows the destination directory and the new empty file are observed as
+// ordinary storage, and the flushed file is re-observed before the write is
+// reported complete.
 export async function writeOwnerCredential(file) {
-  await verifyWindowsProtection([dirname(file)]);
+  const description = `the owner credential file ${file}`;
+  await verifyStorageObject(dirname(file), {
+    expected: 'directory',
+    description: `the owner credential directory ${dirname(file)}`,
+  });
   let handle;
   try {
     handle = await open(file, 'wx', POSIX_FILE_MODE);
@@ -51,11 +56,12 @@ export async function writeOwnerCredential(file) {
   }
 
   try {
-    await verifyWindowsProtection([file]);
+    const created = await handle.stat();
+    await verifyStorageObject(file, { expected: 'file', description });
     await handle.writeFile(`${generateCredentialToken()}\n`, 'utf8');
     await handle.sync();
     // Re-observe the flushed credential before it is reported as written.
-    await verifyWindowsProtection([file]);
+    await verifyStorageIdentity(file, created, { expected: 'file', description });
     await handle.close();
   } catch (cause) {
     await handle.close().catch(() => {});

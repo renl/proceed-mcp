@@ -15,9 +15,10 @@
 // contiguous non-redirected directory chain, storage separation, exclusive
 // creation, handle/path identity, write-flush completion, bounded reads and
 // cleanup limited to objects this attempt can still prove it created. Approval
-// state, journals, owner/control/operator credentials and channel keys keep the
-// shared admission in `protection.js` and `path-trust.js`; this caller no longer
-// reaches it (design decision 4).
+// state, journals, owner/control/operator credentials and channel keys follow the
+// same ordinary-access policy on Windows and keep POSIX owner-only protection
+// through the shared boundary in `protection.js` and `path-trust.js`; this caller
+// does not reach it (design decision 4).
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, realpath } from 'node:fs/promises';
