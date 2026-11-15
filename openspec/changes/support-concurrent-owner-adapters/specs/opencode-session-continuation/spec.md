@@ -1,12 +1,16 @@
 # Delta for opencode-session-continuation
 
-Enable concurrent same-owner adapters with independent lifetimes. Parent: [proposal](../../proposal.md). Unchanged authority, waiting-call and recovery requirements remain defined in the [current capability](../../../../specs/opencode-session-continuation/spec.md) and [Telegram approval contract](../../../../specs/telegram-approval/spec.md).
-
 ## ADDED Requirements
 
 ### Requirement: Concurrent adapters share an owner without registration conflict
 
-The product MUST permit multiple authenticated adapters using the same configured owner to register and use the matching broker concurrently. Existing occupancy by that owner alone MUST NOT produce `OWNER_IN_USE` or require another owner. Each adapter MUST receive distinct registration authority limited to its own registration under that owner. Registration authority MUST NOT grant authority broader than the existing owner or substitute for private request capabilities, their bound transport principal or human decision authority.
+The product MUST permit multiple authenticated adapters using the same configured owner to register and use the matching broker concurrently. Existing occupancy by that owner alone MUST NOT produce `OWNER_IN_USE` or require another owner. Each adapter MUST receive distinct registration authority limited to its own registration under that owner.
+
+#### Scenario: Registration preserves existing authority boundaries
+
+- **GIVEN** an authenticated adapter
+- **WHEN** it receives registration authority
+- **THEN** registration authority MUST NOT grant authority broader than the existing owner or substitute for private request capabilities, their bound transport principal or human decision authority.
 
 #### Scenario: Same-owner adapters complete independent approval interactions
 
@@ -40,7 +44,14 @@ The product MUST permit multiple authenticated adapters using the same configure
 
 ### Requirement: Registration renewal and retirement are independent
 
-Each registration MUST have independently scoped renewal, release and expiry. A heartbeat or release authorized for one registration MUST NOT renew, release or otherwise change a sibling's registration. An unrenewed registration MUST become unusable at its expiry deadline. Expired or retired registration authority MUST NOT reactivate that registration or renew, release or replace a current registration, including a later registration for the same adapter or owner. An expired registration MUST require a new authenticated registration rather than renewal of expired authority.
+Each registration MUST have independently scoped renewal, release and expiry. A heartbeat or release authorized for one registration MUST NOT renew, release or otherwise change a sibling's registration. An unrenewed registration MUST become unusable at its expiry deadline.
+
+#### Scenario: Expired or retired authority cannot be reused
+
+- **GIVEN** expired or retired registration authority
+- **WHEN** that authority is presented again
+- **THEN** expired or retired registration authority MUST NOT reactivate that registration or renew, release or replace a current registration, including a later registration for the same adapter or owner
+- **AND** an expired registration MUST require a new authenticated registration rather than renewal of expired authority.
 
 #### Scenario: One registration renews while a sibling retires
 
@@ -65,9 +76,23 @@ Each registration MUST have independently scoped renewal, release and expiry. A 
 
 ### Requirement: Adapter reconnect and closure preserve durable request recovery
 
-Reconnect MUST establish usable authenticated registration without evicting siblings, automatically reattaching a lost waiting call or duplicating pending requests. Once adapter shutdown is observed, the adapter MUST stop initiating ordinary activity and renewals, make only bounded best-effort release of its own known registration authority and prevent late asynchronous completions from restoring closed activity. An unknown registration-creation or release result MUST NOT be reported as confirmed cleanup or justify guessed authority. Any registration left unrenewed MUST become unusable at its expiry deadline.
+Reconnect MUST establish usable authenticated registration without evicting siblings, automatically reattaching a lost waiting call or duplicating pending requests.
 
-Registration loss, release, expiry, reconnect and adapter closure MUST NOT themselves cancel durable requests, erase accepted outcomes or transfer response routing. Retained request capabilities under the same transport principal MUST continue to permit explicit retrieval and idempotent acknowledgement under `Exact originating-session delivery` and `Safe pending delivery and replay`, without requiring the lost registration to remain active. Existing request expiry and explicit cancellation rules remain unchanged.
+#### Scenario: Shutdown and uncertain cleanup preserve terminal closure
+
+- **GIVEN** an adapter
+- **WHEN** adapter shutdown is observed
+- **THEN** the adapter MUST stop initiating ordinary activity and renewals, make only bounded best-effort release of its own known registration authority and prevent late asynchronous completions from restoring closed activity
+- **AND** an unknown registration-creation or release result MUST NOT be reported as confirmed cleanup or justify guessed authority
+- **AND** any registration left unrenewed MUST become unusable at its expiry deadline.
+
+#### Scenario: Lifecycle changes preserve durable request authority
+
+- **GIVEN** durable requests or accepted outcomes
+- **WHEN** registration loss, release, expiry, reconnect or adapter closure occurs
+- **THEN** registration loss, release, expiry, reconnect and adapter closure MUST NOT themselves cancel durable requests, erase accepted outcomes or transfer response routing
+- **AND** retained request capabilities under the same transport principal MUST continue to permit explicit retrieval and idempotent acknowledgement under `Exact originating-session delivery` and `Safe pending delivery and replay`, without requiring the lost registration to remain active
+- **AND** existing request expiry and explicit cancellation rules remain unchanged.
 
 #### Scenario: Reconnect preserves siblings and existing pending work
 
