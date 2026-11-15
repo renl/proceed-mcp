@@ -20,14 +20,14 @@ Only **Approve** authorizes the requested action. **Reject** does not authorize 
 
 **Preview limits:** a timeout can end the wait without cancelling the request. Recorded outcomes remain retrievable, but answering later cannot wake the agent. See [Limits](#limits).
 
-This guide matches source version `0.1.0-preview.9`. Check that this exact version is available from npm before installing.
+This guide matches source version `0.1.0-preview.10`. Check that this exact version is available from npm before installing.
 
 Package: [@meshimize/proceed-mcp](https://www.npmjs.com/package/@meshimize/proceed-mcp)
 
 ## Install
 
 ```console
-npm install --global @meshimize/proceed-mcp@0.1.0-preview.9
+npm install --global @meshimize/proceed-mcp@0.1.0-preview.10
 proceed-mcp --help
 ```
 
