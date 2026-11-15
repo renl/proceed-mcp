@@ -19,8 +19,8 @@ Scope and criteria: [proposal](proposal.md), [design](design.md).
 - [x] 1.1 Test engineering: change only three current-version literals in `tests/release-metadata.test.mjs` to preview.10. Preserve all negative controls and assertions. Verify syntax and expected RED against preview.9 source.
 - [x] 1.2 Test engineering: mechanically maintain only two version/filename pins in `tests/release-pack.mjs` and one manifest-version pin in `tests/release-installed.test.mjs`, as authorized by the design. Verify the literal-only diff and syntax. Do not execute either non-unit suite.
 - [x] 1.3 Record the approved no-behavior decision as top-level `skip_specs: true` in `.openspec.yaml`, preserving `schema` and `created`. Verify pinned CLI status and strict structural validation without a delta or baseline spec edit.
-- [ ] 1.4 Software engineering: edit only `package.json` top-level `version`, `package-lock.json` top-level `version` and `packages[""].version`, and `server.json` listing and npm entry versions to preview.10. Verify the focused metadata unit suite passes and review the five-field diff with no dependency or other metadata changes.
-- [ ] 1.5 Documentation maintenance: edit only README source-version statement and exact npm install pin from preview.9 to preview.10. Preserve availability caveats, all client setup and historical evidence. Verify the two-literal diff and scoped formatting.
+- [x] 1.4 Software engineering: edit only `package.json` top-level `version`, `package-lock.json` top-level `version` and `packages[""].version`, and `server.json` listing and npm entry versions to preview.10. Verify the focused metadata unit suite passes and review the five-field diff with no dependency or other metadata changes. Commit `1beae17`.
+- [x] 1.5 Documentation maintenance: edit only README source-version statement and exact npm install pin from preview.9 to preview.10. Preserve availability caveats, all client setup and historical evidence. Verify the two-literal diff and scoped formatting. Owner edit committed byte-identically in `6b1af06`.
 
 ## 2. Integrated candidate
 
@@ -49,6 +49,17 @@ No new tests, harness, framework, dependencies, tool pins, CI, runtime source, s
 - Focused metadata units: 9 records, 7 pass, 2 expected RED (`PREVIEW-SCOPE`, `PREVIEW-META`), zero skips. Exit 1 is expected because source remains preview.9 while expectations are preview.10. Corrected-excerpt mutation controls pass. No complete-candidate or runtime pass is claimed.
 - Syntax checks pass for all three changed test files. Pinned Prettier 3.9.10 explicit-path checks pass for those files, tasks and change metadata. `git diff --check` passes. CLI 1.15.0 strict validation passes with zero deltas accepted under `skip_specs`. CLI status reports proposal/design/tasks done and specs skipped, not implementation completion.
 - Concurrent README edits appeared after entry and are left to their documentation owner, unstaged by this setup. Source version files remain untouched by test engineering. Both non-unit suites remain unrun, with only the three authorized pins maintained.
+
+## Implementation evidence
+
+Candidate: base `a26897ae6b4b764988b4494b8992c4f1b25dd6ee`, test engineering setup `83047cb`, metadata commit `1beae17`, README commit `6b1af06`.
+- Changed paths: `package.json`, `package-lock.json`, `server.json` (five version fields total) and owner-completed `README.md` (two pins). No dependency, identity, publish config, description or behavior edit. No other tracked path differs from `83047cb`.
+- Focused metadata units: `node --test --test-reporter=tap tests/release-metadata.test.mjs` changed from 9 records 7 pass 2 expected RED (`PREVIEW-SCOPE`, `PREVIEW-META`, exit 1) before task 1.4 to 9 pass 0 fail 0 skipped, exit 0 after tasks 1.4-1.5. No complete-candidate or runtime pass is claimed.
+- Syntax: `node --check` passes for all three changed test files. JSON parsing passes for the three changed metadata files. `git diff --check` passes.
+- Strict structure: CLI 1.15.0 `openspec validate prepare-preview-10-release --strict` passes with zero deltas accepted under `skip_specs`. Structural success is not runtime proof.
+- Scoped format: pinned Prettier 3.9.10 explicit-path `--check` passes for `package.json` and `server.json`. `package-lock.json` is formatter-ignored. `README.md` reports pre-existing markdown table alignment debt in a section untouched by the two pins, and its pre-change committed content fails identically, so it is owner debt left unmodified rather than reformatted.
+- Unrun under the unit-only restriction: pack, installed, integration, renderer, e2e, calibration, preflight, build, pack, install and publishing checks. Deferred, not passed.
+- Failure history: the two expected RED records at `83047cb` were the only failures. No repeated failure without new evidence occurred.
 
 ## Workflow follow-up
 
