@@ -4,7 +4,7 @@ Parent: [proposal](proposal.md). Contract: [design](design.md) and both change-l
 
 ## Delivery and lifecycle
 
-Mergeable outcome: one independent Windows setup-and-subsequent-storage change with ordinary OS access, existing data preserved and POSIX protection unchanged. Nearest landing blocker: portable regression specification and combined architecture review before implementation, followed by independent candidate review and candidate-specific landing acceptance for unrun native proof.
+Mergeable outcome: one independent Windows setup-and-subsequent-storage change with ordinary OS access, existing data preserved and POSIX protection unchanged. Nearest landing blocker: implementation against the reviewed portable regression specification, followed by independent candidate review and candidate-specific landing acceptance for unrun native proof.
 
 One change, one worktree, one PR into `main`. No parent dependency. Baseline: `main` at `cff114570f250595f73774edd403996a6dbae5f7`. Internal checkpoints are not separate PRs.
 
@@ -13,8 +13,8 @@ One change, one worktree, one PR into `main`. No parent dependency. Baseline: `m
 | Path             | `.worktree/simplify-windows-storage-admission`                                          |
 | Branch / change  | `simplify-windows-storage-admission`                                                    |
 | Owner            | Test engineering                                                                        |
-| Status           | active, expected RED regressions authored, combined review pending                      |
-| Next action      | Coordination routes one combined architecture review, then implementation               |
+| Status           | active, combined review accepted with bounded assertion correction completed            |
+| Next action      | Coordination routes implementation against the corrected tests and this brief           |
 | Cleanup evidence | Not eligible. Retain until proven landing or explicit abandonment with recoverable work |
 
 Founder-visible success: Windows operators can initialize and continue normal approval use without custom file-permission preparation or loss of existing authority/data. Direct proof is an installed normal first approval and subsequent reuse. Controlled memory unit assertions are supporting proof of specified caller behavior, not native Windows, installed first-use or Telegram proof.
@@ -22,7 +22,7 @@ Founder-visible success: Windows operators can initialize and continue normal ap
 ## 1. Portable specification and shared storage outcome
 
 - [x] 1.1 Author memory-only JavaScript unit regressions in `tests/windows-storage-node-unit.test.mjs`, mapping the changed Windows admission scenarios to shared callers and retained integrity/POSIX safeguards. Verify expected RED against the pinned baseline without actual storage, native queries, processes or network.
-- [ ] 1.2 Replace obsolete permission-query expectations, not retained correctness assertions. Review the fake's operation order and failure mapping with architecture together with the boundary block below before implementation.
+- [x] 1.2 Replace obsolete permission-query expectations, not retained correctness assertions. Review the fake's operation order and failure mapping with architecture together with the boundary block below before implementation.
 - [ ] 1.3 Implement design decisions 1-4 throughout the complete caller inventory. Verify ordinary Windows init, owner addition, existing config/local credentials, ownership lifecycle, operator keys and journal recovery/mutation through the unit suite. No initialization-only bypass or successful protection stub.
 - [ ] 1.4 Preserve access denial, wrong kind, redirection, identity replacement, exclusive-create collisions, flush/integrity failures and conservative cleanup. Verify negative unit assertions and unchanged POSIX policy assertions. Existing authority, pairing, TLS, capability and principal suites retain their scope.
 - [ ] 1.5 Update concise README and coupled preview.9 metadata, with matching unit expectations in existing release/package tests. Verify ordinary-access disclosure, key theft/record tampering warning, POSIX distinction and exact-version availability instructions without publication claims.
@@ -88,7 +88,15 @@ Commands use Node/npm and are portable to Linux and Windows shells. Run from the
 - RED reasons: baseline custom Windows admission still queries/refuses before the downstream operation, misleading NTFS/protection guidance is rejected, and release metadata still says preview.8. The POSIX and unchanged token behavior assertions pass. Downstream Windows assertions remain unproven until implementation reaches them. No successful implementation or native first-use claim.
 - Earlier authoring runs exposed and corrected a synthetic POSIX UID assumption and corrected-version metadata fixture setup. Default formatter exclusions were detected and replaced with the explicit scoped ignore-path command. Current evidence supersedes earlier authoring counts, not an implementation failure.
 - Scoped Prettier 3.9.10, syntax checks for all five changed JavaScript test files, `git diff --check` and strict OpenSpec validation PASS. Worktree CLI status reports planning artifacts complete. Apply instructions correctly report 2/9 tasks complete, 7 remaining, not implementation complete.
-- Combined review remains pending. No production code, dependency, README, workflow, current baseline spec or archive content was edited. Publication, install, runtime mutation and non-unit execution remain unauthorized.
+- Combined architecture review accepts boundary fidelity, decomposition and fake operation/failure mapping, subject only to WINDOWS-ROLLBACK-PROOF-01 below. No unchanged review replay is needed. No production code, dependency, README, workflow, current baseline spec or archive content was edited. Publication, install, runtime mutation and non-unit execution remain unauthorized.
+
+## Bounded review correction
+
+- WINDOWS-ROLLBACK-PROOF-01: closed after one test-engineering correction. This is a setup assertion gap, not a production hotfix. The owner rollback case could compare two undefined values after early credential creation refusal and mistake an untouched empty owner list for rollback proof.
+- Correction: the existing `WIN-ROLLBACK: owner config failure preserves replaced credential` case now requires `assert.ok(replacement, 'the config rename hook created the replacement before rollback')` immediately after rejection and before preservation comparisons. Only the config rename hook assigns this object, immediately before its injected EIO. Early refusal therefore fails the precondition rather than passing preservation vacuously. Existing preservation, empty-owner-list and no-policy assertions remain unchanged.
+- Combined review accepts all other boundaries, decomposition and fakes. This exact requested correction introduces no material contract deviation or new proof stage. Next owner: implementation engineering via coordination. Implement the existing design and make the downstream assertions reachable, then obtain independent integrated-candidate verification. Native and downstream proof remain unverified until reached and checked.
+- Affected rerun on unchanged production at setup parent `aeb847a6c46215c1349d790b5125d64f916941c1`: step 3 exactly, `node --experimental-test-module-mocks --test tests/windows-storage-node-unit.test.mjs`, exits 1 with 79 Node records, 17 PASS and 62 expected RED, zero skipped/cancelled/todo. Parent/subtest records are included, not independent defect counts. The owner rollback case fails at the new line 793 assertion with `actual: undefined`, demonstrating that early baseline admission refusal cannot satisfy the precondition. The injected rename EIO and downstream preservation are not yet proven. This affected-file count does not replace the earlier four-file setup count.
+- Correction checks PASS: declared step 1 scoped Prettier check, step 2 syntax, `git diff --check`, and step 5 `openspec validate simplify-windows-storage-admission --strict`. Only the test assertion and this task/review evidence changed. Criteria and approved Windows ordinary I/O, POSIX and authentication requirements are unchanged. Ready for implementation, not implementation-complete or feature-verified.
 
 ## Workflow follow-up
 

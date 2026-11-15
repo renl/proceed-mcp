@@ -790,6 +790,7 @@ test('WIN-ROLLBACK: owner config failure preserves replaced credential', async (
       }
     };
     await assert.rejects(store.addOwner(paths, { ownerId: 'test', label: 'Test' }));
+    assert.ok(replacement, 'the config rename hook created the replacement before rollback');
     assert.equal(memory.get(file), replacement);
     assert.deepEqual((await store.loadPortableConfiguration(paths)).owners, []);
     noWindowsPolicy();
