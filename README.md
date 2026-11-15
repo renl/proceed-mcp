@@ -20,14 +20,14 @@ Only **Approve** authorizes the requested action. **Reject** does not authorize 
 
 **Preview limits:** a timeout can end the wait without cancelling the request. Recorded outcomes remain retrievable, but answering later cannot wake the agent. See [Limits](#limits).
 
-This guide matches source version `0.1.0-preview.8`. Check that this exact version is available from npm before installing.
+This guide matches source version `0.1.0-preview.9`. Check that this exact version is available from npm before installing.
 
 Package: [@meshimize/proceed-mcp](https://www.npmjs.com/package/@meshimize/proceed-mcp)
 
 ## Install
 
 ```console
-npm install --global @meshimize/proceed-mcp@0.1.0-preview.8
+npm install --global @meshimize/proceed-mcp@0.1.0-preview.9
 proceed-mcp --help
 ```
 
@@ -40,9 +40,10 @@ If `proceed-mcp` is not on `PATH`, run the entry point directly. `npm root --glo
 - Node.js 24 or newer.
 - One dedicated Telegram bot and one private chat with that bot. Do not configure a webhook or run another poller against the bot.
 - The broker and the MCP client on the same machine. You can answer from a phone anywhere.
-- A protected state directory owned by your OS account, outside repositories and the npm installation. On POSIX the state directory and its files need owner-only permissions. On Windows the state directory needs a local fixed NTFS volume with persistent ACLs.
+- A state directory outside repositories and the npm installation, on local storage. Proceed relies on ordinary file creation, atomic rename and flushing, which not every network or virtual filesystem supports.
+- On POSIX, the state directory and its files need owner-only permissions. On Windows, ordinary OS file access is enough: Proceed applies no custom permission checks, inheritance requirements or repair, and the security of your account's files is your responsibility.
 
-The Telegram token has separate, ordinary storage. It does not need the protected-state requirements above.
+The Telegram token has separate, ordinary plaintext storage. It has no token-specific permission requirement on either platform.
 
 ## Telegram token
 
@@ -62,15 +63,15 @@ To replace the token, stop the broker, provision a new file at a new path, and u
 
 Do this once for a new installation, with the same absolute state directory in every command. Keep state and keys outside the repository and npm installation.
 
-If a working setup already exists, skip these steps. `init`, `owner add` and `pair` create state and pairing, so rerunning them is not a repair. Existing state, keys and pairing remain usable after an upgrade.
+If a working setup already exists, skip these steps. `init`, `owner add` and `pair` create state and pairing, so rerunning them is not a repair. Existing state, keys and pairing remain usable after an upgrade on either platform, with no migration, reset or re-pairing.
 
-### 1. Create protected state
+### 1. Create state
 
 ```console
 proceed-mcp init --state-dir <absolute-state-dir>
 ```
 
-`init` writes a protected `config.json`, a local control credential and an empty journal. It refuses to overwrite existing state and never prints a credential value.
+`init` writes `config.json`, a local control credential and an empty journal. On POSIX it makes the state directory and files owner-only. On Windows it uses ordinary OS defaults. It refuses to overwrite existing state and never prints a credential value.
 
 ### 2. Add one owner
 
@@ -136,14 +137,16 @@ A client or transport timeout does not cancel the request. Keep the `request_id`
 
 ## State and privacy
 
-Approval state and key protections are unchanged by ordinary token storage. The token exception covers only the token file and its dedicated parent directories, not the state directory or its other files.
+State, keys and the token file live outside the package and the repository. The platform rules for file privacy differ.
 
-- `config.json`, `credentials/control.token`, `credentials/owner.<owner-id>.token`, `journal.log` and `broker.lock` remain protected state. A protection check that cannot confirm the required storage, ownership or metadata refuses the operation. Do not weaken it.
-- Channel and operator keys keep their existing protection requirements.
+- On POSIX, the state directory, `config.json`, `credentials/control.token`, `credentials/owner.<owner-id>.token`, channel keys, operator keys and `journal.log` must stay owner-only. If Proceed cannot confirm that, it refuses the operation. Do not weaken it.
+- On Windows, Proceed uses ordinary OS file access for the state directory, journals, broker ownership records, control and owner credentials, channel keys and operator keys. It does not check, require or repair ACLs, ownership, inheritance, modes or volume type. What remains is ordinary I/O safety: file or directory type, path identity and storage separation. Anyone your OS lets read those files can obtain their authority, and anyone it lets write approval records can tamper with them. Authentication and TLS do not prevent that.
+- On both platforms, Proceed refuses create collisions, flushes writes before reporting success and refuses the operation when these checks fail.
 - `journal.log` records request text, decisions and timestamps. Treat the state directory as sensitive local data.
-- The broker listens only on `127.0.0.1`. Closing a client does not stop the shared broker. Use `proceed-mcp stop --state-dir <dir>` when you want it stopped.
-- Back up only while the broker is cleanly stopped. Copy the whole state directory after `stop` confirms. Do not delete a lock or journal to get past a failure.
-- Other processes running as the same account, administrators and backups can read protected state too. Owner-only protection is not isolation between processes of one account.
+- The token file is separate and ordinary plaintext, as described above. It has no token-specific protection on either platform.
+- The broker listens only on `127.0.0.1`. The adapter and the `pair`, `status` and `stop` commands require its TLS-secured local channel and local credentials. Closing a client does not stop the shared broker. Use `proceed-mcp stop --state-dir <dir>` when you want it stopped.
+- Back up only while the broker is cleanly stopped. Copy the whole state directory after `stop` confirms. Do not delete a lock or journal to get past a failure. Proceed does not remove a stale lock automatically.
+- Other processes running as the same account, administrators and backups can read POSIX-protected state too. Owner-only modes are not isolation between processes of one account.
 
 ## Optional: launch environment
 
@@ -169,7 +172,7 @@ proceed-mcp serve --secure-local --telegram-token-file <absolute-token-file> --s
 - `TELEGRAM_CREDENTIAL_EXISTS`: provisioning never overwrites. Choose another destination.
 - `BROKER_UNAVAILABLE`: check initialized state, owner setup, the selected token source and a matching `--state-dir`, then start a new adapter.
 - `STATE_NOT_INITIALIZED`: run `init` first.
-- `PROTECTION_UNVERIFIED` or `PROTECTION_UNAVAILABLE`: a required storage, path, identity or protection condition cannot be confirmed. Choose a dedicated local location. Do not weaken protected state or key checks.
+- `PROTECTION_UNVERIFIED` or `PROTECTION_UNAVAILABLE`: a required storage path, file type, file identity or write condition cannot be confirmed. Use a local directory you control, and on POSIX keep state and keys owner-only. Do not bypass the check.
 - `NOT_PAIRED`: complete `/pair` before creating a request.
 - `NOT_FOUND`: wrong owner, state directory or capability, or an unused handle.
 - `DECISION_MISMATCH`: the request is not terminal, or the `decision_id` does not match.
@@ -180,8 +183,8 @@ Exit codes are `0` for completion, `2` for invalid arguments or configuration, `
 
 ## Limits
 
-- Normal MCP startup and a Telegram Approve returning to the waiting call were exercised once on Windows with OpenCode. This does not establish crash/reboot recovery, other platforms or other clients. Optional TUI operation remains unverified.
-- Automated coverage is unit-level. Native platform permission behavior and general platform compatibility remain unqualified. Other decision paths and failure cases are not covered by this check.
+- Normal MCP startup and a Telegram Approve returning to the waiting call were exercised once on Windows with OpenCode before this version changed Windows storage to ordinary OS access. That run does not verify this version's Windows storage path, which has portable unit-test coverage only. Native Windows first use, crash and reboot recovery, other platforms and other clients remain unverified. Optional TUI operation remains unverified.
+- Automated coverage is unit-level. Native filesystem behavior, POSIX enforcement, terminal privacy and general platform compatibility remain unqualified. Other decision paths and failure cases are not covered by these checks.
 - One paired Telegram human and one bot token per broker, and one broker per state directory. A separate owner is a separate transport principal, not another human or bot.
 - The product does not execute actions and does not enforce your client's permission rules. Approval is cooperative.
 - A client timeout does not cancel the request. There is no automatic continuation after a timeout, no session reattachment and no agent wake-up from retrieval.

@@ -7,7 +7,11 @@ Make the Telegram approval preview installable from public npm with truthful set
 
 ### Requirement: Public package and explicit prerequisites
 
-The product MUST retain the historical public npm preview identity `@meshimize/proceed-mcp@0.1.0-preview.1`, requested dist-tag `preview` and user-selected MIT license. Current installation instructions MUST identify the exact source version whose behavior they describe and require checking that version's npm availability before installation. The README MUST remain a current installation and use guide, with historical release evidence retained in its existing records rather than a release history. A source-version guide MUST NOT claim publication without evidence. Unreleased behavior MUST NOT be presented as available in an older published package. Copyright attribution, licensing rights and publisher identity MUST be confirmed, not fabricated. Ordinary npm installation MUST require no Telegram secret or credential interaction. Proceed-owned credential provisioning MUST be an explicit operator action after installation, not an npm lifecycle hook or custom installer. Packaged instructions MUST cover one-time private provisioning of a separate ordinary plaintext token file on Windows and POSIX independently of any harness. They MUST explain that any OS principal able to read the file can obtain and misuse the token, without claiming owner-only access, encryption or a credential store. Token-specific ACL, ownership, inheritance, exact-mode and local-fixed-NTFS prerequisites MUST NOT appear as setup requirements. Protected state and local authority/key requirements MUST remain separately explicit. Credentials, state and keys MUST remain outside package installation/prefix directories. Package replacement or upgrade MUST preserve that external credential, state, keys, pairing, journal and uncertain artifacts without automatic migration, overwrite or rotation. This extension does not change historical publication policy or authorize another publication.
+The product MUST retain the historical public npm preview identity `@meshimize/proceed-mcp@0.1.0-preview.1`, requested dist-tag `preview` and user-selected MIT license. Current installation instructions MUST identify the exact source version whose behavior they describe and require checking that version's npm availability before installation. For this change, the proposed next source version is `0.1.0-preview.9`, not a claim of publication. The README MUST remain a concise current installation and use guide matching the shipped code, with historical release evidence retained in its existing records rather than a release history. A source-version guide MUST NOT claim publication without evidence. Unreleased behavior MUST NOT be presented as available in an older published package. Copyright attribution, licensing rights and publisher identity MUST be confirmed, not fabricated. Ordinary npm installation MUST require no Telegram secret or credential interaction. Proceed-owned credential provisioning MUST be an explicit operator action after installation, not an npm lifecycle hook or custom installer.
+
+Packaged instructions MUST cover one-time private provisioning of a separate ordinary plaintext token file on Windows and POSIX independently of any harness. They MUST explain that any OS principal able to read the file can obtain and misuse the token, without claiming owner-only access, encryption or a credential store. Token-specific ACL, ownership, inheritance, exact-mode and local-fixed-NTFS prerequisites MUST NOT appear as setup requirements. Windows state, journals, ownership records and local control/owner/operator/channel keys MUST likewise use ordinary OS file access without custom permission queries, admission or repair. Instructions MUST make Windows file security the operator's responsibility and disclose that OS-readable keys can be stolen and OS-writable approval data can be tampered with. Authentication and TLS do not prevent misuse of stolen local keys or tampered local records. POSIX state/key protections and application authority checks MUST remain separately explicit and unchanged.
+
+Credentials, state and keys MUST remain outside package installation/prefix directories. Package replacement or upgrade MUST preserve that external credential, state, keys, pairing, journal and uncertain artifacts without automatic migration, overwrite, rotation, reinitialization or re-pairing. This extension does not change historical publication policy or authorize another publication.
 
 #### Scenario: Disclose the first-publication tag exception
 
@@ -55,15 +59,16 @@ The product MUST retain the historical public npm preview identity `@meshimize/p
 - **WHEN** choosing the default or an explicit credential location
 - **THEN** instructions describe an ordinary plaintext token file subject to OS access controls and I/O errors, without requiring token-specific permission checks or repair, account-only parent inheritance, exact POSIX modes or local fixed NTFS
 - **AND** they explain storage separation, private input, no-overwrite provisioning, the consistent explicit credential-path alternative and removal of a higher-priority token from the actual harness launch environment to select the default persisted route
-- **AND** protected state/key prerequisites and the existing private environment/foreground routes remain documented
+- **AND** they distinguish unchanged POSIX state/key protection from operator-managed Windows state, journals, ownership records and local keys, with no custom Windows permission preparation or repair
+- **AND** they disclose Windows key theft and approval-record tampering risks for principals with OS access, and retain the existing private environment/foreground routes
 - **AND** the README's install/configure/start flow matches the implementation shipped with those instructions.
 
 #### Scenario: Package replacement preserves configured use
 
-- **GIVEN** completed supported setup with an external plaintext token file and protected state, keys, pairing and journal outside installation/prefix directories
+- **GIVEN** completed supported setup with an external plaintext token file and state, keys, pairing and journal outside installation/prefix directories satisfying the platform's storage policy
 - **WHEN** the operator replaces or upgrades the npm package
 - **THEN** those external artifacts and uncertain ownership records are neither deleted, moved, overwritten nor migrated by package replacement
-- **AND** subsequent normal MCP startup can use the unchanged configured credential without reprovisioning or token re-entry
+- **AND** subsequent normal MCP startup can use the unchanged configured credential, state and keys without reprovisioning, token re-entry, reinitialization, key rotation or re-pairing
 - **AND** package replacement alone does not enable a disabled integration or prove runtime operation.
 
 #### Scenario: Current installation guidance remains primary
@@ -71,12 +76,12 @@ The product MUST retain the historical public npm preview identity `@meshimize/p
 - **GIVEN** the README describes the current source version and historical preview.1 evidence or tag exceptions remain in their existing records
 - **WHEN** an operator follows its primary installation path
 - **THEN** that path identifies the exact version matching the documented behavior, requires checking its npm availability before installation and does not claim publication without evidence
-- **AND** historical claims remain labeled as history rather than being rewritten as evidence for the current candidate
-- **AND** changed plaintext-storage behavior is not attributed to an immutable older release that does not implement it.
+- **AND** historical claims remain labeled as history in their existing records rather than becoming a README release history or evidence for the current candidate
+- **AND** changed Windows storage behavior is described for proposed `0.1.0-preview.9`, not attributed to an immutable older release that does not implement it.
 
 ### Requirement: Complete first useful action from empty state
 
-The product MUST support a documented first-use path starting without product configuration, credentials, pairing, requests, or decisions. After ordinary secret-free npm installation, supported setup MUST establish protected state, a transport principal, a separate ordinary plaintext token file and authorized private pairing through installed Proceed. The persisted route MUST support the first useful approval after a fresh token-free harness launch on Windows and POSIX without token-specific permission preparation. Credential persistence alone MUST NOT count as completion. Existing private environment-token first use remains supported without persistent token provisioning. One-time persisted setup MUST remain reusable across supported harnesses without introducing harness-specific token storage. This portability requirement MUST NOT be presented as verified multi-harness compatibility without evidence.
+The product MUST support a documented first-use path starting without product configuration, credentials, pairing, requests, or decisions. After ordinary secret-free npm installation, supported setup MUST establish state under the platform's storage policy, a transport principal, a separate ordinary plaintext token file and authorized private pairing through installed Proceed. Windows initialization and subsequent state, journal, ownership-record and local-key operations MUST require no custom filesystem protection admission, protection queries or permission repair. POSIX state/key protections MUST remain unchanged. The persisted route MUST support the first useful approval after a fresh token-free harness launch on Windows and POSIX without token-specific permission preparation. Credential persistence alone MUST NOT count as completion. Existing private environment-token first use remains supported without persistent token provisioning. One-time persisted setup MUST remain reusable across supported harnesses without introducing harness-specific token storage. This portability requirement MUST NOT be presented as verified multi-harness compatibility without evidence.
 
 #### Scenario: Create foundational configuration through supported setup
 
@@ -103,7 +108,7 @@ The product MUST support a documented first-use path starting without product co
 - **AND** it MUST distinguish expected behavior from observed proof and disclose client timeouts, lost-call retention, authorized retrieval, explicit receipt acknowledgement and the expected subsequent assistant acknowledgement.
 - **AND** the live scenarios below were deferred from prepublication acceptance. Subsequent supplied results MUST be reported within their actual scope, not as independent reproduction or a full-release pass.
 - **AND** clean packaged installation/startup, secret safety and independent applicable integrated-candidate verification MUST retain their acceptance obligations. The approved manual publication before implementation merge MUST NOT count as proof those obligations passed or authorize landing without integrated verification.
-- **AND** no live bot, credential, polling or protected-state access is granted by this deferral.
+- **AND** no live bot, credential, polling or state access is granted by this deferral.
 
 #### Scenario: First remote decision after installation - prepublication live proof deferred
 
@@ -138,20 +143,21 @@ The product MUST support a documented first-use path starting without product co
 
 #### Scenario: Complete installed persisted setup and fresh-launch approval
 
-- **GIVEN** an ordinary npm installation with no credentials, state, owner, pairing, requests or decisions, documented protected-state prerequisites and ordinary OS access to a separated Windows or POSIX token destination
-- **WHEN** the operator follows installed Proceed instructions to initialize protected state, add a transport principal, privately provision the separate plaintext credential and authorize private-chat pairing
+- **GIVEN** an ordinary npm installation with no credentials, state, owner, pairing, requests or decisions, documented platform storage prerequisites and ordinary OS access to a separated Windows or POSIX token destination
+- **WHEN** the operator follows installed Proceed instructions to initialize state, add a transport principal, privately provision the separate plaintext credential and authorize private-chat pairing
 - **AND** safely stops the broker and starts a fresh supported harness with no Telegram token in its environment or configuration
 - **AND** normal MCP use calls `prepare_approval`, then `request_approval` with the returned authority, and the paired human selects Approve while the call remains active
 - **THEN** the same waiting call returns the matching explicit approval without token re-entry, token-specific permission preparation, a harness secret entry or a separate broker terminal
+- **AND** Windows initialization and subsequent operations in this path require no custom state/journal/ownership-record/local-key permission admission or repair
 - **AND** setup alone neither enables a disabled integration nor grants standing approval or native permission bypass.
 
 #### Scenario: New credential outcomes retain their own evidence limits
 
-- **GIVEN** this credential-storage simplification is assessed under the project's unit-only JavaScript/TypeScript verification restriction
+- **GIVEN** the Windows storage-admission simplification is assessed under the project's unit-only JavaScript/TypeScript verification restriction
 - **WHEN** setup, package or first-use readiness is reported
 - **THEN** automated tests use normal unit tooling runnable on Linux without PowerShell or Windows dependencies, and independent review remains required
-- **AND** protected state/key enforcement, terminal privacy, installed first use, login/reboot startup, actual Telegram delivery and multi-harness behavior remain unverified until permitted evidence exists
-- **AND** neither source review, unit results nor preview.3 risk acceptance substitutes for candidate-specific landing or exposure decisions.
+- **AND** native Windows operation under the ordinary-access policy, POSIX state/key enforcement, terminal privacy, installed first use, login/reboot startup, actual Telegram delivery and multi-harness behavior remain unverified until permitted evidence exists
+- **AND** neither source review, unit results nor prior preview risk acceptance substitutes for candidate-specific landing or exposure decisions.
 
 ### Requirement: Non-publishing pull-request validation
 Pull-request CI MUST build and test the proposed package without publishing a package or triggering a publishing path. Untrusted pull-request execution MUST NOT receive registry publishing credentials.

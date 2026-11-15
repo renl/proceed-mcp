@@ -1,6 +1,6 @@
 // Empty-state setup operations: `init` and `owner add` (design section 2).
 // Neither command starts a service, contacts Telegram, or contacts OpenCode.
-import { readFile, readdir, rm, stat } from 'node:fs/promises';
+import { lstat, readdir, rmdir, stat } from 'node:fs/promises';
 import { createOriginBinding, parseConfigDocument, withOrigin } from '../config/config.js';
 import {
   createEmptyConfig,
@@ -14,28 +14,23 @@ import { createFileHeader } from '../journal/framing.js';
 import { generateCredentialToken } from './credentials.js';
 import { writeFileAtomically } from './files.js';
 import { writeOwnerCredential } from './owner-credentials.js';
+import { posix, removeExactCreated } from './path-trust.js';
 import {
   createProtectedDirectory,
+  readStorageFile,
   verifyOwnerOnly,
-  verifyWindowsProtection,
+  verifyStorageObject,
 } from './protection.js';
 
 async function readConfigText(paths) {
-  // Windows: the configuration file and its existing ancestry are admitted
-  // before any configuration byte is read, so unsafe storage cannot select
-  // authority. A missing configuration is still reported as absent.
-  await verifyWindowsProtection([paths.configFile], { allowMissingTail: true });
-  let text;
-  try {
-    text = await readFile(paths.configFile, 'utf8');
-  } catch (cause) {
-    if (cause?.code === 'ENOENT') return null;
-    throw storageFailure(`could not read ${paths.configFile}`, 'STORAGE_FAILURE', cause);
-  }
-  // The bytes are authority only while the object that produced them is still
-  // admitted: a failed re-observation discards the result instead of returning it.
-  await verifyWindowsProtection([paths.configFile]);
-  return text;
+  // Ordinary read: the configuration and its existing ancestry must be
+  // unredirected ordinary storage, and the bytes are used only while the object
+  // that produced them is still that object. A missing configuration is still
+  // reported as absent.
+  const bytes = await readStorageFile(paths.configFile, {
+    description: `the configuration at ${paths.configFile}`,
+  });
+  return bytes === null ? null : bytes.toString('utf8');
 }
 
 // The schema-1 readers below still serve the broker, pairing, status, retry and
@@ -98,18 +93,14 @@ function processIsAlive(pid) {
 // A stopped broker is required before an origin binding is added: a running
 // broker owns the configuration it already loaded.
 async function assertBrokerStopped(paths) {
-  // The record may carry the channel key, so Windows admission precedes its
-  // content read; a missing record is an ordinary "no broker" answer.
-  await verifyWindowsProtection([paths.brokerLockFile], { allowMissingTail: true });
-  let raw;
-  try {
-    raw = await readFile(paths.brokerLockFile, 'utf8');
-  } catch (cause) {
-    if (cause?.code === 'ENOENT') return;
-    throw storageFailure(`could not read ${paths.brokerLockFile}`, 'STORAGE_FAILURE', cause);
-  }
-  // The record's bytes stay authority only while its protection still holds.
-  await verifyWindowsProtection([paths.brokerLockFile]);
+  // The record may carry the channel key, so its ordinary storage observation
+  // precedes its content read; a missing record is an ordinary "no broker"
+  // answer.
+  const bytes = await readStorageFile(paths.brokerLockFile, {
+    description: `the ownership record at ${paths.brokerLockFile}`,
+  });
+  if (bytes === null) return;
+  const raw = bytes.toString('utf8');
 
   let record;
   try {
@@ -153,10 +144,14 @@ async function assertBrokerOwnershipAbsent(paths) {
 }
 
 export async function initializeState(paths) {
-  // Windows: the state directory is admitted (a missing tail is this attempt's
-  // creation) before its contents are inspected. Emptiness is established
+  // The state directory must be existing ordinary storage or this attempt's
+  // missing tail before its contents are inspected. Emptiness is established
   // before any existing configuration is parsed, and nothing is repaired.
-  await verifyWindowsProtection([paths.stateDir], { allowMissingTail: true });
+  await verifyStorageObject(paths.stateDir, {
+    allowMissingTail: true,
+    expected: 'directory',
+    description: `the state directory ${paths.stateDir}`,
+  });
 
   const existing = await directoryContents(paths.stateDir);
   if (existing !== null && existing.length > 0) {
@@ -174,19 +169,28 @@ export async function initializeState(paths) {
   }
 
   const createdStateDir = existing === null;
-  const writtenFiles = [];
+  const written = [];
 
   try {
     await createProtectedDirectory(paths.stateDir);
-    await createProtectedDirectory(paths.credentialsDir, { inheritsProtection: true });
+    await createProtectedDirectory(paths.credentialsDir);
 
     const config = createEmptyConfig();
-    await writeFileAtomically(paths.controlCredentialFile, `${generateCredentialToken()}\n`);
-    writtenFiles.push(paths.controlCredentialFile);
-    await writeFileAtomically(paths.journalFile, createFileHeader());
-    writtenFiles.push(paths.journalFile);
-    await writeFileAtomically(paths.configFile, serializeConfig(config));
-    writtenFiles.push(paths.configFile);
+    written.push({
+      file: paths.controlCredentialFile,
+      created: await writeFileAtomically(
+        paths.controlCredentialFile,
+        `${generateCredentialToken()}\n`,
+      ),
+    });
+    written.push({
+      file: paths.journalFile,
+      created: await writeFileAtomically(paths.journalFile, createFileHeader()),
+    });
+    written.push({
+      file: paths.configFile,
+      created: await writeFileAtomically(paths.configFile, serializeConfig(config)),
+    });
 
     await verifyOwnerOnly([
       paths.stateDir,
@@ -197,18 +201,24 @@ export async function initializeState(paths) {
     ]);
     return { stateDir: paths.stateDir, config, controlCredentialFile: paths.controlCredentialFile };
   } catch (error) {
-    await rollbackInitialization(paths, writtenFiles, createdStateDir);
+    await rollbackInitialization(paths, written, createdStateDir);
     throw error;
   }
 }
 
-// A failed init must not leave an unprotected credential behind.
-async function rollbackInitialization(paths, writtenFiles, createdStateDir) {
-  for (const file of writtenFiles) {
-    await rm(file, { force: true }).catch(() => {});
+// A failed init removes only the objects it can still prove it created. A
+// replacement, a preexisting file or an uncertain entry is preserved, and the
+// state directory is removed only while it is still empty ordinary storage on a
+// platform whose file identity can prove the entry.
+async function rollbackInitialization(paths, written, createdStateDir) {
+  for (const { file, created } of written) {
+    await removeExactCreated(file, created);
   }
-  if (createdStateDir) {
-    await rm(paths.stateDir, { recursive: true, force: true }).catch(() => {});
+  if (!createdStateDir || !posix()) return;
+  try {
+    await rmdir(paths.stateDir);
+  } catch {
+    // A non-empty or no-longer-identifiable directory is preserved.
   }
 }
 
@@ -228,7 +238,7 @@ export async function addOrigin(paths, { originId, url, passwordEnv }) {
   await verifyOwnerOnly([paths.stateDir, paths.credentialsDir, paths.configFile]);
 
   const originCredentialFile = paths.originCredentialFile(origin.origin_id);
-  if ((await stat(originCredentialFile).catch(() => null)) !== null) {
+  if ((await lstat(originCredentialFile).catch(() => null)) !== null) {
     throw invalidArgument(
       `credential file ${originCredentialFile} already exists; bindings are immutable`,
       'ORIGIN_ALREADY_CONFIGURED',
@@ -248,8 +258,8 @@ export async function addOrigin(paths, { originId, url, passwordEnv }) {
 }
 
 // Owner addition (design section 2): an immutable transport principal plus its
-// own protected 256-bit credential. Identifiers and labels are validated, and a
-// repeated owner_id is refused, before any state is touched; the record and the
+// own 256-bit credential. Identifiers and labels are validated, and a repeated
+// owner_id is refused, before any state is touched; the record and the
 // credential then commit together or not at all, and no token leaves its file.
 export async function addOwner(paths, { ownerId, label }) {
   const config = await loadPortableConfiguration(paths);
@@ -260,12 +270,15 @@ export async function addOwner(paths, { ownerId, label }) {
 
   const ownerCredentialFile = paths.ownerCredentialFile(owner.owner_id);
   const created = await writeOwnerCredential(ownerCredentialFile);
+  // The identity of the object this call created, so a failed commit removes only
+  // that object and preserves a replacement or an uncertain entry.
+  const identity = await lstat(ownerCredentialFile).catch(() => null);
   try {
     await writeFileAtomically(paths.configFile, serializeConfig(nextConfig));
   } catch (error) {
     // The owner record never committed, so the credential this call created
     // names no principal: remove it rather than leave an unrecorded secret.
-    await rm(created.file, { force: true }).catch(() => {});
+    await removeExactCreated(created.file, identity);
     throw error;
   }
   await verifyOwnerOnly([
