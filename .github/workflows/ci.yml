@@ -29,7 +29,7 @@ jobs:
         timeout-minutes: 1
       - shell: bash
         run: |
-          node --test --test-reporter=tap tests/portable-execution-cancel.test.mjs tests/portable-wait-unit.test.mjs
+          node --test --test-reporter=tap tests/portable-registration-unit.test.mjs tests/portable-registration-binding.test.mjs tests/concurrent-owner-adapters-unit.test.mjs tests/portable-execution-cancel.test.mjs tests/portable-wait-unit.test.mjs
         timeout-minutes: 1
       - shell: bash
         run: |
