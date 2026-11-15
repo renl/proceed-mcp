@@ -25,7 +25,7 @@ import {
   splitPath,
   windowsAbsolutePathProblem,
 } from '../state/path-trust.js';
-import { verifyWindowsProtection } from '../state/protection.js';
+import { verifyStorageIdentity, verifyStorageObject } from '../state/protection.js';
 import { OPERATOR_KEY_PATTERN } from './identifiers.js';
 
 const POSIX_DIRECTORY_MODE = 0o700;
@@ -233,9 +233,14 @@ export async function createOperatorKeyFile({ file, stateDir } = {}) {
     fail: keyPathFailure,
   });
   await assertLocation({ file, stateDir });
-  // Windows: the existing destination ancestry is admitted before any directory
-  // is created or the credential is opened.
-  await verifyWindowsProtection([file], { allowMissingTail: true });
+  // Windows: the destination and its existing ancestry must be ordinary storage
+  // before any directory is created or the credential is opened.
+  await verifyStorageObject(file, {
+    allowMissingTail: true,
+    expected: 'file',
+    description: 'the operator credential path',
+    fail: keyPathFailure,
+  });
 
   const { root, rest } = splitPath(file);
   let prefix = root;
@@ -280,13 +285,21 @@ export async function createOperatorKeyFile({ file, stateDir } = {}) {
     if (posix()) await handle.chmod(POSIX_FILE_MODE);
     created = await handle.stat();
     assertOwnerOnlyFile(created, 'the new operator credential file');
-    await verifyWindowsProtection([file]);
+    await verifyStorageObject(file, {
+      expected: 'file',
+      description: 'the new operator credential file',
+      fail: keyPathFailure,
+    });
     key = generateOperatorKey();
     await handle.writeFile(`${key}\n`, 'utf8');
     await handle.sync();
     assertOwnerOnlyFile(await handle.stat(), 'the new operator credential file');
     // Re-observe the flushed credential before key generation is reported done.
-    await verifyWindowsProtection([file]);
+    await verifyStorageIdentity(file, created, {
+      expected: 'file',
+      description: 'the new operator credential file',
+      fail: keyPathFailure,
+    });
   } catch (cause) {
     await handle.close().catch(() => {});
     // The exclusive create proved this attempt owned the object it opened, but
@@ -352,9 +365,14 @@ export async function loadOperatorKeyFile({ file, stateDir } = {}) {
     fail: keyPathFailure,
   });
   await assertLocation({ file, stateDir });
-  // Windows: the key and its existing ancestry are admitted before the file is
-  // opened, and the same admission is re-observed before the key is returned.
-  await verifyWindowsProtection([file], { allowMissingTail: true });
+  // Windows: the key and its existing ancestry must be ordinary storage before
+  // the file is opened, and the path is re-observed before the key is returned.
+  await verifyStorageObject(file, {
+    allowMissingTail: true,
+    expected: 'file',
+    description: 'the operator credential file',
+    fail: keyPathFailure,
+  });
 
   const before = await inspect(file);
   if (before === null) throw blockedPrerequisite(MISSING_KEY_GUIDANCE, 'OPERATOR_KEY_UNAVAILABLE');
@@ -406,7 +424,11 @@ export async function loadOperatorKeyFile({ file, stateDir } = {}) {
   }
   assertOwnerOnlyFile(after, 'the operator credential file');
   assertOwnerOnlyDirectory(await inspect(dirname(file)), 'the operator credential directory');
-  await verifyWindowsProtection([file]);
+  await verifyStorageIdentity(file, before, {
+    expected: 'file',
+    description: 'the operator credential file',
+    fail: keyPathFailure,
+  });
 
   const credential = parseOperatorKeyInput(bytes);
   return { credential, keyId: operatorKeyId(credential) };

@@ -14,7 +14,7 @@ const listing = await json('server.json');
 function scopedIdentity(pkg, locked, registry) {
   for (const entry of [pkg, locked, locked.packages['']]) {
     assert.equal(entry.name, '@meshimize/proceed-mcp');
-    assert.equal(entry.version, '0.1.0-preview.8');
+    assert.equal(entry.version, '0.1.0-preview.9');
   }
   const packages = registry.packages.filter((entry) => entry.registryType === 'npm');
   assert.equal(packages.length, 1);
@@ -53,12 +53,15 @@ test('PREVIEW-CONTROLS: identity/config/meaning assertions accept corrected exce
   const pkg = {
     ...manifest,
     name: '@meshimize/proceed-mcp',
+    version: '0.1.0-preview.9',
     publishConfig: { access: 'public', tag: 'preview' },
   };
   const locked = structuredClone(lock);
   locked.name = locked.packages[''].name = pkg.name;
+  locked.version = locked.packages[''].version = pkg.version;
   const registry = structuredClone(listing);
   registry.packages.find((entry) => entry.registryType === 'npm').identifier = pkg.name;
+  registry.packages.find((entry) => entry.registryType === 'npm').version = pkg.version;
   scopedIdentity(pkg, locked, registry);
   publicPreview(pkg);
   for (const text of [
@@ -100,7 +103,7 @@ test('PREVIEW-CONTROLS: identity/config/meaning assertions accept corrected exce
 });
 
 test('PREVIEW-META: publishable preview and lock metadata agree', () => {
-  assert.equal(manifest.version, '0.1.0-preview.8');
+  assert.equal(manifest.version, '0.1.0-preview.9');
   assert.notEqual(manifest.private, true);
   assert.equal(manifest.license, 'MIT');
   assert.deepEqual(manifest.engines, { node: '>=24' });
