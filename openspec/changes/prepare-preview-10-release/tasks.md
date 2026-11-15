@@ -11,7 +11,7 @@ Scope and criteria: [proposal](proposal.md), [design](design.md).
 - Worktree: `.worktree/prepare-preview-10-release`. Branch/change: `prepare-preview-10-release`. Owner: test engineering.
 - First mergeable outcome: coupled preview.10 source versions, documentation and existing expectations only.
 - Nearest landing blocker: version alignment, passing metadata units, independent candidate review and existing CI.
-- Status: setup ready. Next action: software engineering metadata edits and documentation maintenance README edits, then independent review. Cleanup pending, no removal performed.
+- Status: independent metadata review passed. Next action: single PR and exact-head CI, owner link repairs before archive, then docs-only finalization review and authorized landing. Cleanup pending, no removal performed.
 - No new behavior, normative contract, interface, package-content policy or wire changes. Boundary review is not triggered. Decomposition checklist 1-5: no genuinely changed cross-unit obligations or split proof chain. Routine unchanged version coupling is checked on the complete candidate.
 
 ## 1. Coupled release identity
@@ -24,7 +24,7 @@ Scope and criteria: [proposal](proposal.md), [design](design.md).
 
 ## 2. Integrated candidate
 
-- [ ] 2.1 Independently review the immutable complete candidate against the baseline and exact allowlist. Run focused metadata units and scoped static checks in the sequence below. Record head, target, assertion results and unrun checks before owner final review or archive.
+- [x] 2.1 Independently review the immutable complete candidate against the baseline and exact allowlist. Run focused metadata units and scoped static checks in the sequence below. Record head, target, assertion results and unrun checks before owner final review or archive.
 - [ ] 2.2 Confirm existing exact-head permitted CI passes, including its existing metadata unit selection. No CI edits or broad test execution. Confirm later finalization is docs-only or revalidate affected inputs.
 
 ## Checks and sequence
@@ -65,3 +65,18 @@ Candidate: base `a26897ae6b4b764988b4494b8992c4f1b25dd6ee`, test engineering set
 
 - After independent candidate verification, existing CI and owner final review, software engineering performs the one authorized CLI archive inside this change's single PR. Finish task evidence before the move. Never edit archived content.
 - Publish only from clean merged `main` through the separately routed operational continuation. Test engineering retains worktree lifecycle ownership through verified landing and safe cleanup, with terminal evidence outside the archive.
+
+## Independent candidate evidence
+
+- Reviewed immutable candidate: `37d9557ac48000661e9eb6f8c3272b9eded63991`. Local `main` and `origin/main` both identify baseline `a26897ae6b4b764988b4494b8992c4f1b25dd6ee`. Entry branch is `prepare-preview-10-release`, with no tracked or untracked dirt. No remote freshness claim substitutes for the landing-time check.
+- Result: PASS for the bounded metadata outcome, ready for the single PR. This proves consistent source identity for later publication, not a new delivered capability, package qualification or runtime operation. Archive remains conditional on exact-head CI and the owner link repairs below. Task 2.2 remains pending.
+- Independently executed `node --test --test-reporter=tap tests/release-metadata.test.mjs`: 9 records, 9 pass, 0 fail, 0 skipped, exit 0. Native Node v26.13.0 on Windows is representative for pure JSON, string and argument-parser assertions. Linux Node 24 CI remains pending, not inferred from this run.
+- Exact JSON comparison against baseline passes after substituting only the five authorized version fields. The unit suite independently asserts the listing version, npm entry version, manifest and both lock roots, with preserved mutation controls. Exact text comparison proves only two README pins, three unit literals and three non-unit literals changed to preview.10. No assertion correction was needed.
+- Complete baseline-to-candidate path review passes: seven release/test paths plus four active change artifacts only. Production, dependencies, CI, authentication, runtime configuration, current specs and archived content are unchanged. Prior PR #21's 106-record unit and Linux CI evidence remains applicable only to its unchanged concurrency implementation and assertion scope. It is not rerun or counted as new preview.10 execution.
+- Independently executed syntax checks pass for all three changed test files. JSON parsing and exact coupling assertions pass for all three metadata files. Baseline-to-candidate `git diff --check` passes. CLI 1.15.0 strict validation passes with zero deltas under `skip_specs: true`. No new interface or contract review is triggered.
+- Pinned Prettier 3.9.10 explicit-path checks pass for the three test files, `package.json`, `server.json`, tasks and change metadata. `package-lock.json` remains formatter-ignored. README whole-file format check FAILS, not passed or waived. Bounded formatter comparison proves baseline and candidate have identical table-alignment debt at lines 203-207 after normalizing the two version substitutions. Neither changed pin introduces a formatting defect. Disposition: unchanged owner observation, not a metadata landing blocker or permission for a whole-file rewrite. Documentation owner retains that debt for a separately scoped formatting change.
+- Diagnostic history: the first inline comparison failed before assertions because an absolute Windows ESM import lacked `file:///`. Correcting only that diagnostic import produced the passing exact-content and formatter comparisons above. No product or test changes, host-variability workaround or hidden failing assertion occurred.
+- Prearchive link findings for owners: proposal and design each link `../../specs/npm-distribution/spec.md`. Before the archive move, their owners must use the final archive-relative `../../../specs/npm-distribution/spec.md`. Tasks-to-proposal/design links and design-to-proposal links are sibling-relative and remain valid. No baseline spec delta exists, so no spec-author delta review is needed for this `skip_specs` change. Do not repair links after archive.
+- Non-unit literal maintenance remains unrun and unverified. No pack, installed, skill, native-helper, integration, renderer, e2e, preflight, build, install, publish or runtime checks were executed. Older runtime/non-unit deferrals remain unchanged. Preview.9 hashes cannot qualify preview.10 bytes. Operations owns new artifact admission and public readbacks from clean merged source.
+- Finalization: this evidence changes only this active tasks file. Subsequent owner link repairs, CLI archive and live status/link updates must remain docs-only, with unchanged production, tests, dependencies, configuration and baseline, or affected checks require revalidation. Exact-head CI must be recorded before archive and merge. No push, PR, archive, merge or cleanup was performed here.
+- Assertion status: bounded metadata PASS, unchanged README whole-file formatting FAIL, CI pending, non-unit/runtime/artifact proof unverified. Cleanup status: no test resources or scratch created, worktree remains active and lifecycle cleanup pending until verified landing.
