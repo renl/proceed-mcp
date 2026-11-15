@@ -115,18 +115,28 @@ An owner is the transport principal an MCP adapter authenticates as, not a perso
 - OpenAI Codex CLI: `codex`.
 - Anthropic Claude Code: `claude`.
 
-`owner add` refuses while a broker ownership record exists for this state directory. If a broker is running, stop it first, then add only the owners you need:
+`owner add` refuses while a broker ownership record exists for this state directory. Run the supported stop command first, then add only the owners you need:
 
 ```console
 proceed-mcp stop --state-dir <absolute-state-dir>
 proceed-mcp owner add codex --label "Codex CLI" --state-dir <absolute-state-dir>
 ```
 
-When no broker is running, run only the `owner add` line. Repeat it with the owner id for each client you use.
+`stop` reports `No broker is running for this state directory.` when none is reachable. Only that report lets you skip the `stop` line and run `owner add` alone. A closed client or an absent process is not that report. Repeat `owner add` with the owner id for each client you use.
 
 Each call creates one owner record and one owner credential and starts nothing. Do not put an owner credential, the bot token or a password in any client configuration. The broker alone loads the Telegram token.
 
 In the JSON and TOML examples below, write a Windows state path with forward slashes, for example `C:/Users/you/proceed-mcp-state`.
+
+### Non-default token file
+
+The examples below assume the default token file, so they need no extra option. If you provisioned with `--telegram-token-file <absolute-token-file>`, that path is not the default, and each client entry that can start a broker must name it too. It is a file path, never the token value.
+
+- OpenCode V2: add `"--telegram-token-file", "<absolute-token-file>"` to the `command` array.
+- OpenAI Codex CLI: add `"--telegram-token-file", "<absolute-token-file>"` to `args`.
+- Anthropic Claude Code: append `--telegram-token-file <absolute-token-file>` after `--state-dir <absolute-state-dir>`.
+
+A running broker that already loaded the path is reused without reading the file again. The next automatic start after that broker stops must receive the same path, or another selected source, because a selected source that fails does not fall back.
 
 ### OpenCode V2
 
@@ -155,6 +165,8 @@ Add one global local server to `~/.config/opencode/opencode.jsonc`, or to `$XDG_
 ```
 
 Keep every existing entry under `mcp.servers`. `codemode: false` exposes the five Proceed tools directly instead of through Code Mode. Global configuration applies to all projects, so do not add a second `proceed` entry to a project `opencode.jsonc`.
+
+No API key, provider credential or password is needed in this entry. The adapter connects only to the local broker.
 
 OpenCode reloads MCP configuration after a save, and `/reload` forces a full reload. Check the server with `opencode mcp list` or `/mcps`. Official reference: [OpenCode MCP servers](https://opencode.ai/docs/mcp-servers).
 
