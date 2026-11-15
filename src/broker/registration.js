@@ -7,9 +7,11 @@
 //
 // The lease runs from the last fully validated registration-bound activity;
 // expiry is checked before any lookup or admission without a sweep timer, and a
-// released or expired registration is forgotten rather than retained.
+// released or expired registration is forgotten rather than retained. Each
+// registration stands alone: an authenticated owner identity is not exclusive
+// occupancy, so a sibling create neither evicts nor releases an existing record.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { conflict, invalidArgument, storageFailure } from '../errors.js';
+import { invalidArgument, storageFailure } from '../errors.js';
 // The encodings are shared with the adapter binding, so one definition governs
 // what the broker issues and what an adapter accepts; the exports here keep the
 // checkpoint's public surface unchanged.
@@ -31,7 +33,6 @@ class RegistrationRegistry {
   #leaseMs;
   #logger;
   #byId = new Map();
-  #byOwner = new Map();
   #closed = false;
 
   constructor({ clock, leaseMs, logger }) {
@@ -40,9 +41,12 @@ class RegistrationRegistry {
     this.#logger = logger;
   }
 
-  // One live registration per owner: a duplicate is refused without disturbing
-  // the existing incarnation, while an expired one is replaced here because
-  // admission is where the lease boundary takes effect for a returning adapter.
+  // Every authenticated create allocates an independent record for that owner.
+  // The operation also reclaims expired records across the current population
+  // first, so continued registration churn cannot retain abandoned entries for
+  // the whole broker lifetime. That is one finite pass over the records present
+  // now, not a retry loop or a background sweeper, and it promises no fixed
+  // number of adapters.
   async register({ ownerId } = {}) {
     if (this.#closed) {
       throw storageFailure('the registration registry is closed', 'REGISTRATION_CLOSED');
@@ -51,12 +55,7 @@ class RegistrationRegistry {
       throw invalidArgument('registration needs an authenticated owner');
     }
     const now = this.#clock();
-    const existing = this.#byOwner.get(ownerId);
-    if (existing !== undefined) {
-      const expired = now >= existing.lastActivity + this.#leaseMs;
-      if (!expired) throw conflict('one live adapter registration per owner', 'OWNER_IN_USE');
-      this.#forget(existing);
-    }
+    this.#pruneExpired(now);
     let registrationId;
     do {
       registrationId = `reg_${randomBytes(16).toString('hex')}`;
@@ -68,7 +67,6 @@ class RegistrationRegistry {
       secret: randomBytes(32).toString('hex'),
     };
     this.#byId.set(record.registrationId, record);
-    this.#byOwner.set(ownerId, record);
     // Only the owner is logged: the secret never leaves the create response.
     this.#logger('portable.registration.created', { owner_id: ownerId });
     return { registration_id: record.registrationId, registration_secret: record.secret };
@@ -105,7 +103,6 @@ class RegistrationRegistry {
     if (this.#closed) return;
     this.#closed = true;
     this.#byId.clear();
-    this.#byOwner.clear();
   }
 
   #match({ ownerId, registrationId, secret } = {}) {
@@ -131,13 +128,18 @@ class RegistrationRegistry {
   }
 
   // Identity is compared before deletion, so a stale record can never drop the
-  // live replacement from either index.
+  // live record that replaced it.
   #forget(record) {
     if (this.#byId.get(record.registrationId) === record) {
       this.#byId.delete(record.registrationId);
     }
-    if (this.#byOwner.get(record.ownerId) === record) {
-      this.#byOwner.delete(record.ownerId);
+  }
+
+  // One pass over the population present at this instant, deleting the entry
+  // being visited, so every record is considered exactly once.
+  #pruneExpired(now) {
+    for (const record of this.#byId.values()) {
+      if (now >= record.lastActivity + this.#leaseMs) this.#forget(record);
     }
   }
 }
