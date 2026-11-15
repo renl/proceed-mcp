@@ -194,19 +194,27 @@ Everything after `--` is passed to Proceed unchanged. This writes to `~/.claude.
 
 ### Load the Proceed skill
 
-The npm package and the MCP entry above install the Proceed tools only. They do not install the agent skill, which is separate guidance that tells an agent when and how to use those tools. Install it as a setup step in each project where the agent should have it.
+The npm package and the MCP entry above install the Proceed tools only. They do not install the agent skill, which is separate guidance that tells an agent when and how to use those tools.
 
 Source: [skills/proceed/SKILL.md](https://github.com/renl/proceed-mcp/blob/main/skills/proceed/SKILL.md) on `main`.
 
-Copy that file unchanged into your client's project skill location. Keep the file name `SKILL.md` and its `name` and `description` frontmatter, so the skill ID stays `proceed`:
+If your client already lists a suitable `proceed` skill, use it and skip this step. Otherwise install one copy in the scope that fits your setup: user or global for every project on the machine, or project-local for one repository.
 
-| Client | Path within your project | Official reference |
-|---|---|---|
-| OpenCode V2 | `.opencode/skills/proceed/SKILL.md` | [OpenCode skills](https://opencode.ai/docs/skills) |
-| OpenAI Codex CLI | `.agents/skills/proceed/SKILL.md` | [Codex skills](https://developers.openai.com/codex/skills) |
-| Anthropic Claude Code | `.claude/skills/proceed/SKILL.md` | [Claude Code skills](https://code.claude.com/docs/en/skills) |
+| Client | User or global | Project-local | Official reference |
+|---|---|---|---|
+| OpenCode V2 | `~/.config/opencode/skills/proceed/SKILL.md` | `.opencode/skills/proceed/SKILL.md` | [OpenCode skills](https://opencode.ai/docs/skills) |
+| OpenAI Codex CLI | `~/.agents/skills/proceed/SKILL.md` | `.agents/skills/proceed/SKILL.md` | [Codex skills](https://developers.openai.com/codex/skills) |
+| Anthropic Claude Code | `~/.claude/skills/proceed/SKILL.md` | `.claude/skills/proceed/SKILL.md` | [Claude Code skills](https://code.claude.com/docs/en/skills) |
 
-Each client reads its own location, so copy the file into each project and client you use. Load it once explicitly to confirm the client found it:
+Keep the folder name `proceed`, the file name `SKILL.md` and the `name` and `description` frontmatter, so the client discovers the skill as `proceed`. Copying the repository file as-is is a reasonable starting point, but you can adapt the guidance to your setup or keep a reviewed copy you already have. Install one copy per client unless you intend an override.
+
+OpenCode V2 also reads the Claude Code and Codex paths in both scopes, so one copy under `.agents/skills` or `.claude/skills` can serve more than one client.
+
+Precedence is client-specific. OpenCode V2 loads a project `.opencode/skills` copy over a global `~/.config/opencode/skills` copy with the same ID, while Claude Code prefers a personal copy over a project copy with the same name. Codex CLI loads user and repository copies together and does not merge same-name skills. Confirm the copy a client lists instead of assuming it prefers the global one.
+
+Known stale guidance: the repository `SKILL.md` on `main` still lists "no automatic broker startup", which contradicts the automatic startup described above. Keep a corrected copy if you have one, and do not treat installing this repository copy as a prerequisite for the MCP server.
+
+Each client reads its own locations, so install the skill where that client looks, then load it once explicitly to confirm the selected copy is found:
 
 - OpenCode V2: ask the agent to load the `proceed` skill, or mention `@proceed` in your prompt.
 - OpenAI Codex CLI: mention `$proceed`, or run `/skills` to list available skills.
