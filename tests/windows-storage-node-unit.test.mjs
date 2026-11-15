@@ -273,6 +273,10 @@ const { Journal } = await import('../src/journal/journal.js');
 const { createFileHeader, readJournal } = await import('../src/journal/framing.js');
 const config = await import('../src/config/portable-config.js');
 const legacyConfig = await import('../src/config/config.js');
+const { startupToolFailure } = await import('../src/broker/startup-failure.js');
+const { LocalRequestError } = await import('../src/http/local-client.js');
+const { createRegistrationBinding } = await import('../src/mcp/registration.js');
+const { createToolExecutor } = await import('../src/mcp/execution.js');
 
 // No listener, timer, worker or Telegram client runs. Only runtime assembly and
 // the affected storage collaborators remain real.
@@ -896,6 +900,57 @@ test('WIN-PUBLICATION: create-only key/record and journal append discard replace
     );
 });
 
+// Design decisions 1 and 3 require observations at recovery and mutation
+// boundaries, not only append. These effects use the existing memory double.
+test('WIN-JOURNAL: recovery discards history replaced after its read', async () => {
+  await unit(async (paths) => {
+    existing(paths);
+    let replacement;
+    hooks.after = (name, [file]) => {
+      if (name === 'readFile' && file === paths.journalFile)
+        replacement = put(file, createFileHeader());
+    };
+    let journal;
+    try {
+      await assert.rejects(async () => {
+        journal = await Journal.open(paths.journalFile);
+      }, secretFree);
+    } finally {
+      await journal?.close();
+    }
+    assert.ok(replacement, 'recovery read completed before replacement');
+    assert.equal(memory.get(paths.journalFile), replacement);
+    noWindowsPolicy();
+  });
+});
+
+test('WIN-JOURNAL: tail recovery preserves replacement opened for truncation', async () => {
+  await unit(async (paths) => {
+    existing(paths);
+    entry(paths.journalFile).bytes = Buffer.concat([createFileHeader(), Buffer.from([0, 0])]);
+    const unknown = Buffer.from('SYNTHETIC-UNKNOWN-REPLACEMENT-MUST-NOT-BE-TRUNCATED');
+    let replacement;
+    hooks.before = (name, [file, flags]) => {
+      if (name === 'open' && file === paths.journalFile && flags === 'r+')
+        replacement = put(file, unknown);
+    };
+    let journal;
+    let error;
+    try {
+      journal = await Journal.open(paths.journalFile);
+    } catch (cause) {
+      error = cause;
+    } finally {
+      await journal?.close();
+    }
+    assert.ok(replacement, 'incomplete-tail recovery reached the mutation open');
+    assert.deepEqual(entry(paths.journalFile).bytes, unknown, 'unknown replacement stays intact');
+    assert.ok(error, 'changed opened identity cannot report successful recovery');
+    secretFree(error);
+    noWindowsPolicy();
+  });
+});
+
 test('WIN-JOURNAL: a write without progress never acknowledges a transaction', async () => {
   await unit(async (paths) => {
     existing(paths);
@@ -1013,6 +1068,69 @@ test('POSIX: removed Windows-only read snapshots do not add new POSIX permission
     );
   }, 'linux');
 });
+
+// WINDOWS-STARTUP-GUIDANCE-01, design decision 5. Only an injected in-memory
+// client runs. Registration fails before any heartbeat or transport is created.
+for (const [code, message] of [
+  [
+    'PROTECTION_UNVERIFIED',
+    'broker storage checks failed. Preserve the state directory and investigate OS access, file type, path identity and storage separation before a new attempt. POSIX state/key ownership and permission requirements still apply.',
+  ],
+  [
+    'STORAGE_FAILURE',
+    'broker storage or journal state failed. Preserve the state directory and investigate storage before a new attempt. POSIX state/key ownership and permission requirements still apply.',
+  ],
+]) {
+  test(`WIN-GUIDANCE: ${code} has fixed redacted nonretryable MCP guidance`, async () => {
+    const expected = {
+      schema_version: 1,
+      error: { code: 'STORAGE_FAILURE', message, retryable: false },
+    };
+    const outputs = [];
+    for (const canary of ['SYNTHETIC-SECRET-ONE', 'SYNTHETIC-SECRET-TWO']) {
+      const pathCanary = `C:\\SYNTHETIC-PRIVATE-PATH\\${canary}`;
+      const error = Object.assign(new LocalRequestError(code, `${canary} ${pathCanary}`), {
+        cause: { message: canary, path: pathCanary },
+        credential: canary,
+        record: pathCanary,
+      });
+      const mapped = startupToolFailure(error);
+      assert.deepEqual(Object.keys(mapped).sort(), ['code', 'message']);
+      assert.equal(mapped.code, 'STORAGE_FAILURE');
+      let calls = 0;
+      const client = {
+        async request() {
+          calls++;
+          throw error;
+        },
+      };
+      const registration = createRegistrationBinding({ client });
+      const executor = createToolExecutor({ client, registration });
+      try {
+        const result = await executor.execute('prepare_approval', {});
+        assert.equal(result.isError, true);
+        const body = result.structuredContent;
+        assert.deepEqual(Object.keys(body).sort(), ['error', 'schema_version']);
+        assert.deepEqual(Object.keys(body.error).sort(), ['code', 'message', 'retryable']);
+        assert.equal(body.schema_version, 1);
+        assert.equal(body.error.code, 'STORAGE_FAILURE');
+        assert.equal(body.error.retryable, false);
+        assert.equal(calls, 1, 'one failed memory request, no retry');
+        assert.ok(!JSON.stringify(result).includes(canary));
+        assert.ok(!JSON.stringify(result).includes(pathCanary));
+        assert.deepEqual(JSON.parse(result.content[0].text), body);
+        outputs.push({ mapped, body });
+      } finally {
+        await executor.close();
+      }
+    }
+    assert.deepEqual(outputs[0], outputs[1], 'underlying exception text cannot affect output');
+    for (const output of outputs) {
+      assert.deepEqual(output.mapped, { code: 'STORAGE_FAILURE', message });
+      assert.deepEqual(output.body, expected);
+    }
+  });
+}
 
 test('TOKEN: syntax, ordinary parsing and private memory input retain independent policy', async () => {
   await unit(async () => {

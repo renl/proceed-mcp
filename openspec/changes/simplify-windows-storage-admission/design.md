@@ -88,9 +88,18 @@ Keep established failure categories: `STATE_NOT_INITIALIZED`, `STATE_ALREADY_INI
 
 Diagnostics SHALL be actionable and secret-free. Do not expose file contents, credentials, keys, records or raw exception payloads. Local success means the particular operation completed, never that Windows owner-only protection, Telegram delivery or human approval was verified.
 
+`src/broker/startup-failure.js` SHALL replace its two protected-storage messages with fixed category-level guidance. This is necessary diagnostic alignment with the ordinary-Windows-access policy, not a new capability or security-policy change.
+
+| Startup classification | Tool code | Fixed message |
+| --- | --- | --- |
+| `PROTECTION_UNVERIFIED` | `STORAGE_FAILURE` | `broker storage checks failed. Preserve the state directory and investigate OS access, file type, path identity and storage separation before a new attempt. POSIX state/key ownership and permission requirements still apply.` |
+| `STORAGE_FAILURE` | `STORAGE_FAILURE` | `broker storage or journal state failed. Preserve the state directory and investigate storage before a new attempt. POSIX state/key ownership and permission requirements still apply.` |
+
+Both mappings SHALL remain nonretryable (`retryable: false` in the existing tool error envelope). The mapper SHALL retain its closed `{code, message}` result and the existing envelope SHALL retain only `schema_version: 1` and `error: {code, message, retryable}`. Messages SHALL NOT interpolate exception messages, causes, paths, credentials, keys, records or platform output. Do not infer a specific failed subcheck from either category. Keep all other mappings and fallback unchanged. No platform seam, platform-specific dispatch or new error code is required. Windows guidance SHALL NOT prescribe permission repair. Existing POSIX checks remain mandatory.
+
 ## Minimal implementation allowlist
 
-Production changes are limited to the caller-table files and `src/state/protection.js`. `src/state/credential-file.js` is comment-only if touched. Use existing test directories for affected portable unit regressions. Matching README and existing coupled version metadata may change for proposed `0.1.0-preview.9`. No dependency, harness, CI-platform expansion, global configuration or runtime-state work is needed.
+Production changes are limited to the caller-table files, `src/state/protection.js` and `src/broker/startup-failure.js`. The sole additional production path for the implementation allowlist is `src/broker/startup-failure.js`, limited to the two fixed messages above. `src/state/credential-file.js` is comment-only if touched. Use existing test directories for affected portable unit regressions. Matching README and existing coupled version metadata may change for proposed `0.1.0-preview.9`. No dependency, harness, CI-platform expansion, global configuration or runtime-state work is needed.
 
 README changes SHALL keep the current concise install/setup/use flow, identify source preview.9, require checking exact-version availability and avoid asserting publication. Replace Windows protected-state/NTFS preparation and permission-repair guidance with ordinary OS access and explicit operator responsibility for key theft and record tampering. Keep POSIX protections, token separation and first-use limitations clear. Remove PowerShell/`icacls`/NTFS protection prerequisites for this scope when no longer used by production. Do not turn removal of storage-query prerequisites into a claim that every Windows feature, private-input mechanism or platform has been verified.
 
